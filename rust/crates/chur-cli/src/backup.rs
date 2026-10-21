@@ -111,7 +111,7 @@ pub fn inspect(package: &Path) -> Result<()> {
     let length = std::fs::metadata(package)
         .map(|metadata| metadata.len())
         .map_err(|_| chur_core::err!(IoFailure, "the package length could not be read"))?;
-    println!("Chur backup package v1");
+    println!("Chur backup package v{}", preamble.backup_version());
     println!("records        {}", preamble.record_count());
     println!("length         {length}");
     println!("everything else is sealed and needs a credential");

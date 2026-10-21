@@ -17,6 +17,14 @@
 //! inventory, and the final commit seals that commitment together with the
 //! entry counts, so a package with a record removed, added, or reordered fails
 //! the final commit rather than restoring quietly.
+//!
+//! Version 2 of the package, ADR-0068, keeps the framing and changes two
+//! things. The catalog travels as a sequence of sealed catalog export records
+//! that hold the logical `CatalogExportV1` stream of [`crate::catalog_export`],
+//! not as a copy of the SQLCipher file. The final commit also seals a running
+//! commitment over every record that is not a container, so the descriptor,
+//! each catalog export record, and the identity envelope are bound to the
+//! package as tightly as the containers are.
 
 use chur_core::{Error, Id, Result, bail, ensure, limits::backup as bounds, status::ChurStatus};
 use chur_crypto::commit::{Commitment, Committer};
@@ -27,7 +35,7 @@ use zeroize::Zeroizing;
 
 use crate::codec::Reader;
 use crate::constants::{
-    BACKUP_VERSION_V1, ENCODING_PROFILE_V1, MAGIC_BACKUP, SUITE_V1, StreamKind,
+    BACKUP_VERSION_V1, BACKUP_VERSION_V2, ENCODING_PROFILE_V1, MAGIC_BACKUP, SUITE_V1, StreamKind,
 };
 
 /// The `PublicBackupPreamble` length, §2.1.
@@ -48,8 +56,17 @@ pub const SLOT_ENTRY_LEN: usize = 16 + 1 + 8;
 /// The sealed `CanonicalBackupManifest` plaintext length.
 pub const MANIFEST_PLAINTEXT_LEN: usize = 16 + 2 + 16 + 8 + 1 + 16 + 8 + 2 + 4 + 4 + 32 + 8;
 
-/// The sealed final-commit plaintext length.
+/// The sealed final-commit plaintext length of a version 1 package.
 pub const FINAL_COMMIT_PLAINTEXT_LEN: usize = 16 + 8 + 4 + 4 + 32;
+
+/// The sealed final-commit plaintext length of a version 2 package: the version
+/// 1 fields, the catalog export record count, and the record commitment.
+pub const FINAL_COMMIT_PLAINTEXT_LEN_V2: usize = FINAL_COMMIT_PLAINTEXT_LEN + 4 + 32;
+
+/// Whether this build reads packages of `backup_version`.
+fn supported_version(backup_version: u16) -> bool {
+    matches!(backup_version, BACKUP_VERSION_V1 | BACKUP_VERSION_V2)
+}
 
 /// A package record's type, §2.2, allocated in `CANONICAL_ENCODING_V1.md` §15.3.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,24 +175,47 @@ pub fn framing_of(head: &[u8]) -> Result<Framing> {
 /// The 32-byte `PublicBackupPreamble` at file offset 0, §2.1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PublicPreamble {
+    backup_version: u16,
     record_count: u64,
 }
 
 impl PublicPreamble {
-    /// Names the preamble of a package holding `record_count` records.
+    /// Names the preamble of a package of `backup_version` holding
+    /// `record_count` records.
     ///
     /// # Errors
     ///
-    /// Returns [`ChurStatus::ResourceLimitExceeded`] outside the §13 bound of
-    /// 2 to 1048576: a package holds at least the manifest and the final
-    /// commit.
-    pub fn new(record_count: u64) -> Result<Self> {
+    /// Returns [`ChurStatus::UnsupportedVersion`] for a version this build does
+    /// not write, and [`ChurStatus::ResourceLimitExceeded`] outside the §13
+    /// bound of that version: a package holds at least the manifest and the
+    /// final commit, and a version 2 package admits its catalog export records
+    /// beyond the version 1 bound.
+    pub fn new(backup_version: u16, record_count: u64) -> Result<Self> {
         ensure!(
-            (bounds::RECORD_COUNT_MIN..=bounds::RECORD_COUNT_MAX).contains(&record_count),
+            supported_version(backup_version),
+            UnsupportedVersion,
+            "the package declares an unsupported backup version"
+        );
+        let maximum = if backup_version == BACKUP_VERSION_V1 {
+            bounds::RECORD_COUNT_MAX
+        } else {
+            bounds::RECORD_COUNT_MAX_V2
+        };
+        ensure!(
+            (bounds::RECORD_COUNT_MIN..=maximum).contains(&record_count),
             ResourceLimitExceeded,
             "the record count is outside the §13 bound"
         );
-        Ok(Self { record_count })
+        Ok(Self {
+            backup_version,
+            record_count,
+        })
+    }
+
+    /// The package version the preamble declares.
+    #[must_use]
+    pub const fn backup_version(&self) -> u16 {
+        self.backup_version
     }
 
     /// The records the package declares.
@@ -194,7 +234,7 @@ impl PublicPreamble {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(PREAMBLE_LEN);
         out.extend_from_slice(&MAGIC_BACKUP);
-        out.extend_from_slice(&BACKUP_VERSION_V1.to_be_bytes());
+        out.extend_from_slice(&self.backup_version.to_be_bytes());
         out.extend_from_slice(&ENCODING_PROFILE_V1.to_be_bytes());
         out.extend_from_slice(&SUITE_V1.to_be_bytes());
         out.extend_from_slice(&0u16.to_be_bytes());
@@ -241,7 +281,7 @@ impl PublicPreamble {
         let record_count = reader.u64()?;
 
         ensure!(
-            backup_version == BACKUP_VERSION_V1,
+            supported_version(backup_version),
             UnsupportedVersion,
             "the package declares an unsupported backup version"
         );
@@ -271,7 +311,7 @@ impl PublicPreamble {
             VaultCorrupt,
             "the package reserved field is not zero"
         );
-        Self::new(record_count)
+        Self::new(backup_version, record_count)
     }
 }
 
@@ -562,9 +602,9 @@ pub fn manifest_key(root: &Key, vault_id: &Id) -> Result<Key> {
 /// carries. The identifier is checked instead: the manifest and the final commit
 /// must name the same backup, and both are sealed under a key only the root
 /// holder can derive.
-fn manifest_aad(vault_id: &Id) -> Vec<u8> {
+fn manifest_aad(backup_version: u16, vault_id: &Id) -> Vec<u8> {
     Tuple::new(tag::BACKUP_MANIFEST_AAD)
-        .u16(BACKUP_VERSION_V1)
+        .u16(backup_version)
         .u16(SUITE_V1)
         .id(vault_id)
         .finish()
@@ -575,9 +615,9 @@ fn manifest_aad(vault_id: &Id) -> Vec<u8> {
 /// It shares the manifest's key and differs from it only in its domain tag,
 /// which is exactly what a domain tag is for: two records of one package are
 /// sealed under one key and neither opens as the other.
-fn final_commit_aad(vault_id: &Id) -> Vec<u8> {
+fn final_commit_aad(backup_version: u16, vault_id: &Id) -> Vec<u8> {
     Tuple::new(tag::BACKUP_FINAL_COMMIT_AAD)
-        .u16(BACKUP_VERSION_V1)
+        .u16(backup_version)
         .u16(SUITE_V1)
         .id(vault_id)
         .finish()
@@ -625,6 +665,8 @@ fn open_sealed(
 pub struct BackupManifest {
     /// This backup's identity.
     pub backup_id: Id,
+    /// The package version, which repeats the public preamble's field, §4.
+    pub backup_version: u16,
     /// The vault identity the package holds. §11: one package, one identity.
     pub vault_id: Id,
     /// When the package was created, in Unix milliseconds.
@@ -651,7 +693,7 @@ impl BackupManifest {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(MANIFEST_PLAINTEXT_LEN);
         out.extend_from_slice(self.backup_id.as_bytes());
-        out.extend_from_slice(&BACKUP_VERSION_V1.to_be_bytes());
+        out.extend_from_slice(&self.backup_version.to_be_bytes());
         out.extend_from_slice(self.vault_id.as_bytes());
         out.extend_from_slice(&self.created_time_ms.to_be_bytes());
         match self.base_backup_id {
@@ -679,7 +721,7 @@ impl BackupManifest {
     /// # Errors
     ///
     /// Returns [`ChurStatus::VaultCorrupt`] for a wrong length, a
-    /// `backup_version` differing from the public preamble's, an absent-base
+    /// `backup_version` this build does not read, an absent-base
     /// discriminant that is neither 0 nor 1, a base identifier present under
     /// a zero discriminant, or a reserved all-zero identifier. Returns
     /// [`ChurStatus::ResourceLimitExceeded`] above the §13 entry bounds.
@@ -705,8 +747,10 @@ impl BackupManifest {
 
         // §4: `backup_version` here repeats the public preamble field, and a
         // restore rejects the package as VAULT_CORRUPT when the two differ.
+        // [`BackupManifest::open`] compares the two; a value no preamble can
+        // carry is refused here already.
         ensure!(
-            backup_version == BACKUP_VERSION_V1,
+            supported_version(backup_version),
             VaultCorrupt,
             "the manifest contradicts the preamble's backup version"
         );
@@ -737,6 +781,7 @@ impl BackupManifest {
         );
         Ok(Self {
             backup_id,
+            backup_version,
             vault_id,
             created_time_ms,
             base_backup_id,
@@ -755,7 +800,7 @@ impl BackupManifest {
     ///
     /// Returns the AEAD errors of [`aead::seal`].
     pub fn seal(&self, key: &Key, nonce: &Nonce) -> Result<Vec<u8>> {
-        let aad = manifest_aad(&self.vault_id);
+        let aad = manifest_aad(self.backup_version, &self.vault_id);
         let sealed = aead::seal(key, nonce, &self.encode(), &aad)?;
         let mut out = Vec::with_capacity(nonce.as_bytes().len() + sealed.len());
         out.extend_from_slice(nonce.as_bytes());
@@ -774,21 +819,41 @@ impl BackupManifest {
     /// # Errors
     ///
     /// Returns [`ChurStatus::VaultCorrupt`] for a payload shorter than a nonce,
-    /// for a package the AEAD rejects, and for the parse failures of
+    /// for a package the AEAD rejects, for a manifest whose `backup_version`
+    /// differs from the preamble's, and for the parse failures of
     /// [`BackupManifest::decode`].
-    pub fn open(payload: &[u8], key: &Key, vault_id: &Id) -> Result<Self> {
-        let aad = manifest_aad(vault_id);
+    pub fn open(payload: &[u8], key: &Key, vault_id: &Id, backup_version: u16) -> Result<Self> {
+        let aad = manifest_aad(backup_version, vault_id);
         let plaintext = open_sealed(
             payload,
             key,
             &aad,
             "the backup manifest did not authenticate for this vault and backup",
         )?;
-        let manifest = Self::decode(&plaintext)?;
+        let manifest = Self::decode_in_package(&plaintext, backup_version)?;
         ensure!(
             manifest.vault_id == *vault_id,
             VaultCorrupt,
             "the manifest names an identity other than the one it authenticated under"
+        );
+        Ok(manifest)
+    }
+
+    /// Parses the plaintext of the manifest of a `backup_version` package.
+    ///
+    /// §4: the manifest's `backup_version` repeats the public preamble's, and
+    /// a restore rejects the package when the two differ.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`BackupManifest::decode`], and
+    /// [`ChurStatus::VaultCorrupt`] when the manifest names another version.
+    pub fn decode_in_package(bytes: &[u8], backup_version: u16) -> Result<Self> {
+        let manifest = Self::decode(bytes)?;
+        ensure!(
+            manifest.backup_version == backup_version,
+            VaultCorrupt,
+            "the manifest contradicts the preamble's backup version"
         );
         Ok(manifest)
     }
@@ -805,6 +870,12 @@ impl BackupManifest {
 /// ordered inventory commitment, so a package with a container removed, a
 /// record added, or two records swapped fails here rather than restoring a
 /// vault that is missing something.
+///
+/// A version 2 commit also seals the number of catalog export records and the
+/// [`RecordCommitter`] value over every record that is not a container. The
+/// inventory commitment covers the containers only, so without it the
+/// descriptor, the catalog export, and the identity envelope would be bound to
+/// the package by their own AEAD alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FinalBackupCommit {
     /// The backup this commit closes.
@@ -817,41 +888,92 @@ pub struct FinalBackupCommit {
     pub slot_entry_count: u32,
     /// The §7.2 ordered inventory commitment.
     pub inventory_commitment: [u8; 32],
+    /// The version 2 fields. `None` is a version 1 commit, which has none.
+    pub records: Option<RecordSeal>,
+}
+
+/// What a version 2 final commit seals beyond the version 1 fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecordSeal {
+    /// Catalog export records the package carried.
+    pub catalog_export_record_count: u32,
+    /// The [`RecordCommitter`] value over every non-container record.
+    pub record_commitment: [u8; 32],
 }
 
 impl FinalBackupCommit {
+    /// The package version the commit's shape belongs to.
+    #[must_use]
+    pub const fn backup_version(&self) -> u16 {
+        if self.records.is_some() {
+            BACKUP_VERSION_V2
+        } else {
+            BACKUP_VERSION_V1
+        }
+    }
+
     /// The canonical plaintext.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(FINAL_COMMIT_PLAINTEXT_LEN);
+        let mut out = Vec::with_capacity(FINAL_COMMIT_PLAINTEXT_LEN_V2);
         out.extend_from_slice(self.backup_id.as_bytes());
         out.extend_from_slice(&self.record_count.to_be_bytes());
         out.extend_from_slice(&self.stream_entry_count.to_be_bytes());
         out.extend_from_slice(&self.slot_entry_count.to_be_bytes());
         out.extend_from_slice(&self.inventory_commitment);
-        debug_assert_eq!(out.len(), FINAL_COMMIT_PLAINTEXT_LEN);
+        if let Some(records) = &self.records {
+            out.extend_from_slice(&records.catalog_export_record_count.to_be_bytes());
+            out.extend_from_slice(&records.record_commitment);
+        }
         out
     }
 
-    /// Parses the canonical plaintext.
+    /// Parses the canonical plaintext of a `backup_version` package.
     ///
     /// # Errors
     ///
-    /// Returns [`ChurStatus::VaultCorrupt`] for a wrong length or a reserved
-    /// all-zero `backup_id`.
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
+    /// Returns [`ChurStatus::VaultCorrupt`] for a wrong length, a reserved
+    /// all-zero `backup_id`, or a version 2 commit that declares no catalog
+    /// export record.
+    pub fn decode(bytes: &[u8], backup_version: u16) -> Result<Self> {
+        let expected = if backup_version == BACKUP_VERSION_V2 {
+            FINAL_COMMIT_PLAINTEXT_LEN_V2
+        } else {
+            FINAL_COMMIT_PLAINTEXT_LEN
+        };
         ensure!(
-            bytes.len() == FINAL_COMMIT_PLAINTEXT_LEN,
+            bytes.len() == expected,
             VaultCorrupt,
             "the final backup commit is not its canonical length"
         );
         let mut reader = Reader::new(bytes, ChurStatus::VaultCorrupt);
+        let backup_id = package_id(reader.fixed()?)?;
+        let record_count = reader.u64()?;
+        let stream_entry_count = reader.u32()?;
+        let slot_entry_count = reader.u32()?;
+        let inventory_commitment = reader.fixed::<32>()?;
+        let records = if backup_version == BACKUP_VERSION_V2 {
+            let catalog_export_record_count = reader.u32()?;
+            ensure!(
+                (1..=bounds::CATALOG_EXPORT_RECORDS_MAX)
+                    .contains(&u64::from(catalog_export_record_count)),
+                VaultCorrupt,
+                "the final backup commit declares a catalog export outside its bound"
+            );
+            Some(RecordSeal {
+                catalog_export_record_count,
+                record_commitment: reader.fixed::<32>()?,
+            })
+        } else {
+            None
+        };
         Ok(Self {
-            backup_id: package_id(reader.fixed()?)?,
-            record_count: reader.u64()?,
-            stream_entry_count: reader.u32()?,
-            slot_entry_count: reader.u32()?,
-            inventory_commitment: reader.fixed::<32>()?,
+            backup_id,
+            record_count,
+            stream_entry_count,
+            slot_entry_count,
+            inventory_commitment,
+            records,
         })
     }
 
@@ -861,7 +983,7 @@ impl FinalBackupCommit {
     ///
     /// Returns the AEAD errors of [`aead::seal`].
     pub fn seal(&self, key: &Key, vault_id: &Id, nonce: &Nonce) -> Result<Vec<u8>> {
-        let aad = final_commit_aad(vault_id);
+        let aad = final_commit_aad(self.backup_version(), vault_id);
         let sealed = aead::seal(key, nonce, &self.encode(), &aad)?;
         let mut out = Vec::with_capacity(nonce.as_bytes().len() + sealed.len());
         out.extend_from_slice(nonce.as_bytes());
@@ -869,28 +991,212 @@ impl FinalBackupCommit {
         Ok(out)
     }
 
-    /// Opens the payload of record `0x07`.
+    /// Opens the payload of record `0x07` of a `backup_version` package.
     ///
     /// # Errors
     ///
     /// Returns [`ChurStatus::VaultCorrupt`] for a short payload, for a package
     /// the AEAD rejects, and for the parse failures of
     /// [`FinalBackupCommit::decode`].
-    pub fn open(payload: &[u8], key: &Key, vault_id: &Id, backup_id: &Id) -> Result<Self> {
-        let aad = final_commit_aad(vault_id);
+    pub fn open(
+        payload: &[u8],
+        key: &Key,
+        vault_id: &Id,
+        backup_id: &Id,
+        backup_version: u16,
+    ) -> Result<Self> {
+        let aad = final_commit_aad(backup_version, vault_id);
         let plaintext = open_sealed(
             payload,
             key,
             &aad,
             "the final backup commit did not authenticate for this vault and backup",
         )?;
-        let commit = Self::decode(&plaintext)?;
+        let commit = Self::decode(&plaintext, backup_version)?;
         ensure!(
             commit.backup_id == *backup_id,
             VaultCorrupt,
             "the final commit names another backup"
         );
         Ok(commit)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0068 Record commitment
+// ---------------------------------------------------------------------------
+
+/// The running commitment over every non-container record of a version 2
+/// package.
+///
+/// ```text
+/// record_commitment = BLAKE3-256(
+///       "CHUR\x00BACKUP\x00RECORD-COMMITMENT\x00V1"
+///    || for each record that is neither a container nor the final commit,
+///       in package order:
+///          record_index:u64 || record header (12 bytes) || payload
+/// )
+/// ```
+///
+/// `record_index` is the record's zero-based position after the preamble, so a
+/// record moved to another place changes the value even when its bytes do not.
+/// The payload is fed as it stands in the package: for a sealed record that is
+/// the nonce and the ciphertext, which binds the plaintext through the AEAD.
+pub struct RecordCommitter {
+    inner: Committer,
+}
+
+impl Default for RecordCommitter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RecordCommitter {
+    /// Starts an empty commitment.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            inner: Committer::new(tag::BACKUP_RECORD_COMMITMENT),
+        }
+    }
+
+    /// Starts one record: its index and its header. The payload follows
+    /// through [`RecordCommitter::update`].
+    pub fn begin(&mut self, record_index: u64, header: &RecordHeader) {
+        self.inner.update(&record_index.to_be_bytes());
+        self.inner.update(&header.encode());
+    }
+
+    /// Adds payload bytes of the record that [`RecordCommitter::begin`] started.
+    pub fn update(&mut self, payload: &[u8]) {
+        self.inner.update(payload);
+    }
+
+    /// Adds one whole record.
+    pub fn add(&mut self, record_index: u64, record_type: RecordType, payload: &[u8]) {
+        self.begin(
+            record_index,
+            &RecordHeader {
+                record_type,
+                payload_length: payload.len() as u64,
+            },
+        );
+        self.update(payload);
+    }
+
+    /// The 32-byte commitment.
+    #[must_use]
+    pub fn finish(&self) -> Commitment {
+        self.inner.finish()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0068 Catalog export records
+// ---------------------------------------------------------------------------
+
+/// Where one catalog export record stands, which its AAD binds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CatalogExportPosition {
+    /// The vault the package holds.
+    pub vault_id: Id,
+    /// The package.
+    pub backup_id: Id,
+    /// The record's zero-based index after the preamble.
+    pub record_index: u64,
+    /// The record's zero-based index among the catalog export records.
+    pub chunk_index: u32,
+    /// Whether this is the last catalog export record.
+    pub is_final: bool,
+}
+
+impl CatalogExportPosition {
+    /// The AAD one catalog export record is sealed under.
+    ///
+    /// The vault and the backup stop a record from another package, the two
+    /// indexes stop a record moved inside this one, and the final flag stops
+    /// an export cut short at a record boundary.
+    #[must_use]
+    pub fn aad(&self) -> Vec<u8> {
+        Tuple::new(tag::BACKUP_CATALOG_EXPORT_AAD)
+            .u16(BACKUP_VERSION_V2)
+            .u16(SUITE_V1)
+            .id(&self.vault_id)
+            .id(&self.backup_id)
+            .u64(self.record_index)
+            .u8(RecordType::CatalogExport as u8)
+            .u32(self.chunk_index)
+            .bool(self.is_final)
+            .finish()
+    }
+}
+
+/// Seals one chunk of the `CatalogExportV1` stream into the payload of a
+/// record `0x03` of a version 2 package.
+///
+/// Every chunk but the last holds exactly
+/// [`bounds::CATALOG_EXPORT_CHUNK_LEN`] bytes and the last holds 1 to that
+/// many, so one stream has one record sequence.
+///
+/// # Errors
+///
+/// Returns [`ChurStatus::InvalidInput`] for a chunk length the rule above
+/// forbids, and the AEAD errors of [`aead::seal`].
+pub fn seal_catalog_export(
+    key: &Key,
+    nonce: &Nonce,
+    position: &CatalogExportPosition,
+    chunk: &[u8],
+) -> Result<Vec<u8>> {
+    ensure!(
+        chunk_length_valid(chunk.len(), position.is_final),
+        InvalidInput,
+        "a catalog export chunk has a length its position forbids"
+    );
+    let sealed = aead::seal(key, nonce, chunk, &position.aad())?;
+    let mut out = Vec::with_capacity(nonce.as_bytes().len() + sealed.len());
+    out.extend_from_slice(nonce.as_bytes());
+    out.extend_from_slice(&sealed);
+    Ok(out)
+}
+
+/// Opens the payload of one record `0x03` of a version 2 package.
+///
+/// # Errors
+///
+/// Returns [`ChurStatus::VaultCorrupt`] for a payload above its bound, for a
+/// record the AEAD rejects at `position`, and for a chunk whose length its
+/// position forbids.
+pub fn open_catalog_export(
+    payload: &[u8],
+    key: &Key,
+    position: &CatalogExportPosition,
+) -> Result<Zeroizing<Vec<u8>>> {
+    ensure!(
+        payload.len() as u64 <= bounds::CATALOG_EXPORT_PAYLOAD_MAX,
+        VaultCorrupt,
+        "a catalog export record exceeds its bound"
+    );
+    let chunk = open_sealed(
+        payload,
+        key,
+        &position.aad(),
+        "a catalog export record did not authenticate at its place in this backup",
+    )?;
+    ensure!(
+        chunk_length_valid(chunk.len(), position.is_final),
+        VaultCorrupt,
+        "a catalog export chunk has a length its position forbids"
+    );
+    Ok(chunk)
+}
+
+const fn chunk_length_valid(length: usize, is_final: bool) -> bool {
+    if is_final {
+        length >= 1 && length <= bounds::CATALOG_EXPORT_CHUNK_LEN
+    } else {
+        length == bounds::CATALOG_EXPORT_CHUNK_LEN
     }
 }
 
@@ -912,6 +1218,7 @@ mod tests {
     fn manifest(vault_id: Id, backup_id: Id) -> BackupManifest {
         BackupManifest {
             backup_id,
+            backup_version: BACKUP_VERSION_V1,
             vault_id,
             created_time_ms: 1_700_000_000_000,
             base_backup_id: None,
@@ -933,7 +1240,9 @@ mod tests {
 
     #[test]
     fn the_preamble_round_trips_and_every_fixed_field_is_checked() {
-        let bytes = PublicPreamble::new(4).expect("build").encode();
+        let bytes = PublicPreamble::new(BACKUP_VERSION_V1, 4)
+            .expect("build")
+            .encode();
         assert_eq!(bytes.len(), PREAMBLE_LEN);
         assert_eq!(
             PublicPreamble::decode(&bytes)
@@ -950,7 +1259,7 @@ mod tests {
         );
 
         let mut version = bytes.clone();
-        version[9] = 0x02;
+        version[9] = 0x03;
         assert_eq!(
             status(PublicPreamble::decode(&version)),
             ChurStatus::UnsupportedVersion
@@ -981,13 +1290,16 @@ mod tests {
     #[test]
     fn a_package_holds_at_least_the_manifest_and_the_final_commit() {
         assert_eq!(
-            status(PublicPreamble::new(1)),
+            status(PublicPreamble::new(BACKUP_VERSION_V1, 1)),
             ChurStatus::ResourceLimitExceeded
         );
-        assert!(PublicPreamble::new(2).is_ok());
-        assert!(PublicPreamble::new(bounds::RECORD_COUNT_MAX).is_ok());
+        assert!(PublicPreamble::new(BACKUP_VERSION_V1, 2).is_ok());
+        assert!(PublicPreamble::new(BACKUP_VERSION_V1, bounds::RECORD_COUNT_MAX).is_ok());
         assert_eq!(
-            status(PublicPreamble::new(bounds::RECORD_COUNT_MAX + 1)),
+            status(PublicPreamble::new(
+                BACKUP_VERSION_V1,
+                bounds::RECORD_COUNT_MAX + 1
+            )),
             ChurStatus::ResourceLimitExceeded
         );
     }
@@ -1054,7 +1366,8 @@ mod tests {
         let key = manifest_key(&ROOT, &vault_id).expect("derive");
         let record = manifest(vault_id, backup_id);
         let payload = record.seal(&key, &Nonce::new([0x31; 24])).expect("seal");
-        let opened = BackupManifest::open(&payload, &key, &vault_id).expect("open");
+        let opened =
+            BackupManifest::open(&payload, &key, &vault_id, BACKUP_VERSION_V1).expect("open");
         assert_eq!(opened, record);
     }
 
@@ -1072,7 +1385,12 @@ mod tests {
         let other_vault = Id::new([0x12; 16]).expect("id");
         let other_key = manifest_key(&ROOT, &other_vault).expect("derive");
         assert_eq!(
-            status(BackupManifest::open(&payload, &other_key, &other_vault)),
+            status(BackupManifest::open(
+                &payload,
+                &other_key,
+                &other_vault,
+                BACKUP_VERSION_V1
+            )),
             ChurStatus::VaultCorrupt
         );
     }
@@ -1089,16 +1407,23 @@ mod tests {
             stream_entry_count: 3,
             slot_entry_count: 2,
             inventory_commitment: [0x5a; 32],
+            records: None,
         };
         let sealed = commit
             .seal(&key, &vault_id, &Nonce::new([0x32; 24]))
             .expect("seal");
         assert_eq!(
-            FinalBackupCommit::open(&sealed, &key, &vault_id, &backup_id).expect("open"),
+            FinalBackupCommit::open(&sealed, &key, &vault_id, &backup_id, BACKUP_VERSION_V1)
+                .expect("open"),
             commit
         );
         assert_eq!(
-            status(BackupManifest::open(&sealed, &key, &vault_id)),
+            status(BackupManifest::open(
+                &sealed,
+                &key,
+                &vault_id,
+                BACKUP_VERSION_V1
+            )),
             ChurStatus::VaultCorrupt
         );
 
@@ -1110,7 +1435,8 @@ mod tests {
                 &manifest_payload,
                 &key,
                 &vault_id,
-                &backup_id
+                &backup_id,
+                BACKUP_VERSION_V1
             )),
             ChurStatus::VaultCorrupt
         );
@@ -1241,7 +1567,8 @@ mod tests {
 
         assert_eq!(
             status(FinalBackupCommit::decode(
-                &[0u8; FINAL_COMMIT_PLAINTEXT_LEN]
+                &[0u8; FINAL_COMMIT_PLAINTEXT_LEN],
+                BACKUP_VERSION_V1
             )),
             ChurStatus::VaultCorrupt
         );
@@ -1268,9 +1595,9 @@ mod tests {
             ChurStatus::VaultCorrupt
         );
 
-        // A `backup_version` differing from the preamble's, §4.
+        // A `backup_version` no preamble can carry, §4.
         let mut version = bytes.clone();
-        version[17] = 0x02;
+        version[17] = 0x03;
         assert_eq!(
             status(BackupManifest::decode(&version)),
             ChurStatus::VaultCorrupt
@@ -1292,5 +1619,178 @@ mod tests {
         };
         let decoded = BackupManifest::decode(&record.encode()).expect("decode");
         assert_eq!(decoded.base_backup_id, Some(base));
+    }
+
+    fn position(
+        vault_id: Id,
+        backup_id: Id,
+        record_index: u64,
+        chunk_index: u32,
+        is_final: bool,
+    ) -> CatalogExportPosition {
+        CatalogExportPosition {
+            vault_id,
+            backup_id,
+            record_index,
+            chunk_index,
+            is_final,
+        }
+    }
+
+    #[test]
+    fn a_version_two_preamble_admits_the_catalog_export_records() {
+        let bytes = PublicPreamble::new(BACKUP_VERSION_V2, bounds::RECORD_COUNT_MAX_V2)
+            .expect("build")
+            .encode();
+        assert_eq!(bytes[9], 0x02);
+        let parsed = PublicPreamble::decode(&bytes).expect("decode");
+        assert_eq!(parsed.backup_version(), BACKUP_VERSION_V2);
+        assert_eq!(
+            status(PublicPreamble::new(
+                BACKUP_VERSION_V1,
+                bounds::RECORD_COUNT_MAX_V2
+            )),
+            ChurStatus::ResourceLimitExceeded
+        );
+        assert_eq!(
+            status(PublicPreamble::new(0x0003, 4)),
+            ChurStatus::UnsupportedVersion
+        );
+    }
+
+    /// The manifest AAD carries the version, so a version 2 manifest does not
+    /// open as the manifest of a version 1 package and the reverse.
+    #[test]
+    fn a_manifest_opens_only_under_its_own_version() {
+        let (vault_id, backup_id) = ids();
+        let key = manifest_key(&ROOT, &vault_id).expect("derive");
+        let record = BackupManifest {
+            backup_version: BACKUP_VERSION_V2,
+            ..manifest(vault_id, backup_id)
+        };
+        let payload = record.seal(&key, &Nonce::new([0x31; 24])).expect("seal");
+        assert_eq!(
+            BackupManifest::open(&payload, &key, &vault_id, BACKUP_VERSION_V2).expect("open"),
+            record
+        );
+        assert_eq!(
+            status(BackupManifest::open(
+                &payload,
+                &key,
+                &vault_id,
+                BACKUP_VERSION_V1
+            )),
+            ChurStatus::VaultCorrupt
+        );
+    }
+
+    #[test]
+    fn a_version_two_final_commit_seals_the_record_commitment() {
+        let (vault_id, backup_id) = ids();
+        let key = manifest_key(&ROOT, &vault_id).expect("derive");
+        let commit = FinalBackupCommit {
+            backup_id,
+            record_count: 7,
+            stream_entry_count: 3,
+            slot_entry_count: 1,
+            inventory_commitment: [0x5a; 32],
+            records: Some(RecordSeal {
+                catalog_export_record_count: 2,
+                record_commitment: [0x6b; 32],
+            }),
+        };
+        assert_eq!(commit.encode().len(), FINAL_COMMIT_PLAINTEXT_LEN_V2);
+        let sealed = commit
+            .seal(&key, &vault_id, &Nonce::new([0x32; 24]))
+            .expect("seal");
+        assert_eq!(
+            FinalBackupCommit::open(&sealed, &key, &vault_id, &backup_id, BACKUP_VERSION_V2)
+                .expect("open"),
+            commit
+        );
+        assert_eq!(
+            status(FinalBackupCommit::open(
+                &sealed,
+                &key,
+                &vault_id,
+                &backup_id,
+                BACKUP_VERSION_V1
+            )),
+            ChurStatus::VaultCorrupt
+        );
+        let mut empty_export = commit.encode();
+        empty_export[64..68].fill(0);
+        assert_eq!(
+            status(FinalBackupCommit::decode(&empty_export, BACKUP_VERSION_V2)),
+            ChurStatus::VaultCorrupt
+        );
+    }
+
+    #[test]
+    fn the_record_commitment_binds_the_index_and_every_payload_byte() {
+        let mut forward = RecordCommitter::new();
+        forward.add(1, RecordType::Descriptor, b"descriptor");
+        forward.add(2, RecordType::CatalogExport, b"export");
+
+        let mut moved = RecordCommitter::new();
+        moved.add(2, RecordType::Descriptor, b"descriptor");
+        moved.add(1, RecordType::CatalogExport, b"export");
+        assert_ne!(forward.finish(), moved.finish());
+
+        let mut altered = RecordCommitter::new();
+        altered.add(1, RecordType::Descriptor, b"descriptoR");
+        altered.add(2, RecordType::CatalogExport, b"export");
+        assert_ne!(forward.finish(), altered.finish());
+
+        let mut streamed = RecordCommitter::new();
+        streamed.begin(
+            1,
+            &RecordHeader {
+                record_type: RecordType::Descriptor,
+                payload_length: 10,
+            },
+        );
+        streamed.update(b"descr");
+        streamed.update(b"iptor");
+        streamed.add(2, RecordType::CatalogExport, b"export");
+        assert_eq!(forward.finish(), streamed.finish());
+    }
+
+    /// A catalog export record opens only at the place it was sealed for: in
+    /// this backup, at this record index, at this chunk index, and with the
+    /// same final flag.
+    #[test]
+    fn a_catalog_export_record_opens_only_at_its_own_place() {
+        let (vault_id, backup_id) = ids();
+        let key = manifest_key(&ROOT, &vault_id).expect("derive");
+        let at = position(vault_id, backup_id, 2, 0, true);
+        let payload =
+            seal_catalog_export(&key, &Nonce::new([0x34; 24]), &at, b"rows").expect("seal");
+        assert_eq!(
+            &*open_catalog_export(&payload, &key, &at).expect("open"),
+            b"rows"
+        );
+        let other_backup = Id::new([0x23; 16]).expect("id");
+        for elsewhere in [
+            position(vault_id, other_backup, 2, 0, true),
+            position(vault_id, backup_id, 3, 0, true),
+            position(vault_id, backup_id, 2, 1, true),
+            position(vault_id, backup_id, 2, 0, false),
+        ] {
+            assert_eq!(
+                status(open_catalog_export(&payload, &key, &elsewhere)),
+                ChurStatus::VaultCorrupt
+            );
+        }
+        // Only the last chunk may be shorter than the chunk length.
+        assert_eq!(
+            status(seal_catalog_export(
+                &key,
+                &Nonce::new([0x34; 24]),
+                &position(vault_id, backup_id, 2, 0, false),
+                b"rows"
+            )),
+            ChurStatus::InvalidInput
+        );
     }
 }

@@ -281,6 +281,8 @@ Each format version field has its own namespace:
 | `format_version` | `0x0001` | `ObjectKeyEnvelopeV1` | [`OBJECT_KEY_ENVELOPE_V1.md`](OBJECT_KEY_ENVELOPE_V1.md) §1 |
 | `format_version` | `0x0001` | `CollectionKeyEnvelopeV1` | [`COLLECTION_KEY_ENVELOPE_V1.md`](COLLECTION_KEY_ENVELOPE_V1.md) §1 |
 | `backup_version` | `0x0001` | `BackupPackageV1` | [`BACKUP_FORMAT_V1.md`](BACKUP_FORMAT_V1.md) §2.1 |
+| `backup_version` | `0x0002` | `BackupPackageV1` with a portable catalog export and a record commitment, [ADR-0068](../adr/0068-carry-a-portable-catalog-export-in-backup-v2.md) | [`BACKUP_FORMAT_V2.md`](BACKUP_FORMAT_V2.md) §2 |
+| `export_version` | `0x0001` | `CatalogExportV1` | [`BACKUP_FORMAT_V2.md`](BACKUP_FORMAT_V2.md) §3 |
 | `catalog_format_version` | `0x0001` | private catalog schema v1 | [`CATALOG_SCHEMA_V1.md`](CATALOG_SCHEMA_V1.md) |
 | `catalog_format_version` | `0x0002` | private catalog schema v2 with durable sync state | [`CATALOG_SCHEMA_V2.md`](CATALOG_SCHEMA_V2.md) |
 | `catalog_format_version` | `0x0003` | private catalog schema v3 with durable collection-sharing state | [`CATALOG_SCHEMA_V3.md`](CATALOG_SCHEMA_V3.md) |
@@ -449,6 +451,15 @@ These are also the values `chur_object_reader_verify_complete` writes through `o
 | `0x0004` | caption |
 | `0x0005` | rating |
 
+`value_type` of a `CatalogExportV1` value, from [`BACKUP_FORMAT_V2.md`](BACKUP_FORMAT_V2.md) §3:
+
+| Value | Value |
+| --- | --- |
+| `0x01` | NULL |
+| `0x02` | SQLite INTEGER, eight bytes of two's complement |
+| `0x03` | strict UTF-8 text |
+| `0x04` | blob |
+
 ### 15.5 Domain tags
 
 A domain tag is a fixed ASCII byte constant written without a length prefix, per §3 and §7, of the form `CHUR\x00<AREA>\x00<PURPOSE>\x00V<n>`.
@@ -477,6 +488,8 @@ A domain tag is a fixed ASCII byte constant written without a length prefix, per
 | `CHUR\x00BACKUP\x00INVENTORY-COMMITMENT\x00V1` | ordered backup inventory commitment | [`BACKUP_FORMAT_V1.md`](BACKUP_FORMAT_V1.md) §7.2 |
 | `CHUR\x00BACKUP\x00MANIFEST-AAD\x00V1` | encrypted backup manifest AAD | [`BACKUP_FORMAT_V1.md`](BACKUP_FORMAT_V1.md) §4 |
 | `CHUR\x00BACKUP\x00FINAL-COMMIT-AAD\x00V1` | final backup commit AAD | [`BACKUP_FORMAT_V1.md`](BACKUP_FORMAT_V1.md) §7 |
+| `CHUR\x00BACKUP\x00CATALOG-EXPORT-AAD\x00V1` | catalog export record AAD | [`BACKUP_FORMAT_V2.md`](BACKUP_FORMAT_V2.md) §4 |
+| `CHUR\x00BACKUP\x00RECORD-COMMITMENT\x00V1` | commitment over every non-container backup record | [`BACKUP_FORMAT_V2.md`](BACKUP_FORMAT_V2.md) §5 |
 | `CHUR\x00SYNC\x00OPERATION\x00V1` | operation payload AAD and Ed25519 signature input | [`../sync/OPERATION_LOG.md`](../sync/OPERATION_LOG.md) §2, §6, §7 |
 | `CHUR\x00SYNC\x00OPERATION-CHAIN\x00V1` | operation digest and per-device chain hash | [`../sync/OPERATION_LOG.md`](../sync/OPERATION_LOG.md) §4 |
 | `CHUR\x00SYNC\x00CHECKPOINT\x00V1` | checkpoint record signature | [`../sync/ROLLBACK_PROTECTION.md`](../sync/ROLLBACK_PROTECTION.md) §6 |
@@ -501,7 +514,7 @@ A domain tag is a fixed ASCII byte constant written without a length prefix, per
 | `CHUR\x00SHARING\x00MEMBERSHIP-CHAIN\x00V1` | collection-membership chain commitment | [`../sync/COLLECTION_MEMBERSHIP.md`](../sync/COLLECTION_MEMBERSHIP.md) §1 |
 | `CHUR\x00IDENTITY\x00ENVELOPE\x00V1` | portable device-identity envelope AAD | [`../sync/DEVICE_IDENTITY.md`](../sync/DEVICE_IDENTITY.md) §6.1 |
 
-No allocated tag is a byte prefix of another, as §7 requires; the thirty-three above are checked pairwise by `chur-crypto`. Tags within one area differ at the first purpose byte or at a separator followed by a suffix; tags in different areas differ before the purpose.
+No allocated tag is a byte prefix of another, as §7 requires; every tag above is checked pairwise by `chur-crypto`. Tags within one area differ at the first purpose byte or at a separator followed by a suffix; tags in different areas differ before the purpose.
 
 The fingerprint tag reaches no persisted or wire bytes; it is the input to a string a person reads, so the ADR requirement of §15.6 does not apply to it. A tag for an authenticated record whose AAD is not yet frozen is otherwise allocated by a row here in the same change that freezes that record.
 

@@ -513,9 +513,9 @@ fn a_damaged_package_installs_nothing() {
     );
     assert!(destination.registry_names().unwrap().is_empty());
 
-    // A byte changed inside the catalog export. `VAULT_DESCRIPTOR_V1.md` §5
-    // has the descriptor commit to the catalog's header, and the restore checks
-    // that before it installs anything.
+    // A byte changed inside the catalog export. ADR-0068 seals each catalog
+    // export record, and the record commitment covers it, so the restore
+    // refuses the package before it installs anything.
     let destination = scratch_root();
     let mut catalog = whole.clone();
     let at = catalog_header_byte(&catalog);
@@ -652,11 +652,11 @@ fn container_final_commit_byte(package: &[u8]) -> usize {
     }
 }
 
-/// An offset inside the catalog export's header.
+/// An offset inside the first catalog export record.
 ///
-/// A SQLCipher file begins with 16 random salt bytes, and the §5 commitment the
-/// descriptor carries is over exactly those. The record is found by walking the
-/// package's own headers, which is what a reader does.
+/// The byte is inside the record's nonce, which the AEAD and the record
+/// commitment both cover. The record is found by walking the package's own
+/// headers, which is what a reader does.
 fn catalog_header_byte(package: &[u8]) -> usize {
     let mut offset = 32usize;
     loop {
@@ -1285,4 +1285,398 @@ fn a_backup_replaces_and_removes_a_stale_catalog_snapshot() {
     assert!(!snapshot.exists());
     assert!(!backup::clear_snapshot(&session).expect("clear again"));
     session.lock().expect("lock");
+}
+
+/// The whole catalog as one `CatalogExportV1` stream. Two catalogs whose
+/// streams are equal hold the same rows in every table.
+fn logical_catalog(db: &chur_catalog::CatalogDb) -> Vec<u8> {
+    let mut out = Vec::new();
+    chur_catalog::catalog_export::export(
+        db,
+        |chunk, _| {
+            out.extend_from_slice(chunk);
+            Ok(())
+        },
+        &|| false,
+    )
+    .expect("export the catalog");
+    out
+}
+
+/// A package rebuilt from its records with a new record count.
+fn reassemble(package: &[u8], records: &[Vec<u8>]) -> Vec<u8> {
+    let mut out = package[..32].to_vec();
+    out[24..32].copy_from_slice(&(records.len() as u64).to_be_bytes());
+    for record in records {
+        out.extend_from_slice(record);
+    }
+    out
+}
+
+/// The records of one type, by position.
+fn positions_of(package: &[u8], record_type: u8) -> Vec<usize> {
+    records(package)
+        .iter()
+        .enumerate()
+        .filter(|(_, (kind, _))| *kind == record_type)
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// A vault with every kind of catalog state the export must carry: objects,
+/// an album with a member, a tag, a favorite, a trashed object, a note with an
+/// attachment large enough to cross several export records, and content text.
+fn populated_vault() -> (VaultRoot, Session, Vec<(Id, Vec<u8>)>, Id) {
+    use chur_catalog::{note_attachments as files, notes};
+    let (root, mut session) = new_vault();
+    let first = import_one(&mut session, 300_000, "first.jpg", 0x7171);
+    let second = import_one(&mut session, 4_096, "second.jpg", 0x7272);
+    let trashed = import_one(&mut session, 4_096, "trashed.jpg", 0x7373);
+    let album = Id::new([0x0b; 16]).unwrap();
+    chur_catalog::store::put_album(
+        session.catalog().unwrap(),
+        &chur_catalog::model::Album {
+            album_id: album,
+            name: "Holiday".into(),
+            created_ms: NOW,
+            revision: 1,
+        },
+    )
+    .unwrap();
+    chur_catalog::store::set_album_membership(
+        session.catalog().unwrap(),
+        &album,
+        &first.0,
+        true,
+        NOW,
+    )
+    .unwrap();
+    chur_catalog::store::set_favorite(session.catalog().unwrap(), &second.0, true, NOW).unwrap();
+    let stream = chur_catalog::store::streams(session.catalog_ref().unwrap(), &first.0).unwrap()[0]
+        .stream_id;
+    chur_catalog::content_index::put(
+        session.catalog().unwrap(),
+        &first.0,
+        &stream,
+        1,
+        1,
+        "lighthouse harbour",
+    )
+    .unwrap();
+    chur_catalog::trash::set(session.catalog().unwrap(), &[trashed.0], false, NOW).unwrap();
+    let note = notes::save(
+        session.catalog().unwrap(),
+        None,
+        0,
+        "Portable",
+        "rows, not pages",
+        false,
+        notes::NoteFormat::PlainText,
+        NOW,
+    )
+    .unwrap();
+    let data = plaintext(2_500_000, 0x7474);
+    files::put(
+        session.catalog().unwrap(),
+        &note.id,
+        note.revision,
+        files::AttachmentData {
+            attachment: files::Attachment {
+                id: random::id().unwrap(),
+                name: "scan.bin".into(),
+                mime_type: "application/octet-stream".into(),
+                size: data.len() as u64,
+            },
+            data,
+        },
+        NOW,
+    )
+    .unwrap();
+    (root, session, vec![first, second, trashed], note.id)
+}
+
+/// ADR-0068: a version 2 package carries the catalog as rows, and the restored
+/// catalog holds exactly the rows of the source in every table, with both FTS
+/// indexes rebuilt from them.
+#[test]
+fn a_version_two_package_restores_every_catalog_row() {
+    let (_root, mut session, objects, note) = populated_vault();
+    let mut package = Cursor::new(Vec::new());
+    let summary =
+        backup::create(&mut session, &mut package, NOW, &mut Uninterrupted).expect("create");
+    let source_rows = logical_catalog(session.catalog_ref().unwrap());
+    session.lock().expect("lock");
+    let package = package.into_inner();
+
+    assert_eq!(&package[8..10], &[0x00, 0x02], "the package is version 2");
+    let exports = positions_of(&package, 0x03);
+    assert!(
+        exports.len() >= 3,
+        "the attachment spans several export records"
+    );
+    assert_eq!(exports, (2..2 + exports.len()).collect::<Vec<_>>());
+    assert_eq!(summary.record_count, 3 + exports.len() as u64 + 3);
+
+    let destination = scratch_root();
+    backup::restore(
+        &destination,
+        &mut Cursor::new(package),
+        PASSWORD,
+        &mut Uninterrupted,
+    )
+    .expect("restore");
+    let mut opened =
+        vault::unlock_with_password(&destination, PASSWORD, NOW + 2_000).expect("unlock");
+    assert_eq!(logical_catalog(opened.catalog_ref().unwrap()), source_rows);
+    for (object_id, bytes) in &objects {
+        assert_eq!(&exported(&opened, object_id), bytes);
+    }
+    let listed = page(opened.catalog_ref().unwrap(), &ObjectQuery::timeline()).expect("page");
+    assert_eq!(listed.total_count, 2, "the trashed object stays in trash");
+    let mut query = ObjectQuery::timeline();
+    query.terms = Some("lighthouse".into());
+    assert_eq!(
+        page(opened.catalog_ref().unwrap(), &query)
+            .unwrap()
+            .total_count,
+        1,
+        "the content text is searchable after the index rebuild"
+    );
+    assert_eq!(
+        chur_catalog::notes::get(opened.catalog_ref().unwrap(), &note)
+            .unwrap()
+            .attachment_count,
+        1
+    );
+    opened.lock().expect("lock");
+}
+
+/// ADR-0068: the catalog export records are bound to their place. Two records
+/// swapped, the last record removed, a record from another package of the same
+/// vault, or a changed descriptor each fail before anything is installed.
+#[test]
+fn a_moved_cut_or_foreign_catalog_export_record_installs_nothing() {
+    let (_root, mut session, _, _) = populated_vault();
+    let mut first = Cursor::new(Vec::new());
+    backup::create(&mut session, &mut first, NOW, &mut Uninterrupted).expect("first");
+    let mut second = Cursor::new(Vec::new());
+    backup::create(&mut session, &mut second, NOW + 1, &mut Uninterrupted).expect("second");
+    session.lock().expect("lock");
+    let package = first.into_inner();
+    let other = second.into_inner();
+    let parts: Vec<Vec<u8>> = records(&package)
+        .into_iter()
+        .map(|(_, bytes)| bytes)
+        .collect();
+    let exports = positions_of(&package, 0x03);
+
+    let mut reordered = parts.clone();
+    reordered.swap(exports[0], exports[1]);
+
+    let mut truncated = parts.clone();
+    truncated.remove(*exports.last().unwrap());
+
+    let mut spliced = parts.clone();
+    spliced[exports[1]] = records(&other)[exports[1]].1.clone();
+
+    let mut altered = parts.clone();
+    let descriptor = &mut altered[1];
+    let last = descriptor.len() - 1;
+    descriptor[last] ^= 0x01;
+
+    for (case, damaged, expected) in [
+        (
+            "reordered",
+            reassemble(&package, &reordered),
+            ChurStatus::VaultCorrupt,
+        ),
+        (
+            "truncated",
+            reassemble(&package, &truncated),
+            ChurStatus::VaultCorrupt,
+        ),
+        (
+            "spliced",
+            reassemble(&package, &spliced),
+            ChurStatus::VaultCorrupt,
+        ),
+        // The descriptor's own authenticator fails first, under the root its
+        // slot returned, and the record commitment would refuse it next.
+        (
+            "altered descriptor",
+            reassemble(&package, &altered),
+            ChurStatus::AuthenticationFailed,
+        ),
+    ] {
+        let destination = scratch_root();
+        assert_eq!(
+            rejection(backup::restore(
+                &destination,
+                &mut Cursor::new(damaged),
+                PASSWORD,
+                &mut Uninterrupted,
+            )),
+            expected,
+            "{case}"
+        );
+        assert!(destination.registry_names().unwrap().is_empty(), "{case}");
+        assert_eq!(
+            std::fs::read_dir(destination.vaults())
+                .map(|entries| entries.count())
+                .unwrap_or(0),
+            0,
+            "{case}: no partial vault directory survives"
+        );
+    }
+
+    // The undamaged package restores.
+    backup::restore(
+        &scratch_root(),
+        &mut Cursor::new(package),
+        PASSWORD,
+        &mut Uninterrupted,
+    )
+    .expect("restore the undamaged package");
+}
+
+/// The object identifier inside `tests/fixtures/backup-v1-raw-catalog.churbak`.
+const LEGACY_OBJECT: &str = "06476c2ab576645cad147b2b45a839d7";
+
+/// A version 1 package, written by a build before ADR-0068 with a copy of the
+/// SQLCipher file as its catalog and a v1 object container, still restores.
+/// The restored vault then travels through a version 2 package with a new v2
+/// container beside the old one, so both container versions and both package
+/// versions meet in one chain.
+#[test]
+fn a_version_one_package_still_restores_and_moves_on_to_version_two() {
+    let fixture = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/backup-v1-raw-catalog.churbak"
+    ))
+    .expect("the version 1 fixture");
+    assert_eq!(&fixture[8..10], &[0x00, 0x01], "the fixture is version 1");
+    // The object the fixture build imported, as its generator printed it.
+    let legacy = Id::new(
+        (0..16)
+            .map(|i| u8::from_str_radix(&LEGACY_OBJECT[2 * i..2 * i + 2], 16).unwrap())
+            .collect::<Vec<u8>>()
+            .try_into()
+            .unwrap(),
+    )
+    .expect("fixture object");
+
+    let first = scratch_root();
+    backup::restore(
+        &first,
+        &mut Cursor::new(fixture),
+        PASSWORD,
+        &mut Uninterrupted,
+    )
+    .expect("restore the version 1 package");
+    let mut session = vault::unlock_with_password(&first, PASSWORD, NOW + 1_000).expect("unlock");
+    let legacy_bytes = plaintext(4_096, 0x5151).to_vec();
+    assert_eq!(exported(&session, &legacy), legacy_bytes);
+    assert_eq!(
+        chur_catalog::store::streams(session.catalog_ref().unwrap(), &legacy).unwrap()[0]
+            .container_version,
+        1
+    );
+    let album = Id::new([0x0a; 16]).unwrap();
+    assert_eq!(
+        chur_catalog::store::album_name(session.catalog_ref().unwrap(), &album).unwrap(),
+        Some(String::from("Legacy album"))
+    );
+
+    let (fresh, fresh_bytes) = import_one(&mut session, 70_000, "fresh.jpg", 0x5252);
+    let mut package = Cursor::new(Vec::new());
+    backup::create(&mut session, &mut package, NOW + 2_000, &mut Uninterrupted).expect("create");
+    let source_rows = logical_catalog(session.catalog_ref().unwrap());
+    session.lock().expect("lock");
+    assert_eq!(&package.get_ref()[8..10], &[0x00, 0x02]);
+
+    let second = scratch_root();
+    backup::restore(&second, &mut package, PASSWORD, &mut Uninterrupted).expect("restore v2");
+    let opened = vault::unlock_with_password(&second, PASSWORD, NOW + 3_000).expect("unlock");
+    assert_eq!(logical_catalog(opened.catalog_ref().unwrap()), source_rows);
+    assert_eq!(exported(&opened, &legacy), legacy_bytes);
+    assert_eq!(exported(&opened, &fresh), fresh_bytes);
+    let versions: Vec<u16> = [legacy, fresh]
+        .iter()
+        .map(|id| {
+            chur_catalog::store::streams(opened.catalog_ref().unwrap(), id).unwrap()[0]
+                .container_version
+        })
+        .collect();
+    assert_eq!(versions, vec![1, 2]);
+    assert_eq!(
+        chur_catalog::store::album_name(opened.catalog_ref().unwrap(), &album).unwrap(),
+        Some(String::from("Legacy album"))
+    );
+}
+
+/// A package source whose byte at `target` changes after its first read, as a
+/// file can when another process writes it during a restore.
+struct ChangesAfterFirstRead {
+    data: Vec<u8>,
+    position: u64,
+    target: usize,
+    seen: bool,
+}
+
+impl std::io::Read for ChangesAfterFirstRead {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let start = usize::try_from(self.position).unwrap().min(self.data.len());
+        let count = buffer.len().min(self.data.len() - start);
+        buffer[..count].copy_from_slice(&self.data[start..start + count]);
+        if (start..start + count).contains(&self.target) {
+            if self.seen {
+                buffer[self.target - start] ^= 0x01;
+            }
+            self.seen = true;
+        }
+        self.position += count as u64;
+        Ok(count)
+    }
+}
+
+impl std::io::Seek for ChangesAfterFirstRead {
+    fn seek(&mut self, to: std::io::SeekFrom) -> std::io::Result<u64> {
+        let mut cursor = Cursor::new(&self.data);
+        cursor.set_position(self.position);
+        self.position = cursor.seek(to)?;
+        Ok(self.position)
+    }
+}
+
+/// The step-4 check reads a container from the package, and the install reads
+/// it again. A container that changes between the two reads must not install,
+/// so the extracted copy is verified on its own, chunk by chunk.
+#[test]
+fn a_container_changed_after_its_check_installs_nothing() {
+    let (_root, mut session) = new_vault();
+    import_one(&mut session, 300_000, "a.jpg", 0x7575);
+    let mut package = Cursor::new(Vec::new());
+    backup::create(&mut session, &mut package, NOW, &mut Uninterrupted).expect("create");
+    session.lock().expect("lock");
+    let data = package.into_inner();
+    let target = container_byte(&data);
+
+    let destination = scratch_root();
+    let mut source = ChangesAfterFirstRead {
+        data,
+        position: 0,
+        target,
+        seen: false,
+    };
+    assert_eq!(
+        rejection(backup::restore(
+            &destination,
+            &mut source,
+            PASSWORD,
+            &mut Uninterrupted
+        )),
+        ChurStatus::VaultCorrupt
+    );
+    assert!(source.seen, "the changed byte was read");
+    assert!(destination.registry_names().unwrap().is_empty());
 }

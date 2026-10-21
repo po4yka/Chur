@@ -41,5 +41,6 @@ fuzz_target!(|data: &[u8]| {
         assert_eq!(error.status(), ChurStatus::VaultCorrupt);
     }
     let _ = BackupManifest::decode(data);
-    let _ = FinalBackupCommit::decode(data);
+    let _ = FinalBackupCommit::decode(data, 0x0001);
+    let _ = FinalBackupCommit::decode(data, 0x0002);
 });

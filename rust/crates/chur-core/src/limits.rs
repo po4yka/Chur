@@ -235,6 +235,30 @@ pub mod backup {
     pub const RECORD_COUNT_MIN: u64 = 2;
     /// Most records one package holds.
     pub const RECORD_COUNT_MAX: u64 = 1_048_576;
+    /// Most records one version 2 package holds: the v1 bound plus the most
+    /// catalog export records, ADR-0068.
+    pub const RECORD_COUNT_MAX_V2: u64 = RECORD_COUNT_MAX + CATALOG_EXPORT_RECORDS_MAX;
+    /// Most catalog export records one version 2 package carries.
+    pub const CATALOG_EXPORT_RECORDS_MAX: u64 = 65_536;
+    /// The plaintext of every catalog export record but the last, 1 MiB.
+    pub const CATALOG_EXPORT_CHUNK_LEN: usize = 1_048_576;
+    /// Largest catalog export record payload: nonce, full chunk, and tag.
+    pub const CATALOG_EXPORT_PAYLOAD_MAX: u64 =
+        (super::NONCE_LEN + CATALOG_EXPORT_CHUNK_LEN + super::TAG_LEN) as u64;
+    /// Most tables one catalog export carries.
+    pub const CATALOG_EXPORT_TABLES_MAX: u32 = 256;
+    /// Most columns one exported table carries.
+    pub const CATALOG_EXPORT_COLUMNS_MAX: u16 = 64;
+    /// Longest table or column name in a catalog export, in bytes.
+    pub const CATALOG_EXPORT_NAME_MAX: u32 = 64;
+    /// Longest text or blob value in a catalog export, 16 MiB.
+    pub const CATALOG_EXPORT_VALUE_MAX: u32 = 16_777_216;
+    /// Most text and blob bytes one exported row holds together, 32 MiB.
+    ///
+    /// The largest catalog value is an 8 MiB note attachment, so the bound
+    /// leaves room for every row the schema admits and stops a forged stream
+    /// from making one row of 64 columns hold 1 GiB.
+    pub const CATALOG_EXPORT_ROW_MAX: u64 = 33_554_432;
     /// Most stream inventory entries one package carries.
     pub const STREAM_ENTRIES_MAX: usize = 1_048_576;
     /// Most slot inventory entries one package carries.

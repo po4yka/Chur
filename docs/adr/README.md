@@ -116,6 +116,7 @@ An ADR uses the document-status vocabulary defined once in [`../README.md`](../R
 | [0063](0063-local-encrypted-content-search.md) | Keep local OCR text in the encrypted catalog | Proposed |
 | [0064](0064-receive-system-shares.md) | Receive system shares through explicit vault import | Proposed |
 | [0066](0066-pad-object-containers-to-size-buckets.md) | Pad object containers to size buckets in container version 2 | Accepted |
+| [0068](0068-carry-a-portable-catalog-export-in-backup-v2.md) | Carry a portable catalog export and a record commitment in backup version 2 | Accepted |
 
 Rows are ordered by ADR number. Number 0015 was not used; no ADR carries it and none will.
 

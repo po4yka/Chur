@@ -93,7 +93,7 @@ fn a_package_written_by_the_cli_restores_through_the_cli() {
         &run("backup", &source, &["inspect", package.to_str().unwrap()]),
         "backup inspect",
     );
-    assert!(shown.contains("Chur backup package v1"));
+    assert!(shown.contains("Chur backup package v2"));
     assert!(shown.contains("records        5"), "inspect was: {shown}");
 
     let report = expect_ok(

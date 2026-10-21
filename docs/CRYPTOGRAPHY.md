@@ -1588,14 +1588,14 @@ In synchronized/shared systems, Chur cannot force another authorized device or r
 
 ## 49. Native backup package
 
-The implemented native full-backup path carries the following encrypted state. Its physical SQLCipher snapshot is a documented divergence from the canonical catalog-export requirement; see [Backup format §2](format/BACKUP_FORMAT_V1.md#2-package-model) and [release gates](assurance/RELEASE_GATES.md). This list is an inventory, not a new record layout:
+The implemented native full-backup path writes package version 2 of [`format/BACKUP_FORMAT_V2.md`](format/BACKUP_FORMAT_V2.md) and [ADR-0068](adr/0068-carry-a-portable-catalog-export-in-backup-v2.md). It carries the following encrypted state. This list is an inventory, not a new record layout:
 
 ```text
 BackupManifestV1
 portable key slots
 vault descriptor
 collection-key envelopes
-encrypted catalog snapshot
+canonical catalog export (CatalogExportV1), in sealed records
 object-key envelopes
 immutable encrypted objects
 encrypted derived assets
@@ -1608,6 +1608,9 @@ Requirements:
 - at least one password or recovery slot can restore the root secret;
 - package metadata that reveals private semantics is encrypted;
 - `BackupManifestV1` is authenticated under `BackupManifestKey` and under no other key; a recovery slot restores the same `VaultRootSecret` from which that key is derived, as [`format/BACKUP_FORMAT_V1.md`](format/BACKUP_FORMAT_V1.md) §4 requires;
+- each catalog export record is sealed under `BackupManifestKey` with an AAD under `CHUR\x00BACKUP\x00CATALOG-EXPORT-AAD\x00V1` that binds the vault, the backup, the record index, the record type, the chunk index, and the final flag, so a record from another backup, a moved record, and a cut export fail authentication;
+- the final backup commit seals a BLAKE3-256 record commitment under `CHUR\x00BACKUP\x00RECORD-COMMITMENT\x00V1` over the index, header, and payload of every record that is not a container, beside the inventory commitment that covers the containers;
+- the package carries no SQLCipher page; a restore imports the catalog rows into a new SQLCipher catalog, and a version 1 package that carries a copy of the SQLCipher file still restores through the version 1 path;
 - restore validates every length, suite, key slot, manifest, envelope, and object before activation;
 - restore writes into a new temporary vault namespace and atomically activates it;
 - backup generation and creation time shown after unlock are authenticated;

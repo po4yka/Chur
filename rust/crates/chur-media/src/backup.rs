@@ -19,7 +19,15 @@
 //! is recomputed while the package is read, and the final backup commit seals
 //! it together with the record count the public preamble declared. A package
 //! with a container removed, a record added, or two records reordered fails
-//! there rather than restoring a vault that is quietly missing something.
+//! there rather than restoring a vault that is quietly missing something. In a
+//! version 2 package the commit also seals the record commitment of ADR-0068
+//! over every record that is not a container.
+//!
+//! **The catalog travels as rows.** This build writes version 2 packages only:
+//! the catalog is a logical `CatalogExportV1` stream in sealed records, and a
+//! restore imports it into a new SQLCipher catalog. A version 1 package, which
+//! carries a copy of the SQLCipher file, still restores through the path that
+//! version 1 defined.
 
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -30,14 +38,19 @@ use chur_catalog::{schema, store};
 use chur_core::{ChurStatus, Id, Result, bail, ensure, limits::backup as bounds};
 use chur_crypto::{Key, Nonce, random};
 use chur_format::backup::{
-    BackupManifest, FinalBackupCommit, Framing, InventoryCommitter, PublicPreamble,
-    RECORD_HEADER_LEN, RecordHeader, RecordType, SlotInventoryEntry, StreamInventoryEntry,
-    framing_of, manifest_key,
+    BackupManifest, CatalogExportPosition, FinalBackupCommit, Framing, InventoryCommitter,
+    PublicPreamble, RECORD_HEADER_LEN, RecordCommitter, RecordHeader, RecordSeal, RecordType,
+    SlotInventoryEntry, StreamInventoryEntry, framing_of, manifest_key, open_catalog_export,
+    seal_catalog_export,
 };
-use chur_format::constants::{CONTAINER_VERSION_V1, ObjectState, SlotType, VaultState};
+use chur_format::catalog_export::ChunkSource;
+use chur_format::constants::{
+    BACKUP_VERSION_V1, BACKUP_VERSION_V2, CONTAINER_VERSION_V1, ObjectState, SlotType, VaultState,
+};
 use chur_format::container::{PublicPreamble as ContainerPreamble, StreamIdentity, StreamReader};
 use chur_format::descriptor::VaultDescriptor;
 use chur_sync_protocol::identity::DeviceIdentityEnvelope;
+use zeroize::Zeroizing;
 
 use crate::keys;
 use crate::progress::{self, Progress};
@@ -184,6 +197,9 @@ pub fn create(
 
     let snapshot = CatalogSnapshot::create(session, progress)?;
     let catalog_path = snapshot.directory.join("catalog.db");
+    // The snapshot is a private copy of the catalog. The identity preparation
+    // below changes it, never the live catalog, and the export reads the
+    // changed copy.
     let catalog_key =
         chur_catalog::db::CatalogKey::derive(session.root_secret()?, &session.vault_id())?;
     let mut catalog = chur_catalog::CatalogDb::open(
@@ -208,16 +224,33 @@ pub fn create(
         ),
         None => None,
     };
-    let catalog_generation = schema::generation(&catalog)?;
-    catalog.checkpoint()?;
-    catalog.close()?;
-
     let vault_id = session.vault_id();
     let store_id = session.object_store_id();
     let backup_id = random::id()?;
+    let key = manifest_key(session.root_secret()?, &vault_id)?;
+
+    // ADR-0068: the catalog leaves as rows, sealed record by record into a
+    // file beside the snapshot, so the record count is known before the
+    // preamble is written and no plaintext row reaches the disk.
+    let export_path = snapshot.directory.join("catalog.export");
+    let export = write_catalog_export(
+        &catalog,
+        &key,
+        &vault_id,
+        &backup_id,
+        &export_path,
+        progress,
+    )?;
+    let catalog_generation = export.header.catalog_generation;
+    catalog.close()?;
+
     let descriptor = portable_descriptor(session.descriptor())?;
+    ensure!(
+        export.header.catalog_format_version == descriptor.catalog.catalog_format_version,
+        Conflict,
+        "the catalog schema differs from the version the descriptor names"
+    );
     let descriptor_bytes = session.seal_descriptor(&descriptor)?;
-    let catalog_length = file_length(&catalog_path)?;
     let root_dir = session.root_dir().clone();
 
     // Pass one: the inventory commitment and the counts.
@@ -258,13 +291,17 @@ pub fn create(
     let slot_count = committer.slot_count();
     let inventory_commitment = committer.finish();
 
-    // The manifest, the descriptor, the catalog export, one record per stream,
-    // and the final commit.
-    let record_count = u64::from(stream_count) + 4 + u64::from(identity_payload.is_some());
-    let preamble = PublicPreamble::new(record_count)?;
+    // The manifest, the descriptor, the catalog export records, one record per
+    // stream, the identity envelope when there is one, and the final commit.
+    let record_count = 3
+        + u64::from(export.record_count)
+        + u64::from(stream_count)
+        + u64::from(identity_payload.is_some());
+    let preamble = PublicPreamble::new(BACKUP_VERSION_V2, record_count)?;
 
     let manifest = BackupManifest {
         backup_id,
+        backup_version: BACKUP_VERSION_V2,
         vault_id,
         created_time_ms: now_ms,
         base_backup_id: None,
@@ -274,10 +311,9 @@ pub fn create(
         slot_entry_count: slot_count,
         inventory_commitment,
         free_space_required: content_length
-            .saturating_add(catalog_length)
+            .saturating_add(export.length)
             .saturating_add(bounds::RESTORE_HEADROOM),
     };
-    let key = manifest_key(session.root_secret()?, &vault_id)?;
     let manifest_payload = manifest.seal(&key, &Nonce::random()?)?;
     ensure!(
         manifest_payload.len() <= bounds::MANIFEST_PAYLOAD_MAX,
@@ -285,16 +321,15 @@ pub fn create(
         "the manifest record exceeds the §13 payload bound"
     );
 
+    // ADR-0068: every record that is not a container is fed to the record
+    // commitment in package order, with its index, as it is written.
+    let mut records = RecordCommitter::new();
     let mut written = write_all(destination, &preamble.encode())?;
+    records.add(0, RecordType::Manifest, &manifest_payload);
     written += write_record(destination, RecordType::Manifest, &manifest_payload)?;
+    records.add(1, RecordType::Descriptor, &descriptor_bytes);
     written += write_record(destination, RecordType::Descriptor, &descriptor_bytes)?;
-    written += write_streamed_record(
-        destination,
-        RecordType::CatalogExport,
-        &catalog_path,
-        catalog_length,
-        progress,
-    )?;
+    written += copy_export_records(destination, &export, &mut records, progress)?;
 
     // Pass two: the containers, in the same order the commitment was taken in.
     let mut copied = 0u64;
@@ -319,6 +354,8 @@ pub fn create(
     written += copied;
 
     if let Some(identity_payload) = identity_payload {
+        let index = 2 + u64::from(export.record_count) + u64::from(stream_count);
+        records.add(index, RecordType::Envelope, &identity_payload);
         written += write_record(destination, RecordType::Envelope, &identity_payload)?;
     }
 
@@ -328,6 +365,10 @@ pub fn create(
         stream_entry_count: stream_count,
         slot_entry_count: slot_count,
         inventory_commitment,
+        records: Some(RecordSeal {
+            catalog_export_record_count: export.record_count,
+            record_commitment: records.finish(),
+        }),
     };
     let commit_payload = commit.seal(&key, &vault_id, &Nonce::random()?)?;
     written += write_record(destination, RecordType::FinalCommit, &commit_payload)?;
@@ -508,20 +549,103 @@ fn write_record(
     Ok(written)
 }
 
-/// Writes one record whose payload is a file, without reading the file whole.
-fn write_streamed_record(
-    destination: &mut impl Write,
-    record_type: RecordType,
-    path: &Path,
+/// The sealed catalog export records written beside the snapshot.
+struct SealedExport {
+    path: PathBuf,
+    header: chur_format::catalog_export::ExportHeader,
+    record_count: u32,
     length: u64,
+}
+
+/// Writes the catalog as sealed catalog export records, ADR-0068.
+///
+/// The records are the package's records 2 onward, so each is sealed at its
+/// final index here and copied unchanged later. The file holds ciphertext only.
+fn write_catalog_export(
+    catalog: &chur_catalog::CatalogDb,
+    key: &Key,
+    vault_id: &Id,
+    backup_id: &Id,
+    path: &Path,
+    progress: &impl Progress,
+) -> Result<SealedExport> {
+    let mut file = std::fs::File::create(path).map_err(|_| {
+        chur_core::err!(IoFailure, "the backup catalog export could not be created")
+    })?;
+    let mut record_count = 0u32;
+    let mut length = 0u64;
+    let header = chur_catalog::catalog_export::export(
+        catalog,
+        |chunk, is_final| {
+            ensure!(
+                u64::from(record_count) < bounds::CATALOG_EXPORT_RECORDS_MAX,
+                ResourceLimitExceeded,
+                "the catalog export exceeds the record bound of a package"
+            );
+            let position = CatalogExportPosition {
+                vault_id: *vault_id,
+                backup_id: *backup_id,
+                record_index: 2 + u64::from(record_count),
+                chunk_index: record_count,
+                is_final,
+            };
+            let payload = seal_catalog_export(key, &Nonce::random()?, &position, chunk)?;
+            length += write_record(&mut file, RecordType::CatalogExport, &payload)?;
+            record_count += 1;
+            Ok(())
+        },
+        &|| progress.cancelled(),
+    )?;
+    file.flush().map_err(|_| {
+        chur_core::err!(IoFailure, "the backup catalog export could not be written")
+    })?;
+    Ok(SealedExport {
+        path: path.to_path_buf(),
+        header,
+        record_count,
+        length,
+    })
+}
+
+/// Copies the sealed catalog export records into the package and feeds each
+/// to the record commitment at its index.
+fn copy_export_records(
+    destination: &mut impl Write,
+    export: &SealedExport,
+    records: &mut RecordCommitter,
     progress: &impl Progress,
 ) -> Result<u64> {
-    let header = RecordHeader {
-        record_type,
-        payload_length: length,
-    };
-    let mut written = write_all(destination, &header.encode())?;
-    written += copy_file(destination, path, length, progress)?;
+    let mut file = std::fs::File::open(&export.path)
+        .map_err(|_| chur_core::err!(NotFound, "the backup catalog export is absent"))?;
+    let mut written = 0u64;
+    let mut buffer = vec![0u8; COPY_BUFFER];
+    for index in 0..u64::from(export.record_count) {
+        let mut head = [0u8; RECORD_HEADER_LEN];
+        file.read_exact(&mut head)
+            .map_err(|_| chur_core::err!(VaultIncomplete, "the backup catalog export is short"))?;
+        let header = RecordHeader::decode(&head)?;
+        records.begin(2 + index, &header);
+        written += write_all(destination, &head)?;
+        let mut remaining = header.payload_length;
+        while remaining > 0 {
+            if progress.cancelled() {
+                return Err(progress::cancelled("the backup was cancelled"));
+            }
+            let take = usize::try_from(remaining.min(COPY_BUFFER as u64))
+                .map_err(|_| chur_core::err!(InternalFailure, "a copy step exceeds a usize"))?;
+            file.read_exact(&mut buffer[..take]).map_err(|_| {
+                chur_core::err!(VaultIncomplete, "the backup catalog export is short")
+            })?;
+            records.update(&buffer[..take]);
+            written += write_all(destination, &buffer[..take])?;
+            remaining -= take as u64;
+        }
+    }
+    ensure!(
+        written == export.length,
+        InternalFailure,
+        "the backup catalog export changed while it was copied"
+    );
     Ok(written)
 }
 
@@ -610,8 +734,11 @@ pub fn restore(
     restore_inner(root_dir, source, credential, progress, None)
 }
 
-/// Restores an archive after authenticating all catalog pages before any migration.
-/// Logical import additionally verifies all container chunks before touching its target.
+/// Restores an archive whose catalog export is at most `catalog_limit` bytes.
+///
+/// A version 2 catalog is authenticated record by record before import, and a
+/// version 1 catalog page by page before any migration. Logical import
+/// additionally verifies all container chunks before touching its target.
 pub fn restore_limited(
     root_dir: &VaultRoot,
     source: &mut (impl Read + Seek),
@@ -639,10 +766,26 @@ fn restore_inner(
     let package_length = source
         .seek(SeekFrom::End(0))
         .map_err(|_| chur_core::err!(IoFailure, "the package length could not be read"))?;
-    let slots = scan(source, package_length)?;
+    let (backup_version, slots) = scan(source, package_length)?;
+    // A version 1 package carries the catalog in one record and a version 2
+    // package in a contiguous run of records, ADR-0068.
+    let export_records = if backup_version == BACKUP_VERSION_V1 {
+        let slot = find(&slots, RecordType::CatalogExport)?;
+        let index = slots
+            .iter()
+            .position(|candidate| std::ptr::eq(candidate, slot))
+            .unwrap_or(0);
+        index..index + 1
+    } else {
+        version_two_layout(&slots)?
+    };
     if let Some(limit) = catalog_limit {
+        let total = slots[export_records.clone()]
+            .iter()
+            .try_fold(0u64, |sum, slot| sum.checked_add(slot.payload_length))
+            .ok_or_else(|| chur_core::err!(VaultCorrupt, "the catalog export length overflows"))?;
         ensure!(
-            find(&slots, RecordType::CatalogExport)?.payload_length <= limit,
+            total <= limit,
             ResourceLimitExceeded,
             "the archive catalog exceeds its verification bound"
         );
@@ -664,7 +807,12 @@ fn restore_inner(
         find(&slots, RecordType::Manifest)?,
         bounds::MANIFEST_PAYLOAD_MAX as u64,
     )?;
-    let manifest = BackupManifest::open(&manifest_payload, &key, &descriptor.vault_id)?;
+    let manifest = BackupManifest::open(
+        &manifest_payload,
+        &key,
+        &descriptor.vault_id,
+        backup_version,
+    )?;
     ensure!(
         manifest.vault_id == descriptor.vault_id
             && manifest.catalog_format_version == descriptor.catalog.catalog_format_version,
@@ -679,6 +827,7 @@ fn restore_inner(
         &key,
         &descriptor.vault_id,
         &manifest.backup_id,
+        backup_version,
     )?;
 
     // §2.1: `record_count` is the one variable preamble field, and the final
@@ -706,6 +855,30 @@ fn restore_inner(
         }
         None => None,
     };
+    // ADR-0068: in a version 2 package the record commitment covers every
+    // record that is not a container. It is fed the exact buffers this restore
+    // uses: the manifest, the descriptor, and the envelope already in memory,
+    // and each catalog export record as the import reads and opens it, so no
+    // byte is used that was not committed. The comparison runs after the
+    // import and before any container is extracted or the descriptor is
+    // installed; a failure removes the restore's directory with the catalog.
+    let mut records = match &commit.records {
+        Some(seal) => {
+            ensure!(
+                export_records.len() == seal.catalog_export_record_count as usize,
+                VaultCorrupt,
+                "the package carries another number of catalog export records than its commit seals"
+            );
+            let mut records = RecordCommitter::new();
+            records.add(0, RecordType::Manifest, &manifest_payload);
+            records.add(1, RecordType::Descriptor, &descriptor_bytes);
+            Some(records)
+        }
+        None => None,
+    };
+    let envelope_index = slots
+        .iter()
+        .position(|slot| slot.record_type == RecordType::Envelope);
 
     // §8 step 4: completeness before anything is written. Every container entry
     // is read in package order and folded into the commitment the commit sealed.
@@ -778,49 +951,59 @@ fn restore_inner(
     let _claim = root_dir.prepare(&store_id)?;
     let catalog_path = root_dir.catalog(&store_id, &catalog_path_id);
     let installed = (|| -> Result<()> {
-        extract(
-            source,
-            find(&slots, RecordType::CatalogExport)?,
-            &catalog_path,
-            progress,
-        )?;
-        // `VAULT_DESCRIPTOR_V1.md` §5: the descriptor commits to the catalog it
-        // names. Checking it here rather than at the next unlock is the
-        // difference between a package that does not install and a vault that
-        // installs and then cannot be opened.
-        ensure!(
-            chur_crypto::secret::constant_time_eq(
-                &vault::catalog_header_commitment(&catalog_path)?,
-                &local.catalog.catalog_header_commitment
-            ),
-            VaultCorrupt,
-            "the package's catalog is not the one its descriptor commits to"
-        );
-        // §8 step 6: the object-key references are validated against the
-        // catalog that was restored, not against the package's own claim. The
-        // walk is in the §7.1 order the container records were written in, so
-        // the k-th record is the k-th row and the two are compared rather than
-        // assumed.
-        let catalog_key = chur_catalog::db::CatalogKey::derive(&root_secret, &local.vault_id)?;
-        let mut catalog = chur_catalog::db::CatalogDb::open(
-            &chur_catalog::db::CatalogLocation::File(&catalog_path),
-            &catalog_key,
-        )?;
-        if progress.cancelled() {
-            return Err(progress::cancelled(
-                "the archive verification was cancelled",
-            ));
-        }
-        catalog.verify_cipher_pages()?;
-        if progress.cancelled() {
-            return Err(progress::cancelled(
-                "the archive verification was cancelled",
-            ));
-        }
-        // §8 step 6: the catalog is the one the sealed manifest describes. The
-        // header commitment above is the file's salt, which every copy of the
-        // same catalog shares, so it cannot tell this package's catalog from
-        // an older package's. The generation can: the manifest records the
+        let mut catalog = if backup_version == BACKUP_VERSION_V1 {
+            install_page_copy(
+                source,
+                &slots[export_records.start],
+                &catalog_path,
+                &local,
+                &root_secret,
+                progress,
+            )?
+        } else {
+            let records = records.as_mut().ok_or_else(|| {
+                chur_core::err!(
+                    InternalFailure,
+                    "a version 2 restore has no record commitment"
+                )
+            })?;
+            let catalog = import_catalog_export(
+                source,
+                &ExportRecords {
+                    slots: &slots[export_records.clone()],
+                    first_index: export_records.start as u64,
+                    key: &key,
+                    vault_id: descriptor.vault_id,
+                    backup_id: manifest.backup_id,
+                    catalog_format_version: manifest.catalog_format_version,
+                },
+                records,
+                &catalog_path,
+                &root_secret,
+                progress,
+            )?;
+            if let (Some(index), Some(payload)) = (envelope_index, identity_payload.as_deref()) {
+                records.add(index as u64, RecordType::Envelope, payload);
+            }
+            let sealed = commit
+                .records
+                .map(|seal| seal.record_commitment)
+                .unwrap_or_default();
+            ensure!(
+                chur_crypto::secret::constant_time_eq(&records.finish(), &sealed),
+                VaultCorrupt,
+                "the package's records do not match the record commitment its final commit seals"
+            );
+            // The new catalog has its own SQLCipher header, so the restored
+            // descriptor commits to that one, `VAULT_DESCRIPTOR_V1.md` §5.
+            local.catalog.catalog_header_commitment =
+                vault::catalog_header_commitment(&catalog_path)?;
+            catalog
+        };
+        // §8 step 6: the catalog is the one the sealed manifest describes. In
+        // a version 1 package the header commitment is the file's salt, which
+        // every copy of the same catalog shares, so it cannot tell this
+        // package's catalog from an older package's. The generation can: the manifest records the
         // snapshot's generation under the manifest key, and the final commit
         // binds the manifest to this package. The descriptor records the
         // generation of the source's last lock, which the snapshot can only
@@ -918,13 +1101,25 @@ fn restore_inner(
                 "a container entry does not describe the stream the catalog holds"
             );
             let head = RECORD_HEADER_LEN as u64 + chur_format::backup::STREAM_ENTRY_LEN as u64;
+            let path = root_dir.container(&store_id, &stream.container_path_id);
             extract_range(
                 source,
                 offset + head,
                 entry.ciphertext_length,
-                &root_dir.container(&store_id, &stream.container_path_id),
+                &path,
                 progress,
             )?;
+            // The copy is a second read of the package, so the step-4 check of
+            // the package bytes says nothing about it. The extracted file is
+            // checked again on its own: its length and manifest commitment
+            // against the inventory entry here, and every chunk and the final
+            // commit under the object key below.
+            ensure!(
+                file_length(&path)? == entry.ciphertext_length
+                    && manifest_commitment_of(&path)? == entry.manifest_commitment,
+                VaultCorrupt,
+                "a restored container differs from the inventory entry that describes it"
+            );
             let object_key = keys::object_key_from_catalog(&catalog, &root_secret, object_id)
                 .map_err(|_| chur_core::err!(VaultCorrupt, "a restored object key is invalid"))?;
             let file = ContainerFile::open(root_dir, &store_id, &stream.container_path_id)?;
@@ -936,6 +1131,12 @@ fn restore_inner(
             };
             let mut reader = StreamReader::open(file, &object_key, &identity)
                 .map_err(|_| chur_core::err!(VaultCorrupt, "a restored container is invalid"))?;
+            reader
+                .verify_complete_with(&|| progress.cancelled())
+                .map_err(|error| match error.status() {
+                    ChurStatus::Cancelled => error,
+                    _ => chur_core::err!(VaultCorrupt, "a restored container does not verify"),
+                })?;
             ensure!(
                 reader.read_final_commit()?.ordered_chunk_commitment()
                     == &entry.ordered_chunk_commitment,
@@ -1011,7 +1212,7 @@ fn restore_inner(
 /// It reads headers only, so the scan of a 40 GB package costs twelve bytes per
 /// record. §13 requires the 32-byte preamble plus every header and payload to
 /// total the package length exactly, and this is where that is checked.
-fn scan(source: &mut (impl Read + Seek), package_length: u64) -> Result<Vec<RecordSlot>> {
+fn scan(source: &mut (impl Read + Seek), package_length: u64) -> Result<(u16, Vec<RecordSlot>)> {
     let mut head = vec![0u8; chur_format::backup::PREAMBLE_LEN];
     source
         .seek(SeekFrom::Start(0))
@@ -1066,7 +1267,179 @@ fn scan(source: &mut (impl Read + Seek), package_length: u64) -> Result<Vec<Reco
         VaultCorrupt,
         "the manifest is not first or the final commit is not last"
     );
-    Ok(slots)
+    Ok((preamble.backup_version(), slots))
+}
+
+/// Checks the record order of a version 2 package and returns the range of its
+/// catalog export records, ADR-0068.
+///
+/// The order is the package model's, with nothing optional but the envelope:
+/// the manifest, the descriptor, one or more catalog export records, the
+/// containers, at most one identity envelope, and the final commit. A version 1
+/// reader found each record by type; a version 2 reader also needs the export
+/// records to be one run, because their AAD binds their indexes.
+fn version_two_layout(slots: &[RecordSlot]) -> Result<std::ops::Range<usize>> {
+    let kind = |index: usize| slots.get(index).map(|slot| slot.record_type);
+    ensure!(
+        kind(1) == Some(RecordType::Descriptor),
+        VaultCorrupt,
+        "the descriptor is not the second record of the package"
+    );
+    let mut index = 2;
+    while kind(index) == Some(RecordType::CatalogExport) {
+        index += 1;
+    }
+    let export = 2..index;
+    ensure!(
+        !export.is_empty(),
+        VaultCorrupt,
+        "the package carries no catalog export"
+    );
+    while kind(index) == Some(RecordType::Container) {
+        index += 1;
+    }
+    if kind(index) == Some(RecordType::Envelope) {
+        index += 1;
+    }
+    ensure!(
+        index + 1 == slots.len(),
+        VaultCorrupt,
+        "the package records are not in the order of its package model"
+    );
+    Ok(export)
+}
+
+/// Installs the catalog of a version 1 package, which is a copy of the source
+/// SQLCipher file, and authenticates every page of it.
+fn install_page_copy(
+    source: &mut (impl Read + Seek),
+    slot: &RecordSlot,
+    catalog_path: &Path,
+    local: &VaultDescriptor,
+    root_secret: &Key,
+    progress: &impl Progress,
+) -> Result<chur_catalog::CatalogDb> {
+    extract(source, slot, catalog_path, progress)?;
+    // `VAULT_DESCRIPTOR_V1.md` §5: the descriptor commits to the catalog it
+    // names. Checking it here rather than at the next unlock is the
+    // difference between a package that does not install and a vault that
+    // installs and then cannot be opened.
+    ensure!(
+        chur_crypto::secret::constant_time_eq(
+            &vault::catalog_header_commitment(catalog_path)?,
+            &local.catalog.catalog_header_commitment
+        ),
+        VaultCorrupt,
+        "the package's catalog is not the one its descriptor commits to"
+    );
+    let catalog_key = chur_catalog::db::CatalogKey::derive(root_secret, &local.vault_id)?;
+    let catalog = chur_catalog::db::CatalogDb::open(
+        &chur_catalog::db::CatalogLocation::File(catalog_path),
+        &catalog_key,
+    )?;
+    if progress.cancelled() {
+        return Err(progress::cancelled(
+            "the archive verification was cancelled",
+        ));
+    }
+    catalog.verify_cipher_pages()?;
+    if progress.cancelled() {
+        return Err(progress::cancelled(
+            "the archive verification was cancelled",
+        ));
+    }
+    Ok(catalog)
+}
+
+/// Where the catalog export records of a version 2 package are, and what
+/// their AAD binds.
+struct ExportRecords<'a> {
+    slots: &'a [RecordSlot],
+    first_index: u64,
+    key: &'a Key,
+    vault_id: Id,
+    backup_id: Id,
+    catalog_format_version: u16,
+}
+
+/// The opened chunks of a version 2 catalog export, read from the package one
+/// record at a time.
+///
+/// Each payload is read once. The same buffer is fed to the record commitment
+/// and opened, so the rows the import writes come only from committed bytes.
+struct PackageChunks<'a, R: Read + Seek> {
+    source: &'a mut R,
+    records: &'a ExportRecords<'a>,
+    commitment: &'a mut RecordCommitter,
+    next: usize,
+}
+
+impl<R: Read + Seek> ChunkSource for PackageChunks<'_, R> {
+    fn next_chunk(&mut self) -> Result<Option<Zeroizing<Vec<u8>>>> {
+        let Some(slot) = self.records.slots.get(self.next) else {
+            return Ok(None);
+        };
+        let chunk_index = u32::try_from(self.next).map_err(|_| {
+            chur_core::err!(VaultCorrupt, "the catalog export has too many records")
+        })?;
+        let payload = Zeroizing::new(read_payload_bounded(
+            self.source,
+            slot,
+            bounds::CATALOG_EXPORT_PAYLOAD_MAX,
+        )?);
+        let record_index = self.records.first_index + u64::from(chunk_index);
+        self.commitment
+            .add(record_index, RecordType::CatalogExport, &payload);
+        let position = CatalogExportPosition {
+            vault_id: self.records.vault_id,
+            backup_id: self.records.backup_id,
+            record_index,
+            chunk_index,
+            is_final: self.next + 1 == self.records.slots.len(),
+        };
+        let chunk = open_catalog_export(&payload, self.records.key, &position)?;
+        self.next += 1;
+        Ok(Some(chunk))
+    }
+}
+
+/// Imports the catalog of a version 2 package into a new SQLCipher catalog,
+/// ADR-0068.
+///
+/// The catalog file is created here, with a new salt and this build's page
+/// format, so nothing of the source device's storage reaches this one. The
+/// export must name the schema version that the manifest and the descriptor
+/// name.
+fn import_catalog_export(
+    source: &mut (impl Read + Seek),
+    records: &ExportRecords<'_>,
+    commitment: &mut RecordCommitter,
+    catalog_path: &Path,
+    root_secret: &Key,
+    progress: &impl Progress,
+) -> Result<chur_catalog::CatalogDb> {
+    if let Some(parent) = catalog_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|_| chur_core::err!(IoFailure, "a restore directory could not be created"))?;
+    }
+    let catalog_key = chur_catalog::db::CatalogKey::derive(root_secret, &records.vault_id)?;
+    let mut catalog = chur_catalog::db::CatalogDb::open(
+        &chur_catalog::db::CatalogLocation::File(catalog_path),
+        &catalog_key,
+    )?;
+    let chunks = PackageChunks {
+        source,
+        records,
+        commitment,
+        next: 0,
+    };
+    chur_catalog::catalog_export::import(
+        &mut catalog,
+        chunks,
+        records.catalog_format_version,
+        &|| progress.cancelled(),
+    )?;
+    Ok(catalog)
 }
 
 fn find(slots: &[RecordSlot], record_type: RecordType) -> Result<&RecordSlot> {
@@ -1205,7 +1578,7 @@ fn verify_container(
         source,
         content + first_chunk,
         chunks_end - first_chunk,
-        &mut committer,
+        &mut |bytes| committer.update(bytes),
         progress,
     )?;
     ensure!(
@@ -1231,7 +1604,7 @@ fn hash_range(
     source: &mut (impl Read + Seek),
     offset: u64,
     length: u64,
-    committer: &mut chur_crypto::commit::Committer,
+    feed: &mut impl FnMut(&[u8]),
     progress: &impl Progress,
 ) -> Result<()> {
     source
@@ -1248,7 +1621,7 @@ fn hash_range(
         source
             .read_exact(&mut buffer[..take])
             .map_err(|_| chur_core::err!(VaultCorrupt, "the package ends inside a record"))?;
-        committer.update(&buffer[..take]);
+        feed(&buffer[..take]);
         remaining -= take as u64;
     }
     Ok(())

@@ -162,6 +162,19 @@ class VectorSuiteTest {
     }
 
     @Test
+    fun a_superseded_vector_names_a_current_vector() {
+        // TEST_VECTORS.md section 8 keeps a historical vector's bytes and marks
+        // the vector that replaces it; that vector must exist and be current.
+        val byId = manifest.vectors.associateBy { it.vectorId }
+        for (entry in manifest.vectors) {
+            val target = entry.supersededBy ?: continue
+            val replacement = byId[target]
+            assertNotNull(replacement, "${entry.vectorId} is superseded by absent $target")
+            assertNull(replacement.supersededBy, "$target supersedes ${entry.vectorId} but is superseded itself")
+        }
+    }
+
+    @Test
     fun the_set_carries_both_outcomes_for_the_frozen_formats() {
         for (format in listOf("canonical-encoding", "object", "vault-descriptor", "object-key-envelope")) {
             val group = manifest.vectors.filter { it.formatWord == format }

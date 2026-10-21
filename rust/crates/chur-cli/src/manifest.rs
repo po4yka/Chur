@@ -79,6 +79,14 @@ pub struct VectorEntry {
     /// Explanatory text only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
+    /// The vector that replaces this one as the current rule.
+    ///
+    /// `docs/format/TEST_VECTORS.md` §8 keeps the bytes of a historical vector,
+    /// so a vector that a later format version contradicts is marked here
+    /// rather than changed. A reader test skips a superseded vector and runs
+    /// the one it names; `verify` requires that vector to exist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_by: Option<String>,
 }
 
 /// The whole manifest.
@@ -242,6 +250,7 @@ impl VectorBuilder {
                 decoded: BTreeMap::new(),
                 error_code,
                 notes: None,
+                superseded_by: None,
             },
             files: Vec::new(),
         }
@@ -311,6 +320,13 @@ impl VectorBuilder {
     #[must_use]
     pub fn note(mut self, text: &str) -> Self {
         self.entry.notes = Some(text.to_owned());
+        self
+    }
+
+    /// Marks the vector superseded by `vector_id`.
+    #[must_use]
+    pub fn superseded_by(mut self, vector_id: &str) -> Self {
+        self.entry.superseded_by = Some(vector_id.to_owned());
         self
     }
 

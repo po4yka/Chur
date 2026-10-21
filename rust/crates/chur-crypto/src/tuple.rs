@@ -62,6 +62,10 @@ pub mod tag {
     pub const BACKUP_MANIFEST_AAD: &[u8] = b"CHUR\0BACKUP\0MANIFEST-AAD\0V1";
     /// Final backup commit AAD, `BACKUP_FORMAT_V1.md` §7.
     pub const BACKUP_FINAL_COMMIT_AAD: &[u8] = b"CHUR\0BACKUP\0FINAL-COMMIT-AAD\0V1";
+    /// Catalog export record AAD, ADR-0068.
+    pub const BACKUP_CATALOG_EXPORT_AAD: &[u8] = b"CHUR\0BACKUP\0CATALOG-EXPORT-AAD\0V1";
+    /// Commitment over every non-container package record, ADR-0068.
+    pub const BACKUP_RECORD_COMMITMENT: &[u8] = b"CHUR\0BACKUP\0RECORD-COMMITMENT\0V1";
     /// Operation digest and per-device chain hash.
     pub const SYNC_OPERATION_CHAIN: &[u8] = b"CHUR\0SYNC\0OPERATION-CHAIN\0V1";
     /// Operation payload AAD and Ed25519 signature input.
@@ -140,6 +144,8 @@ pub mod tag {
         BACKUP_INVENTORY_COMMITMENT,
         BACKUP_MANIFEST_AAD,
         BACKUP_FINAL_COMMIT_AAD,
+        BACKUP_CATALOG_EXPORT_AAD,
+        BACKUP_RECORD_COMMITMENT,
         SYNC_OPERATION,
         SYNC_OPERATION_CHAIN,
         SYNC_CHECKPOINT,

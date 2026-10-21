@@ -1143,13 +1143,14 @@ fn backup_packages(out: &mut Vec<Vector>) -> Result<()> {
         BackupManifest, FinalBackupCommit, InventoryCommitter, PublicPreamble as BackupPreamble,
         RecordHeader, RecordType, SlotInventoryEntry, StreamInventoryEntry, manifest_key,
     };
+    use chur_format::constants::BACKUP_VERSION_V1;
 
     let vault_id = id(0x11)?;
     let backup_id = id(0x22)?;
     let root = key(0x61);
     let manifest_key = manifest_key(&root, &vault_id)?;
 
-    let preamble = BackupPreamble::new(6)?;
+    let preamble = BackupPreamble::new(BACKUP_VERSION_V1, 6)?;
     out.push(
         VectorBuilder::accept(
             "backup",
@@ -1260,6 +1261,7 @@ fn backup_packages(out: &mut Vec<Vector>) -> Result<()> {
 
     let manifest = BackupManifest {
         backup_id,
+        backup_version: BACKUP_VERSION_V1,
         vault_id,
         created_time_ms: 1_700_000_000_000,
         base_backup_id: None,
@@ -1299,6 +1301,7 @@ fn backup_packages(out: &mut Vec<Vector>) -> Result<()> {
         stream_entry_count: 1,
         slot_entry_count: 1,
         inventory_commitment,
+        records: None,
     };
     let commit_record = commit.seal(&manifest_key, &vault_id, &nonce(0x32))?;
     out.push(
@@ -1337,6 +1340,9 @@ fn backup_packages(out: &mut Vec<Vector>) -> Result<()> {
         .build(),
     );
 
+    // A historical v1 vector: 0x0002 was unallocated when it was frozen, and
+    // `TEST_VECTORS.md` §8 keeps its bytes. ADR-0068 allocates 0x0002, and
+    // `backup-v2-unsupported-version` records the rule a current reader keeps.
     let mut wrong_version = preamble.encode();
     wrong_version[9] = 0x02;
     out.push(
@@ -1349,6 +1355,10 @@ fn backup_packages(out: &mut Vec<Vector>) -> Result<()> {
             "UNSUPPORTED_VERSION",
         )
         .input_bytes("preamble", &wrong_version)
+        .note(
+            "Superseded: ADR-0068 allocates backup_version 0x0002, which a current reader accepts.",
+        )
+        .superseded_by("backup-v2-unsupported-version")
         .build(),
     );
 
@@ -1457,6 +1467,343 @@ fn backup_packages(out: &mut Vec<Vector>) -> Result<()> {
         .input_bytes("vault_id", vault_id.as_bytes())
         .input_bytes("record", &commit_record)
         .note(TEST_ONLY)
+        .build(),
+    );
+    backup_packages_v2(out)
+}
+
+const BACKUP_V2_SPEC: &str = "docs/format/BACKUP_FORMAT_V2.md";
+
+/// One fixed chunk sequence for the export-stream vectors.
+struct VectorChunks(std::vec::IntoIter<Vec<u8>>);
+
+impl chur_format::catalog_export::ChunkSource for VectorChunks {
+    fn next_chunk(&mut self) -> Result<Option<zeroize::Zeroizing<Vec<u8>>>> {
+        Ok(self.0.next().map(zeroize::Zeroizing::new))
+    }
+}
+
+/// Parses a whole one-table export stream, for the negative vectors.
+fn parse_export(stream: &[u8]) -> Result<()> {
+    use chur_format::catalog_export::ExportReader;
+    let (mut reader, header) = ExportReader::new(VectorChunks(vec![stream.to_vec()].into_iter()))?;
+    for _ in 0..header.table_count {
+        let table = reader.table()?;
+        for _ in 0..table.row_count * table.columns.len() as u64 {
+            reader.value()?;
+        }
+    }
+    reader.finish()
+}
+
+/// The version 2 package of ADR-0068: the catalog export stream and its
+/// sealed records, the record commitment, and the version 2 final commit.
+fn backup_packages_v2(out: &mut Vec<Vector>) -> Result<()> {
+    use chur_format::backup::{
+        BackupManifest, CatalogExportPosition, FinalBackupCommit, PublicPreamble as BackupPreamble,
+        RecordCommitter, RecordSeal, RecordType, manifest_key, open_catalog_export,
+        seal_catalog_export,
+    };
+    use chur_format::catalog_export::{ExportHeader, ExportWriter, TableHeader};
+    use chur_format::constants::BACKUP_VERSION_V2;
+
+    let vault_id = id(0x11)?;
+    let backup_id = id(0x22)?;
+    let root = key(0x61);
+    let manifest_key = manifest_key(&root, &vault_id)?;
+
+    let preamble = BackupPreamble::new(BACKUP_VERSION_V2, 7)?;
+    out.push(
+        VectorBuilder::accept(
+            "backup",
+            "backup-v2-public-preamble",
+            BACKUP_V2_SPEC,
+            "2",
+            "The version 2 preamble differs from version 1 only in backup_version.",
+        )
+        .input("backup_version", json!(BACKUP_VERSION_V2))
+        .input("record_count", number(7))
+        .expect_bytes("preamble", &preamble.encode())
+        .build(),
+    );
+
+    let mut stream = Vec::new();
+    let mut writer = ExportWriter::new(
+        |chunk: &[u8], _| {
+            stream.extend_from_slice(chunk);
+            Ok(())
+        },
+        &ExportHeader {
+            catalog_format_version: 15,
+            catalog_generation: 3,
+            table_count: 1,
+        },
+    )?;
+    writer.table(&TableHeader {
+        name: "tags".into(),
+        columns: vec![
+            "tag_id".into(),
+            "name".into(),
+            "created_ms".into(),
+            "note".into(),
+        ],
+        row_count: 1,
+    })?;
+    writer.blob(&[0x51; 16])?;
+    writer.text(b"beach")?;
+    writer.integer(1_700_000_000_000)?;
+    writer.null()?;
+    writer.finish()?;
+    parse_export(&stream)?;
+    out.push(
+        VectorBuilder::accept(
+            "backup",
+            "backup-v2-catalog-export-stream",
+            BACKUP_V2_SPEC,
+            "3",
+            "A CatalogExportV1 stream of one table with one row holding a blob, a text, an integer, and a NULL.",
+        )
+        .input("catalog_format_version", json!(15))
+        .input("catalog_generation", number(3))
+        .input("table_name", json!("tags"))
+        .input("columns", json!(["tag_id", "name", "created_ms", "note"]))
+        .input_bytes("tag_id", &[0x51; 16])
+        .input("name", json!("beach"))
+        .input("created_ms", number(1_700_000_000_000))
+        .expect_bytes("stream", &stream)
+        .build(),
+    );
+
+    let at = CatalogExportPosition {
+        vault_id,
+        backup_id,
+        record_index: 2,
+        chunk_index: 0,
+        is_final: true,
+    };
+    let export_record = seal_catalog_export(&manifest_key, &nonce(0x35), &at, &stream)?;
+    out.push(
+        VectorBuilder::accept(
+            "backup",
+            "backup-v2-catalog-export-record",
+            BACKUP_V2_SPEC,
+            "4",
+            "The stream sealed as the only catalog export record, at record index 2, under the manifest key.",
+        )
+        .input_bytes("root_secret", root.expose())
+        .input_bytes("vault_id", vault_id.as_bytes())
+        .input_bytes("backup_id", backup_id.as_bytes())
+        .input("record_index", number(2))
+        .input("chunk_index", json!(0))
+        .input("is_final", json!(true))
+        .input_bytes("record_nonce", nonce(0x35).as_bytes())
+        .input_bytes("stream", &stream)
+        .expect_bytes("aad", &at.aad())
+        .expect_bytes("record", &export_record)
+        .note(TEST_ONLY)
+        .build(),
+    );
+
+    // The non-container records of a seven-record package: the manifest, the
+    // descriptor, the catalog export, one container (not committed here), the
+    // identity envelope, and the final commit.
+    let manifest = BackupManifest {
+        backup_id,
+        backup_version: BACKUP_VERSION_V2,
+        vault_id,
+        created_time_ms: 1_700_000_000_000,
+        base_backup_id: None,
+        catalog_generation: 3,
+        catalog_format_version: 15,
+        stream_entry_count: 1,
+        slot_entry_count: 1,
+        inventory_commitment: [0x5a; 32],
+        free_space_required: 67_371_008,
+    };
+    let manifest_record = manifest.seal(&manifest_key, &nonce(0x36))?;
+    let descriptor_record = pattern(96);
+    let envelope_record = pattern(48);
+    let commitment_of = |descriptor: &[u8]| {
+        let mut records = RecordCommitter::new();
+        records.add(0, RecordType::Manifest, &manifest_record);
+        records.add(1, RecordType::Descriptor, descriptor);
+        records.add(2, RecordType::CatalogExport, &export_record);
+        records.add(4, RecordType::Envelope, &envelope_record);
+        records.finish()
+    };
+    let record_commitment = commitment_of(&descriptor_record);
+    out.push(
+        VectorBuilder::accept(
+            "backup",
+            "backup-v2-record-commitment",
+            BACKUP_V2_SPEC,
+            "5",
+            "The record commitment over the manifest, descriptor, catalog export, and envelope records at indexes 0, 1, 2, and 4.",
+        )
+        .input("domain_tag", json!(hex_of(tag::BACKUP_RECORD_COMMITMENT)))
+        .input_bytes("manifest_record", &manifest_record)
+        .input_bytes("descriptor_record", &descriptor_record)
+        .input_bytes("catalog_export_record", &export_record)
+        .input_bytes("envelope_record", &envelope_record)
+        .expect_bytes("record_commitment", &record_commitment)
+        .note(TEST_ONLY)
+        .build(),
+    );
+
+    let commit = FinalBackupCommit {
+        backup_id,
+        record_count: 7,
+        stream_entry_count: 1,
+        slot_entry_count: 1,
+        inventory_commitment: [0x5a; 32],
+        records: Some(RecordSeal {
+            catalog_export_record_count: 1,
+            record_commitment,
+        }),
+    };
+    let commit_record = commit.seal(&manifest_key, &vault_id, &nonce(0x37))?;
+    out.push(
+        VectorBuilder::accept(
+            "backup",
+            "backup-v2-final-commit",
+            BACKUP_V2_SPEC,
+            "6",
+            "The version 2 final commit: the version 1 fields, the catalog export record count, and the record commitment.",
+        )
+        .input_bytes("root_secret", root.expose())
+        .input_bytes("vault_id", vault_id.as_bytes())
+        .input_bytes("backup_id", backup_id.as_bytes())
+        .input_bytes("commit_nonce", nonce(0x37).as_bytes())
+        .expect_bytes("commit_plaintext", &commit.encode())
+        .expect("commit_plaintext_length", number(100))
+        .expect_bytes("commit_record", &commit_record)
+        .note(TEST_ONLY)
+        .build(),
+    );
+
+    // Negative vectors. Each is checked here to fail as it declares.
+    let spliced_at = CatalogExportPosition {
+        backup_id: id(0x23)?,
+        ..at
+    };
+    expect_rejection(
+        open_catalog_export(&export_record, &manifest_key, &spliced_at),
+        ChurStatus::VaultCorrupt,
+    )?;
+    out.push(
+        VectorBuilder::reject(
+            "backup",
+            "backup-v2-catalog-export-spliced-from-another-backup",
+            BACKUP_V2_SPEC,
+            "4",
+            "A catalog export record sealed for one backup does not open in another backup of the same vault.",
+            "VAULT_CORRUPT",
+        )
+        .input_bytes("manifest_key", manifest_key.expose())
+        .input_bytes("vault_id", vault_id.as_bytes())
+        .input_bytes("backup_id", id(0x23)?.as_bytes())
+        .input("record_index", number(2))
+        .input("chunk_index", json!(0))
+        .input("is_final", json!(true))
+        .input_bytes("record", &export_record)
+        .note(TEST_ONLY)
+        .build(),
+    );
+
+    let moved_at = CatalogExportPosition {
+        record_index: 3,
+        chunk_index: 1,
+        ..at
+    };
+    expect_rejection(
+        open_catalog_export(&export_record, &manifest_key, &moved_at),
+        ChurStatus::VaultCorrupt,
+    )?;
+    out.push(
+        VectorBuilder::reject(
+            "backup",
+            "backup-v2-catalog-export-reordered",
+            BACKUP_V2_SPEC,
+            "4",
+            "A catalog export record moved to another record and chunk index does not open there.",
+            "VAULT_CORRUPT",
+        )
+        .input_bytes("manifest_key", manifest_key.expose())
+        .input_bytes("vault_id", vault_id.as_bytes())
+        .input_bytes("backup_id", backup_id.as_bytes())
+        .input("record_index", number(3))
+        .input("chunk_index", json!(1))
+        .input("is_final", json!(true))
+        .input_bytes("record", &export_record)
+        .note(TEST_ONLY)
+        .build(),
+    );
+
+    let truncated = &stream[..stream.len() - 1];
+    expect_rejection(parse_export(truncated), ChurStatus::VaultCorrupt)?;
+    out.push(
+        VectorBuilder::reject(
+            "backup",
+            "backup-v2-catalog-export-truncated",
+            BACKUP_V2_SPEC,
+            "3",
+            "An export stream that ends inside its last value is refused rather than imported short.",
+            "VAULT_CORRUPT",
+        )
+        .input_bytes("stream", truncated)
+        .build(),
+    );
+
+    let mut altered = descriptor_record.clone();
+    altered[95] ^= 0x01;
+    let altered_commitment = commitment_of(&altered);
+    let compare = |value: &[u8; 32]| -> Result<()> {
+        if value == &record_commitment {
+            Ok(())
+        } else {
+            Err(Error::new(
+                ChurStatus::VaultCorrupt,
+                "the record commitment does not match",
+            ))
+        }
+    };
+    compare(&record_commitment)?;
+    expect_rejection(compare(&altered_commitment), ChurStatus::VaultCorrupt)?;
+    out.push(
+        VectorBuilder::reject(
+            "backup",
+            "backup-v2-descriptor-altered",
+            BACKUP_V2_SPEC,
+            "5",
+            "One changed descriptor byte changes the record commitment, so it no longer matches the value the final commit seals.",
+            "VAULT_CORRUPT",
+        )
+        .input_bytes("manifest_record", &manifest_record)
+        .input_bytes("descriptor_record", &altered)
+        .input_bytes("catalog_export_record", &export_record)
+        .input_bytes("envelope_record", &envelope_record)
+        .input_bytes("sealed_record_commitment", &record_commitment)
+        .input_bytes("recomputed_record_commitment", &altered_commitment)
+        .note(TEST_ONLY)
+        .build(),
+    );
+
+    let mut unsupported = preamble.encode();
+    unsupported[9] = 0x03;
+    expect_rejection(
+        BackupPreamble::decode(&unsupported),
+        ChurStatus::UnsupportedVersion,
+    )?;
+    out.push(
+        VectorBuilder::reject(
+            "backup",
+            "backup-v2-unsupported-version",
+            BACKUP_V2_SPEC,
+            "2",
+            "Version 0x0003 is unallocated and fails as UNSUPPORTED_VERSION.",
+            "UNSUPPORTED_VERSION",
+        )
+        .input_bytes("preamble", &unsupported)
         .build(),
     );
     Ok(())
