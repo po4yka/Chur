@@ -16,7 +16,7 @@ Potential plaintext locations:
 | Kotlin `ByteArray` | Bounded | control data, authenticated document/OCR ranges, extracted UTF-8 text, and bounded private note attachments; clear best-effort |
 | decoded document text | Yes | at most a 1 MiB UTF-8 prefix; current viewer/session only; drop references on disposal or lock |
 | private note text | Yes | bounded open editor and list previews; explicit save, or the bounded save of an ordinary lock, to SQLCipher only; drop UI references on lock/disposal |
-| OCR text and page pixels | Bounded | extraction only; clear owned arrays and rasters after custody drains; persist text only in SQLCipher |
+| OCR text and page pixels | Bounded | extraction only; page pixels pass in anonymous memory regions from the decoder child to the OCR child; clear owned arrays and rasters and close the regions after custody drains; persist text only in SQLCipher |
 | Swift `Data` | Bounded | interop, incoming authenticated chunks, and bounded PDF input; clear owned bytes after consumer custody drains |
 | decoded image surfaces | Yes | session-scoped cache; clear on lock |
 | Media3/AVFoundation buffers | Yes | player lifetime; invalidate on lock |
@@ -90,6 +90,8 @@ After unlock and confirmation, the main app authenticates the complete incoming 
 Document previews add no plaintext scratch file. Text preview decodes at most a 1 MiB authenticated UTF-8 prefix. It shows truncation and rejects malformed text. Clear the byte array after decoding and drop UI text references on disposal or lock. Managed strings, platform text layout, and graphics surfaces cannot provide a secure-erasure guarantee. Do not enable text selection, clipboard, active HTML, scripts, external links, or an external viewer by default.
 
 PDF preview is optional and limited to 32 MiB of encoded data and one raster page at a time, with at most 2048 pixels per edge and 4 million pixels. Android uses a read-only proxy descriptor over authenticated ranges. iOS holds an authenticated native buffer for the Core Graphics document lifetime. Release the reader, PDF parser, bytes, and raster on disposal or lock. Native platform PDF parsers run in the app process; a malformed file can still expose platform parser defects. An unavailable, protected, malformed, or oversized preview falls back to metadata and explicit export. Preview limits never limit original storage or streaming export.
+
+Import derivatives and OCR decode in disposable child processes, [Android](../ANDROID.md#151-decoder-processes) section 15.1. A child receives no descriptor, path, vault handle, or key. It reads authenticated or provider bytes through bounded Binder range reads and returns one result in a region of anonymous memory. A PDF for recognition is held in anonymous memory or, on API 29, behind a proxy descriptor, of at most 32 MiB; no child writes a scratch file. The OCR child receives only page pixels. The parent closes the source readers before it waits for each child to exit, and then closes every region it holds. It does not overwrite a region that another process made. A child's own memory ends with the process; it is not a secure-erasure guarantee. Source ranges and results also pass through Binder transaction buffers and recycled `Parcel` objects in the parent and the child. Chur clears its own byte arrays, but it cannot clear those platform buffers; their contents stay until Binder reuses the memory or the process ends. This is a residual risk.
 
 ### 4.1 Private note editing
 

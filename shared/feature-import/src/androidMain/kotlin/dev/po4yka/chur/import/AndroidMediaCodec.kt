@@ -51,10 +51,13 @@ class AndroidMediaCodec private constructor(
     private val sourceDescriptor: ParcelFileDescriptor?,
     private val sourceOffset: Long = 0,
     private val sourceLength: Long? = null,
+    /** In a decoder child: the parent's byte-range reader. No descriptor or URI is used. */
+    private val remote: RemoteSource? = null,
 ) : MediaCodec {
     constructor(resolver: ContentResolver) : this(resolver, null, null)
     constructor(context: Context) : this(context.contentResolver, context.applicationContext, null)
     internal constructor(resolver: ContentResolver, source: ParcelFileDescriptor, offset: Long = 0, length: Long? = null) : this(resolver, null, source, offset, length)
+    internal constructor(resolver: ContentResolver, source: RemoteSource) : this(resolver, null, null, remote = source)
 
     override suspend fun deriveBounded(
         media: PickedMedia,
@@ -334,12 +337,9 @@ class AndroidMediaCodec private constructor(
     }
 
     private fun videoColorTransfer(uri: Uri): Int? {
-        val descriptor = openDecodeDescriptor(uri) ?: return null
         val extractor = MediaExtractor()
         return try {
-            descriptor.use {
-                if (sourceLength == null) extractor.setDataSource(it.fileDescriptor)
-                else extractor.setDataSource(it.fileDescriptor, sourceOffset, sourceLength)
+            withExtractorSource(uri, extractor) {
                 (0 until extractor.trackCount).map(extractor::getTrackFormat)
                     .firstOrNull { format -> format.getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true }
                     ?.let { format -> if (format.containsKey(MediaFormat.KEY_COLOR_TRANSFER))
@@ -348,26 +348,53 @@ class AndroidMediaCodec private constructor(
         } finally { extractor.release() }
     }
 
+    /** Sets the extractor source for the duration of [body]. */
+    private fun <T> withExtractorSource(uri: Uri, extractor: MediaExtractor, body: () -> T): T? {
+        remote?.let { extractor.setDataSource(it.mediaDataSource()); return body() }
+        return openDecodeDescriptor(uri)?.use {
+            if (sourceLength == null) extractor.setDataSource(it.fileDescriptor)
+            else extractor.setDataSource(it.fileDescriptor, sourceOffset, sourceLength)
+            body()
+        }
+    }
+
     /** Optional embedded artwork never changes the audio's dimensions or import outcome. */
-    private fun deriveArtwork(uri: Uri, kind: StreamKind, cancelRequested: () -> Boolean): Derivative? = try {
+    private fun deriveArtwork(uri: Uri, kind: StreamKind, cancelRequested: () -> Boolean): Derivative? {
+        val bytes = extractArtwork(uri, cancelRequested) ?: return null
+        return try { decodeArtwork(bytes, kind, cancelRequested) } finally { bytes.fill(0) }
+    }
+
+    /**
+     * The encoded embedded picture of an audio file, at most the §12 cap.
+     *
+     * The platform media process extracts it. The isolated decoder decodes it,
+     * because its encoded image is as untrusted as the audio file.
+     */
+    internal fun extractArtwork(uri: Uri, cancelRequested: () -> Boolean): ByteArray? = try {
         withRetriever(uri) { retriever ->
             if (cancelRequested()) return@withRetriever null
             // Android returns a complete byte array; its native allocation cannot
             // be bounded through this API. Reject it before any pixel decode.
             val bytes = retriever.embeddedPicture ?: return@withRetriever null
-            try {
-                if (cancelRequested() || bytes.size > MediaBounds.AUDIO_ART_ENCODED_MAX_BYTES) {
-                    return@withRetriever null
-                }
-                decodeArtwork(bytes, kind, cancelRequested)
-            } finally {
+            if (cancelRequested() || bytes.size > MediaBounds.AUDIO_ART_ENCODED_MAX_BYTES) {
                 bytes.fill(0)
+                return@withRetriever null
             }
+            bytes
         }
     } catch (_: RuntimeException) {
         null
     } catch (_: OutOfMemoryError) {
         // Artwork is optional, including when the platform cannot allocate it.
+        null
+    }
+
+    /** Never throws for malformed artwork: artwork is optional. */
+    internal fun decodeArtworkSafely(bytes: ByteArray, kind: StreamKind, cancelRequested: () -> Boolean): Derivative? = try {
+        decodeArtwork(bytes, kind, cancelRequested)
+    } catch (_: RuntimeException) {
+        null
+    } catch (_: OutOfMemoryError) {
         null
     }
 
@@ -443,11 +470,12 @@ class AndroidMediaCodec private constructor(
         probe: ProbedMedia,
         cancelRequested: () -> Boolean,
     ): Derivative? {
-        val descriptor = openDecodeDescriptor(uri) ?: return null
+        val descriptor = if (remote == null) openDecodeDescriptor(uri) ?: return null else null
         val extractor = MediaExtractor()
         var codec: android.media.MediaCodec? = null
         try {
-            extractor.setDataSource(descriptor.fileDescriptor)
+            if (descriptor != null) extractor.setDataSource(descriptor.fileDescriptor)
+            else extractor.setDataSource(requireNotNull(remote).mediaDataSource())
             val track = (0 until extractor.trackCount).firstOrNull { index ->
                 extractor.getTrackFormat(index)
                     .getString(MediaFormat.KEY_MIME)
@@ -482,7 +510,7 @@ class AndroidMediaCodec private constructor(
                 it.release()
             }
             extractor.release()
-            descriptor.close()
+            descriptor?.close()
         }
     }
 
@@ -691,7 +719,8 @@ class AndroidMediaCodec private constructor(
         }
 
     private fun <T> read(uri: Uri, body: (InputStream) -> T): T? = try {
-        if (sourceDescriptor == null) resolver.openInputStream(uri)?.use(body)
+        if (remote != null) remote.stream().use(body)
+        else if (sourceDescriptor == null) resolver.openInputStream(uri)?.use(body)
         else openDecodeDescriptor(uri)?.let { descriptor ->
             ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { input ->
                 val length = sourceLength
@@ -736,7 +765,10 @@ class AndroidMediaCodec private constructor(
     private fun <T> withRetriever(uri: Uri, body: (MediaMetadataRetriever) -> T): T? {
         val retriever = MediaMetadataRetriever()
         return try {
-            openDecodeDescriptor(uri)?.use { descriptor ->
+            if (remote != null) {
+                retriever.setDataSource(remote.mediaDataSource())
+                body(retriever)
+            } else openDecodeDescriptor(uri)?.use { descriptor ->
                 if (sourceLength != null) retriever.setDataSource(descriptor.fileDescriptor, sourceOffset, sourceLength)
                 else retriever.setDataSource(descriptor.fileDescriptor)
                 body(retriever)
@@ -781,7 +813,9 @@ class AndroidMediaCodec private constructor(
 
     private fun <T> withJpegXl(uri: Uri, cancelRequested: () -> Boolean = { false }, body: (JpegXlDecoder) -> T): T? =
         try {
-            if (cancelRequested()) null else openDecodeDescriptor(uri)?.use { source ->
+            if (cancelRequested()) null
+            else if (remote != null) withJpegXlStream(remote.stream(), cancelRequested, body)
+            else openDecodeDescriptor(uri)?.use { source ->
                 val seekable = try {
                     Os.lseek(source.fileDescriptor, 0, OsConstants.SEEK_CUR)
                     true
@@ -791,13 +825,16 @@ class AndroidMediaCodec private constructor(
                 if (seekable) {
                     val decoder = JpegXlDecoder.open(source.fd)
                     try { if (cancelRequested()) null else body(decoder) } finally { decoder.close() }
-                } else withJpegXlPipe(source, cancelRequested, body)
+                } else withJpegXlStream(ParcelFileDescriptor.AutoCloseInputStream(source), cancelRequested, body)
             }
         } catch (_: Exception) { null }
 
-    /** A provider pipe has no positional reads. Only this independently opened FD is consumed. */
-    private fun <T> withJpegXlPipe(
-        source: ParcelFileDescriptor,
+    /**
+     * A provider pipe and a decoder child's Binder source have no positional
+     * reads. Only this independently opened stream is consumed.
+     */
+    private fun <T> withJpegXlStream(
+        source: InputStream,
         cancelRequested: () -> Boolean,
         body: (JpegXlDecoder) -> T,
     ): T? {
@@ -805,7 +842,7 @@ class AndroidMediaCodec private constructor(
         var encoded = ChurBuffer(chunk.size)
         var length = 0
         try {
-            ParcelFileDescriptor.AutoCloseInputStream(source).use { input ->
+            source.use { input ->
                 while (true) {
                     if (cancelRequested()) return null
                     // At the cap, read one byte only to distinguish EOF from an

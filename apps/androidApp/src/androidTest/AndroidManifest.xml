@@ -5,5 +5,8 @@
         <provider android:name="dev.po4yka.chur.android.IncomingShareFixtureProvider"
             android:authorities="dev.po4yka.chur.test.incoming-share"
             android:exported="true" android:grantUriPermissions="true" />
+        <!-- A hostile decoder child for MediaDerivativeHostileChildTest. Exported so the app UID can bind it. -->
+        <service android:name="dev.po4yka.chur.android.HostileDecoderService"
+            android:exported="true" android:isolatedProcess="true" android:process=":hostile_decoder" />
     </application>
 </manifest>

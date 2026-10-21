@@ -1,10 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
-        <!-- Only codec inputs enter this process. It never opens a vault. -->
+        <!-- Only codec inputs enter these processes. None opens a vault or receives a descriptor. -->
+        <!-- In-process image, PDF and artwork parsers: its own UID, with no app storage or network. -->
         <service
             android:name="dev.po4yka.chur.imports.AndroidDerivativeService"
             android:exported="false"
+            android:isolatedProcess="true"
             android:process=":media_decoder" />
+        <!-- Video, audio and HEIF/AVIF use the system media services, which an isolated process cannot reach. -->
+        <service
+            android:name="dev.po4yka.chur.imports.AndroidPlatformMediaService"
+            android:exported="false"
+            android:process=":media_platform" />
+        <!-- Tesseract needs model files; it receives decoded pixels only. -->
+        <service
+            android:name="dev.po4yka.chur.imports.AndroidOcrService"
+            android:exported="false"
+            android:process=":ocr" />
     </application>
 </manifest>

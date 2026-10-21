@@ -1,6 +1,5 @@
 package dev.po4yka.chur.android
 
-import android.app.ActivityManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -443,11 +442,12 @@ class ContentOcrAndroidTest {
     }
 
     private fun assertNoDecoder() {
-        val processes = context.getSystemService(ActivityManager::class.java).runningAppProcesses.orEmpty()
-        val live = processes.filter { it.processName == "${context.packageName}:media_decoder" }.filter {
-            val stat = runCatching { File("/proc/${it.pid}/stat").readText() }.getOrNull()
-            stat != null && stat.substringAfterLast(')').trim().firstOrNull() !in listOf('Z', 'X')
-        }
-        assertTrue("the decoder must exit before OCR returns", live.isEmpty())
+        // The isolated decoder has another UID; only the shell sees it in /proc.
+        val names = listOf("media_decoder", "media_platform", "ocr").map { "${context.packageName}:$it" }
+        val output = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("ps -A -o PID,S,NAME")
+        val live = ParcelFileDescriptor.AutoCloseInputStream(output).use { it.readBytes().decodeToString() }.lines().drop(1)
+            .map { it.trim().split(Regex("\\s+")) }
+            .filter { it.size == 3 && it[1] != "Z" && names.any { name -> it[2] == name || it[2].startsWith("$name:") } }
+        assertTrue("the decoder must exit before OCR returns: $live", live.isEmpty())
     }
 }

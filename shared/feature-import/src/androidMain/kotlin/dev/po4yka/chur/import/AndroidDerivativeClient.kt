@@ -1,22 +1,23 @@
 package dev.po4yka.chur.imports
 
+import android.app.ActivityManager
+import android.app.Service
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.net.Uri
+import android.os.Build
 import android.os.IBinder
 import android.os.Parcel
-import android.os.ParcelFileDescriptor
 import android.os.Process
+import android.os.RemoteException
 import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
-import android.system.StructPollfd
 import dev.po4yka.chur.ffi.StreamKind
-import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.IOException
-import java.io.DataInputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -30,17 +31,135 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** Owns the child and all IPC descriptors until the child is dead. */
-class AndroidDerivativeClient(private val context: Context) {
+/**
+ * Owns the children, their source readers, and their results until every child is dead.
+ *
+ * The isolated decoder parses images, PDF pages, and embedded artwork. The
+ * platform media child reaches the system media services for video, audio,
+ * and HEIF/AVIF stills. The OCR child sees only decoded pixels. No child
+ * receives a descriptor: each reads bounded ranges from the parent over Binder.
+ */
+class AndroidDerivativeClient(
+    private val context: Context,
+    /** Device tests only: a component that is bound in place of the isolated decoder. */
+    private val decoderComponent: ComponentName? = null,
+    /** PDF pages render in the platform media child. API 29 needs this; device tests can select it. */
+    private val documentsInPlatform: Boolean = Build.VERSION.SDK_INT < 30,
+) {
     internal suspend fun derive(
         media: PickedMedia,
         probe: ProbedMedia,
         kind: StreamKind,
         cancelRequested: () -> Boolean,
-        operation: Int = DERIVATIVE_DECODE,
-    ): Derivative? {
-        val timeoutMs = if (operation == DERIVATIVE_OCR) 120_000L else 30_000L
-        var resultBytes: ByteArray? = null
+    ): Derivative? = custody(DERIVE_TIMEOUT_MS, cancelRequested, { it.bytes.fill(0) }) { session ->
+        // A Live Photo child sees only the display photo's byte range.
+        val photo = media.livePhoto?.displayPhoto
+        val uri = media.platformHandle as? Uri
+        val reader = session.reader(DescriptorInput(media.descriptor, media.seekable,
+            uri?.let { source -> { cancel -> context.contentResolver.openFileDescriptor(source, "r", cancel) } },
+            photo?.offset ?: 0, photo?.byteLength))
+        val platform = kind == StreamKind.AUDIO_WAVEFORM || probe.mediaClass == MediaBounds.CLASS_VIDEO ||
+            probe.mediaClass == MediaBounds.CLASS_AUDIO ||
+            (probe.mediaClass == MediaBounds.CLASS_IMAGE && probe.contentType in PLATFORM_IMAGE_TYPES)
+        if (probe.mediaClass != MediaBounds.CLASS_IMAGE && !platform) return@custody null
+        if (probe.mediaClass == MediaBounds.CLASS_AUDIO && kind != StreamKind.AUDIO_WAVEFORM) {
+            // The platform child extracts the encoded picture; only the isolated
+            // decoder decodes it.
+            val artwork = session.child(ChildKind.PLATFORM)?.request(DERIVATIVE_EXTRACT_ARTWORK, reader) {} ?: return@custody null
+            try {
+                if (artwork.length !in 1..MediaBounds.AUDIO_ART_ENCODED_MAX_BYTES) return@custody null
+                session.child(ChildKind.DECODER)?.request(DERIVATIVE_DECODE_ARTWORK, null) { data ->
+                    data.writeTypedObject(artwork.region, 0)
+                    data.writeInt(artwork.length)
+                    data.writeInt(kind.code)
+                }?.toDerivative(kind)
+            } finally { artwork.region.close() }
+        } else {
+            session.child(if (platform) ChildKind.PLATFORM else ChildKind.DECODER)?.request(DERIVATIVE_DECODE, reader) { data ->
+                data.writeInt(probe.mediaClass)
+                data.writeInt(probe.width)
+                data.writeInt(probe.height)
+                data.writeLong(probe.durationMs)
+                data.writeString(probe.contentType)
+                data.writeInt(kind.code)
+            }?.toDerivative(kind)
+        }
+    }
+
+    /**
+     * Recognizes text in one image or PDF. The decoder rasterizes each page into
+     * shared memory, and the parent forwards only those pixels to the OCR child.
+     */
+    suspend fun recognize(input: DerivativeInput, contentType: String, cancelRequested: () -> Boolean): AndroidRecognizedText? =
+        custody(OCR_TIMEOUT_MS, cancelRequested, { it.bytes.fill(0) }) { session -> recognizePages(session, input, contentType) }
+
+    private fun recognizePages(session: Session, input: DerivativeInput, contentType: String): AndroidRecognizedText? {
+        val reader = session.reader(input)
+        val pdf = contentType == "application/pdf"
+        val platform = contentType in PLATFORM_IMAGE_TYPES || (pdf && documentsInPlatform)
+        val decoder = session.child(if (platform) ChildKind.PLATFORM else ChildKind.DECODER) ?: return null
+        val ocr = session.child(ChildKind.OCR) ?: return null
+        val output = ByteArray(OCR_RESULT_MAX)
+        var used = 0
+        var completed = 0
+        var partial = false
+        var pages = 1
+        try {
+            var number = 0
+            while (number < pages) {
+                val page = decoder.request(DERIVATIVE_RENDER, reader) { data ->
+                    data.writeString(contentType)
+                    data.writeInt(number)
+                } ?: return null
+                val text = try {
+                    if (page.width !in 1..OCR_RASTER_EDGE_MAX || page.height !in 1..OCR_RASTER_EDGE_MAX ||
+                        page.width.toLong() * page.height > OCR_RASTER_AREA_MAX ||
+                        page.length != page.width * page.height * 4 ||
+                        !regionFits(page.region, page.length, (OCR_RASTER_AREA_MAX * 4).toInt())) return null
+                    if (number == 0) {
+                        if (pdf) {
+                            if (page.extra <= 0) return null
+                            pages = minOf(page.extra, OCR_PAGE_MAX)
+                            partial = page.extra > pages
+                        } else if (page.extra != 1) return null
+                    }
+                    val recognized = ocr.request(DERIVATIVE_OCR, null) { data ->
+                        // The OCR child reads exactly width * height * 4 bytes and never maps the region.
+                        data.writeTypedObject(page.region, 0)
+                        data.writeInt(page.width)
+                        data.writeInt(page.height)
+                    } ?: return null
+                    partial = partial || recognized.extra == 1
+                    recognized.takeBytes(OCR_RESULT_MAX) ?: return null
+                } finally { page.region.close() }
+                try {
+                    val length = utf8End(text, OCR_RESULT_MAX - used)
+                    text.copyInto(output, used, 0, length)
+                    used += length
+                    partial = partial || length < text.size
+                } finally { text.fill(0) }
+                completed = number + 1
+                number++
+                if (!pdf) break
+                if (used >= OCR_RESULT_MAX - 4) { partial = true; break }
+                output[used++] = '\n'.code.toByte()
+            }
+            return AndroidRecognizedText(output.copyOf(used), partial, if (pdf) completed else 1)
+        } finally { output.fill(0) }
+    }
+
+    private fun DerivativeResult.toDerivative(kind: StreamKind): Derivative? {
+        val bytes = takeBytes(DERIVATIVE_RESULT_MAX) ?: return null
+        return Derivative(kind, bytes, width, height)
+    }
+
+    private suspend fun <T : Any> custody(
+        timeoutMs: Long,
+        cancelRequested: () -> Boolean,
+        discard: (T) -> Unit,
+        body: (Session) -> T?,
+    ): T? {
+        var owned: T? = null
         return try {
             val result = withTimeoutOrNull(timeoutMs) {
                 withContext(Dispatchers.IO) {
@@ -50,146 +169,24 @@ class AndroidDerivativeClient(private val context: Context) {
                         failedDecoder?.let { throw DecoderCleanupException("Previous decoder shutdown is unconfirmed", it.failure) }
                         val coroutine = currentCoroutineContext()
                         val started = System.nanoTime()
-                        fun stopped(): Boolean {
+                        val session = Session(context, decoderComponent) {
                             coroutine.ensureActive()
-                            return cancelRequested() || System.nanoTime() - started >= timeoutMs * 1_000_000L
+                            cancelRequested() || System.nanoTime() - started >= timeoutMs * 1_000_000L
                         }
-                        val connected = CountDownLatch(1)
-                        val endpoint = AtomicReference<IBinder?>()
-                        val connection = object : ServiceConnection {
-                            override fun onServiceConnected(name: ComponentName, service: IBinder) {
-                                endpoint.set(service)
-                                connected.countDown()
-                            }
-                            override fun onServiceDisconnected(name: ComponentName) {}
-                            override fun onNullBinding(name: ComponentName) { connected.countDown() }
-                            override fun onBindingDied(name: ComponentName) { connected.countDown() }
-                        }
-                        var bound = false
-                        var child: ChildIdentity? = null
                         var originalFailure: Throwable? = null
-                        var source: ParcelFileDescriptor? = null
-                        var pipe: Array<ParcelFileDescriptor>? = null
                         try {
-                            if (stopped()) return@withLock null
-                            bound = context.bindService(
-                                Intent(context, AndroidDerivativeService::class.java), connection, Context.BIND_AUTO_CREATE,
-                            )
-                            if (!bound) return@withLock null
-                            while (!connected.await(50, TimeUnit.MILLISECONDS)) {
-                                if (stopped()) return@withLock null
-                            }
-                            val service = endpoint.get() ?: return@withLock null
-                            child = identify(service)
-                            if (child == null || child.hasExited()) return@withLock null
-                            if (stopped()) return@withLock null
-                            // The original import is committed before this duplicate is
-                            // made. Its reader no longer uses the source position.
-                            source = ParcelFileDescriptor.fromFd(media.descriptor)
-                            pipe = ParcelFileDescriptor.createPipe()
-                            val request = Parcel.obtain()
-                            try {
-                                request.writeInterfaceToken(DERIVATIVE_INTERFACE)
-                                request.writeTypedObject(source, 0)
-                                request.writeTypedObject(pipe[1], 0)
-                                request.writeString(media.platformHandle.toString())
-                                request.writeInt(probe.mediaClass)
-                                request.writeInt(probe.width)
-                                request.writeInt(probe.height)
-                                request.writeLong(probe.durationMs)
-                                request.writeString(probe.contentType)
-                                request.writeInt(kind.code)
-                                val photo = media.livePhoto?.displayPhoto
-                                request.writeLong(photo?.offset ?: 0)
-                                request.writeLong(photo?.byteLength ?: -1)
-                                if (!service.transact(operation, request, null, IBinder.FLAG_ONEWAY)) {
-                                    return@withLock null
-                                }
-                            } finally {
-                                request.recycle()
-                            }
-                            pipe[1].close()
-                            val descriptor = pipe[0].fileDescriptor
-                            val flags = Os.fcntlInt(descriptor, OsConstants.F_GETFL, 0)
-                            Os.fcntlInt(descriptor, OsConstants.F_SETFL, flags or OsConstants.O_NONBLOCK)
-                            val poll = StructPollfd().apply {
-                                fd = descriptor
-                                events = (OsConstants.POLLIN or OsConstants.POLLHUP).toShort()
-                            }
-                            ClearingByteArrayOutputStream().use { bytes ->
-                                val buffer = ByteArray(64 * 1024)
-                                try {
-                                    while (!stopped()) {
-                                        Os.poll(arrayOf(poll), 50)
-                                        val count = try { Os.read(descriptor, buffer, 0, buffer.size) }
-                                        catch (failure: ErrnoException) {
-                                            if (failure.errno == OsConstants.EAGAIN) continue else throw failure
-                                        }
-                                        if (count == 0) {
-                                            val received = bytes.toByteArray()
-                                            try {
-                                                if (received.size < 12) return@withLock null
-                                                val input = DataInputStream(ByteArrayInputStream(received))
-                                                val width = input.readInt()
-                                                val height = input.readInt()
-                                                val length = input.readInt()
-                                                if (length < 0 || length != received.size - 12) return@withLock null
-                                                val encoded = ByteArray(length)
-                                                var transferred = false
-                                                try {
-                                                    input.readFully(encoded)
-                                                    val result = Derivative(kind, encoded, width, height)
-                                                    resultBytes = encoded
-                                                    transferred = true
-                                                    return@withLock result
-                                                } finally { if (!transferred) encoded.fill(0) }
-                                            } finally { received.fill(0) }
-                                        }
-                                        if (bytes.size() + count > (if (operation == DERIVATIVE_OCR) OCR_RESULT_MAX else DERIVATIVE_RESULT_MAX) + 12) return@withLock null
-                                        bytes.write(buffer, 0, count)
-                                    }
-                                    null
-                                } finally { buffer.fill(0) }
-                            }
+                            if (session.stopped()) null else body(session)?.also { owned = it }
                         } catch (failure: Throwable) {
                             originalFailure = failure
                             throw failure
                         } finally {
-                            // Cleanup is blocking IO and does not consult coroutine cancellation.
-                            // A cancelled bind still owns its late connection and PID handshake.
-                            val deadline = System.nanoTime() + 5_000_000_000L
-                            var cleanupFailure: Throwable? = null
-                            fun cleanupStep(action: () -> Unit) {
-                                try { action() } catch (failure: Throwable) {
-                                    cleanupFailure?.addSuppressed(failure) ?: run { cleanupFailure = failure }
-                                }
-                            }
-                            cleanupStep {
-                                if (bound && child == null) {
-                                    if (!connected.await(maxOf(0L, deadline - System.nanoTime()), TimeUnit.NANOSECONDS)) {
-                                        throw IOException("Decoder connection did not complete during shutdown")
-                                    }
-                                    endpoint.get()?.let { child = identify(it) }
-                                }
-                            }
-                            // An unbind failure must not skip killing the already owned child.
-                            cleanupStep { if (bound) context.unbindService(connection) }
-                            var exited = child == null && source == null && cleanupFailure == null
-                            cleanupStep {
-                                child?.let { it.terminate(deadline); exited = true }
-                            }
-                            if (exited) {
-                                pipe?.forEach { descriptor -> cleanupStep { descriptor.close() } }
-                                cleanupStep { source?.close() }
-                            }
-                            cleanupFailure?.let { failure ->
-                                resultBytes?.fill(0)
+                            session.close()?.let { failure ->
+                                owned?.let(discard)
+                                owned = null
                                 val fatal = DecoderCleanupException("Decoder shutdown could not be confirmed", failure)
                                 // Keep at most one unresolved owner. No later operation may bind
-                                // to this process or release its duplicated source descriptors.
-                                failedDecoder = FailedDecoder(fatal,
-                                    listOfNotNull<Any>(context, connection, endpoint.get(),
-                                        source.takeUnless { exited }, pipe.takeUnless { exited }))
+                                // to these processes or release their source readers.
+                                failedDecoder = FailedDecoder(fatal, listOf(session))
                                 val original = originalFailure
                                 if (original is CancellationException && original !is TimeoutCancellationException) {
                                     original.addSuppressed(fatal)
@@ -205,37 +202,231 @@ class AndroidDerivativeClient(private val context: Context) {
                 }
             }
             // Dispatch back from IO is cancellable. A timeout can discard a
-            // decoded result before the importer can take ownership of it.
-            if (result == null) resultBytes?.fill(0)
+            // decoded result before the caller can take ownership of it.
+            if (result == null) owned?.let(discard)
             result
         } catch (failure: Throwable) {
-            resultBytes?.fill(0)
+            owned?.let(discard)
             throw failure
         }
     }
 
-    /** Shares the disposable decoder custody and mutex with media imports. */
-    suspend fun recognize(source: ParcelFileDescriptor, contentType: String, cancelRequested: () -> Boolean): AndroidRecognizedText? {
-        val media = PickedMedia(source.fd, true, null, contentType, null, null, android.net.Uri.EMPTY, {})
-        val probe = ProbedMedia(if (contentType == "application/pdf") 4 else 1, 0, 0, 0, contentType)
-        val result = derive(media, probe, StreamKind.ORIGINAL, cancelRequested, DERIVATIVE_OCR) ?: return null
-        if (result.width !in 1..100 || result.height !in 0..1 || result.bytes.size > OCR_RESULT_MAX) {
-            result.bytes.fill(0)
-            return null
-        }
-        return AndroidRecognizedText(result.bytes, result.height == 1, result.width)
+    private enum class ChildKind(val service: Class<out Service>, val isolated: Boolean, val process: String) {
+        DECODER(AndroidDerivativeService::class.java, true, ":media_decoder"),
+        PLATFORM(AndroidPlatformMediaService::class.java, false, ":media_platform"),
+        OCR(AndroidOcrService::class.java, false, ":ocr"),
     }
 
-    private fun identify(service: IBinder): ChildIdentity? {
-        val request = Parcel.obtain()
-        val reply = Parcel.obtain()
-        try {
-            request.writeInterfaceToken(DERIVATIVE_INTERFACE)
-            if (!service.transact(DERIVATIVE_PID, request, reply, 0)) throw IOException("Decoder identity was unavailable")
-            val pid = reply.readInt()
-            check(pid > 0 && pid != Process.myPid())
-            return kernelTask(pid)?.let { ChildIdentity(pid, it.started) }
-        } finally { request.recycle(); reply.recycle() }
+    /** Everything one operation owns. [close] stops the readers first, then ends every child. */
+    private class Session(private val context: Context, private val decoder: ComponentName?, private val stop: () -> Boolean) {
+        private val readers = mutableListOf<DerivativeReader>()
+        private val children = mutableMapOf<ChildKind, Child>()
+
+        fun stopped(): Boolean = stop()
+
+        /** A non-throwing view for Binder threads, which cannot see coroutine cancellation. */
+        private val quietStop: () -> Boolean = { try { stop() } catch (_: Exception) { true } }
+
+        fun reader(input: DerivativeInput): DerivativeReader =
+            DerivativeReader(input, quietStop).also { readers += it }
+
+        /** Binds and checks one child, or returns null when it is unavailable or the operation stopped. */
+        fun child(kind: ChildKind): Child? {
+            children[kind]?.let { return it.takeIf { child -> child.ready } }
+            val component = if (kind == ChildKind.DECODER && decoder != null) decoder else ComponentName(context, kind.service)
+            val child = Child(context, kind, component, ::stopped)
+            children[kind] = child
+            return child.takeIf { it.start() }
+        }
+
+        /** Cleanup is blocking IO and does not consult coroutine cancellation. */
+        fun close(): Throwable? {
+            val deadline = System.nanoTime() + 5_000_000_000L
+            var cleanupFailure: Throwable? = null
+            fun cleanupStep(action: () -> Unit) {
+                try { action() } catch (failure: Throwable) {
+                    cleanupFailure?.addSuppressed(failure) ?: run { cleanupFailure = failure }
+                }
+            }
+            // A closed reader refuses every later range, so no child reads the
+            // source after this point, even one whose exit is not yet confirmed.
+            readers.forEach { reader -> cleanupStep { reader.close(deadline) } }
+            children.values.forEach { child -> cleanupStep { child.terminate(deadline) } }
+            return cleanupFailure
+        }
+    }
+
+    private class Child(
+        private val context: Context,
+        private val kind: ChildKind,
+        private val component: ComponentName,
+        private val stopped: () -> Boolean,
+    ) {
+        private val connected = CountDownLatch(1)
+        private val endpoint = AtomicReference<IBinder?>()
+        private val died = CountDownLatch(1)
+        private val death = IBinder.DeathRecipient { died.countDown() }
+        private var bound = false
+        private var linked = false
+        private var identity: ChildIdentity? = null
+        var ready = false
+            private set
+        private var uid = -1
+
+        private val connection = object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName, service: IBinder) {
+                endpoint.set(service)
+                connected.countDown()
+            }
+            override fun onServiceDisconnected(name: ComponentName) {}
+            override fun onNullBinding(name: ComponentName) { connected.countDown() }
+            override fun onBindingDied(name: ComponentName) { connected.countDown() }
+        }
+
+        fun start(): Boolean {
+            if (stopped()) return false
+            bound = context.bindService(Intent().setComponent(component), connection, Context.BIND_AUTO_CREATE)
+            if (!bound) return false
+            while (!connected.await(50, TimeUnit.MILLISECONDS)) {
+                if (stopped()) return false
+            }
+            val service = endpoint.get() ?: return false
+            ready = identify(service)
+            return ready && !stopped()
+        }
+
+        /**
+         * Links death notice and learns the child's UID and PID from Binder. The
+         * isolated decoder must have an isolated UID, report itself isolated, and
+         * fail to open the app's filesDir; otherwise no source reaches it. A
+         * child that misbehaves fails this operation only.
+         */
+        private fun identify(service: IBinder): Boolean {
+            if (!link(service)) return false
+            val (childUid, pid, isolated, opensAppFiles) = ask(service) ?: return false.also { claim(service) }
+            if (kind.isolated) {
+                if (!isolated || !isIsolatedUid(childUid) || opensAppFiles) return false
+            } else {
+                if (childUid != Process.myUid() || pid <= 0 || pid == Process.myPid()) return false
+                val task = kernelTask(pid) ?: return false
+                identity = ChildIdentity(pid, task.started)
+            }
+            uid = childUid
+            return true
+        }
+
+        private data class Answer(val uid: Int, val pid: Int, val isolated: Boolean, val opensAppFiles: Boolean)
+
+        /** Null when the child is dead, refuses, or never calls back. */
+        private fun ask(service: IBinder): Answer? {
+            val callback = IdentityCallback()
+            val request = Parcel.obtain()
+            val reply = Parcel.obtain()
+            try {
+                request.writeInterfaceToken(DERIVATIVE_INTERFACE)
+                request.writeString("")
+                request.writeStrongBinder(callback)
+                if (!service.transact(DERIVATIVE_IDENTITY, request, reply, 0)) return null
+                val (uid, pid) = callback.caller ?: return null
+                return Answer(uid, pid, reply.readInt() == 1, reply.readInt() == 1)
+            } catch (_: RemoteException) {
+                return null
+            } catch (_: RuntimeException) {
+                return null
+            } finally { request.recycle(); reply.recycle() }
+        }
+
+        /** A child that is already dead counts as exited. */
+        private fun link(service: IBinder): Boolean {
+            if (linked) return true
+            return try {
+                service.linkToDeath(death, 0)
+                linked = true
+                true
+            } catch (_: RemoteException) {
+                died.countDown()
+                false
+            }
+        }
+
+        /** Sends one request and waits for its result, the child's death, or a stop. */
+        fun request(code: Int, reader: DerivativeReader?, write: (Parcel) -> Unit): DerivativeResult? {
+            val service = endpoint.get() ?: return null
+            if (!ready || died.count == 0L) return null
+            val sink = DerivativeSink().also { it.allowedUid = uid }
+            reader?.allowedUid = uid
+            val data = Parcel.obtain()
+            try {
+                data.writeInterfaceToken(DERIVATIVE_INTERFACE)
+                data.writeStrongBinder(sink)
+                reader?.let { data.writeStrongBinder(it) }
+                write(data)
+                if (!service.transact(code, data, null, IBinder.FLAG_ONEWAY)) return null
+            } catch (_: RemoteException) {
+                return null
+            } finally { data.recycle() }
+            return sink.await()
+        }
+
+        /** A stop can throw cancellation; a result that arrived is then cleared. */
+        private fun DerivativeSink.await(): DerivativeResult? {
+            try {
+                while (!done.await(50, TimeUnit.MILLISECONDS)) {
+                    if (died.count == 0L || stopped()) break
+                }
+            } catch (failure: Throwable) {
+                take()?.region?.close()
+                throw failure
+            }
+            val result = take()
+            val stop = try { stopped() } catch (failure: Throwable) { result?.region?.close(); throw failure }
+            if (stop) { result?.region?.close(); return null }
+            return result
+        }
+
+        /** Cleanup needs Binder death for every child and a PID for an app-UID child. */
+        private fun claim(service: IBinder) {
+            if (!link(service) || kind.isolated || identity != null) return
+            // A child that does not answer is still an app-UID process this app can find.
+            val pid = ask(service)?.takeIf { it.uid == Process.myUid() }?.pid
+                ?: context.getSystemService(ActivityManager::class.java)?.runningAppProcesses.orEmpty()
+                    .firstOrNull { it.uid == Process.myUid() && it.processName == context.packageName + kind.process }?.pid
+                ?: return
+            if (pid <= 0 || pid == Process.myPid()) return
+            identity = kernelTask(pid)?.let { ChildIdentity(pid, it.started) }
+        }
+
+        fun terminate(deadline: Long) {
+            if (bound && endpoint.get() == null) {
+                // A cancelled bind still owns its late connection.
+                if (!connected.await(maxOf(0L, deadline - System.nanoTime()), TimeUnit.NANOSECONDS)) {
+                    throw IOException("Decoder connection did not complete during shutdown")
+                }
+                endpoint.get()?.let(::claim)
+            } else endpoint.get()?.let(::claim)
+            var failure: Throwable? = null
+            // An unbind failure must not skip waiting for the owned child.
+            try { if (bound) context.unbindService(connection) } catch (unbind: Throwable) { failure = unbind }
+            try {
+                if (kind.isolated) {
+                    // The system ends an isolated process when its last binding ends.
+                    // The app cannot signal another UID, so it waits for Binder death.
+                    if (linked && !died.await(maxOf(0L, deadline - System.nanoTime()), TimeUnit.NANOSECONDS)) {
+                        throw IOException("Decoder did not exit after unbind")
+                    }
+                } else {
+                    val owned = identity
+                    if (owned != null) owned.terminate(deadline)
+                    else if (linked && !died.await(maxOf(0L, deadline - System.nanoTime()), TimeUnit.NANOSECONDS)) {
+                        throw IOException("Decoder exit could not be confirmed")
+                    }
+                }
+            } catch (exit: Throwable) {
+                failure?.let(exit::addSuppressed)
+                throw exit
+            }
+            failure?.let { throw it }
+        }
     }
 
     private data class KernelTask(val state: Char, val started: Long)
@@ -248,11 +439,11 @@ class AndroidDerivativeClient(private val context: Context) {
 
         fun terminate(deadline: Long) {
             if (hasExited()) return
-            // This app has only its main process and one private decoder process.
-            // decoderLock excludes another operation until cleanup completes; a
-            // failed unbind can restart only this operation's owned service.
-            // starttime detects stale PIDs, but is not an atomic process handle.
-            // Revisit numeric signalling if another app-UID process path is added.
+            // The app-UID children are this app's private platform media and OCR
+            // processes. decoderLock excludes another operation until cleanup
+            // completes. starttime detects stale PIDs, but is not an atomic
+            // process handle. Revisit numeric signalling if another app-UID
+            // process path is added.
             try { Os.kill(pid, OsConstants.SIGKILL) } catch (failure: ErrnoException) {
                 if (failure.errno != OsConstants.ESRCH) throw failure
             }
@@ -266,6 +457,8 @@ class AndroidDerivativeClient(private val context: Context) {
     private class FailedDecoder(val failure: DecoderCleanupException, val retainedOwner: List<Any>)
 
     companion object {
+        private const val DERIVE_TIMEOUT_MS = 30_000L
+        private const val OCR_TIMEOUT_MS = 120_000L
         private val decoderLock = Mutex()
         // Accessed only while decoderLock is held. An uncertain owner forbids reuse.
         private var failedDecoder: FailedDecoder? = null

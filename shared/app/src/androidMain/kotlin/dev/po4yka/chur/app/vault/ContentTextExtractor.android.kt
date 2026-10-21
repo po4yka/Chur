@@ -1,20 +1,15 @@
 package dev.po4yka.chur.app.vault
 
 import android.content.Context
-import android.os.Handler
-import android.os.HandlerThread
-import android.os.ParcelFileDescriptor
-import android.os.ProxyFileDescriptorCallback
-import android.os.storage.StorageManager
-import android.system.ErrnoException
-import android.system.OsConstants
 import dev.po4yka.chur.imports.AndroidDerivativeClient
+import dev.po4yka.chur.imports.DerivativeInput
+import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 
-/** Reads authenticated ranges through a proxy descriptor. No plaintext path or vault key reaches the child. */
+/** Serves authenticated ranges over Binder. No plaintext path, descriptor, or vault key reaches a child. */
 class AndroidContentTextExtractor(context: Context) : ContentTextExtractor {
     private val context = context.applicationContext
 
@@ -36,22 +31,19 @@ class AndroidContentTextExtractor(context: Context) : ContentTextExtractor {
                     throw ContentExtractionException(ContentExtractionFailure.UNSUPPORTED)
                 }
                 if (source.size !in 1..CONTENT_SOURCE_MAX_BYTES) throw ContentExtractionException(ContentExtractionFailure.LIMIT)
-                val owner = ContentSourceDescriptor(context, source, stopped)
+                val result = AndroidDerivativeClient(context).recognize(ContentSourceInput(source, stopped), contentType) {
+                    cancelRequested() || !source.canRead()
+                }
+                if (result == null) {
+                    checkContentSource(source, stopped)
+                    throw ContentExtractionException(ContentExtractionFailure.UNAVAILABLE)
+                }
+                var transferred = false
                 try {
-                    val result = AndroidDerivativeClient(context).recognize(owner.descriptor, contentType) {
-                        cancelRequested() || !source.canRead()
-                    }
-                    if (result == null) {
-                        checkContentSource(source, stopped)
-                        throw ContentExtractionException(ContentExtractionFailure.UNAVAILABLE)
-                    }
-                    var transferred = false
-                    try {
-                        checkContentSource(source, stopped)
-                        onPage(result.pages, result.pages)
-                        ExtractedContent(result.bytes, result.partial, result.pages).also { transferred = true; owned = it }
-                    } finally { if (!transferred) result.bytes.fill(0) }
-                } finally { owner.close() }
+                    checkContentSource(source, stopped)
+                    onPage(result.pages, result.pages)
+                    ExtractedContent(result.bytes, result.partial, result.pages).also { transferred = true; owned = it }
+                } finally { if (!transferred) result.bytes.fill(0) }
             }
             owned = null
             return result
@@ -62,47 +54,36 @@ class AndroidContentTextExtractor(context: Context) : ContentTextExtractor {
     }
 }
 
-/** Invalidation waits for an authenticated range read to drain before its reader lease can end. */
-private class ContentSourceDescriptor(context: Context, private val source: ContentTextSource, private val stopped: () -> Boolean) : AutoCloseable {
-    private val gate = Any()
-    private var open = true
-    private val thread = HandlerThread("chur-ocr-ranges").apply { start() }
-    val descriptor: ParcelFileDescriptor
-    init {
+/**
+ * Serves authenticated ranges to the decoder child. The child's reader closes
+ * this input and waits for a running read before the reader lease can end.
+ */
+private class ContentSourceInput(private val source: ContentTextSource, private val stopped: () -> Boolean) : DerivativeInput {
+    override val size: Long = source.size
+
+    override fun read(offset: Long, into: ByteArray, count: Int, stopped: () -> Boolean): Int {
+        fun checkOpen() {
+            val readable = try { source.canRead() && !this.stopped() && !stopped() } catch (_: Exception) { false }
+            if (!readable) throw IOException("Content source ended")
+        }
+        checkOpen()
+        if (offset !in 0..size || count < 0 || count > into.size) throw IOException("Content range is invalid")
+        if (offset == size) return -1
+        val wanted = minOf(count.toLong(), size - offset).toInt()
+        var copied = 0
         try {
-            val storage = requireNotNull(context.getSystemService(StorageManager::class.java))
-            descriptor = storage.openProxyFileDescriptor(ParcelFileDescriptor.MODE_READ_ONLY, object : ProxyFileDescriptorCallback() {
-                private fun checkOpen() {
-                    val readable = try { open && source.canRead() && !stopped() } catch (_: Exception) { false }
-                    if (!readable) throw ErrnoException("read", OsConstants.EIO)
-                }
-                override fun onGetSize(): Long = synchronized(gate) { checkOpen(); source.size }
-                override fun onRead(offset: Long, size: Int, into: ByteArray): Int = synchronized(gate) {
-                    checkOpen()
-                    if (offset !in 0..source.size || size < 0 || size > into.size) throw ErrnoException("read", OsConstants.EINVAL)
-                    val wanted = minOf(size.toLong(), source.size - offset).toInt()
-                    var copied = 0
-                    try {
-                        while (copied < wanted) {
-                            checkOpen()
-                            val count = minOf(64 * 1024, wanted - copied)
-                            val bytes = source.read(offset + copied, count)
-                            try {
-                                if (bytes.isEmpty() || bytes.size > count) throw ErrnoException("read", OsConstants.EIO)
-                                bytes.copyInto(into, copied)
-                                copied += bytes.size
-                            } finally { bytes.fill(0) }
-                        }
-                        checkOpen()
-                        copied
-                    } catch (_: Exception) { into.fill(0, 0, wanted); throw ErrnoException("read", OsConstants.EIO) }
-                }
-                override fun onRelease() {}
-            }, Handler(thread.looper))
-        } catch (failure: Throwable) { thread.quitSafely(); throw failure }
-    }
-    override fun close() {
-        synchronized(gate) { open = false }
-        try { descriptor.close() } finally { thread.quitSafely() }
+            while (copied < wanted) {
+                checkOpen()
+                val length = minOf(64 * 1024, wanted - copied)
+                val bytes = source.read(offset + copied, length)
+                try {
+                    if (bytes.isEmpty() || bytes.size > length) throw IOException("Content range is unavailable")
+                    bytes.copyInto(into, copied)
+                    copied += bytes.size
+                } finally { bytes.fill(0) }
+            }
+            checkOpen()
+            return copied
+        } catch (failure: Exception) { into.fill(0, 0, wanted); throw failure }
     }
 }

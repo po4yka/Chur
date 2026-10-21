@@ -683,6 +683,33 @@ Rules:
 - every derived asset is encrypted independently;
 - metadata updates use a new stream revision and fresh nonce prefix.
 
+### 15.1 Decoder processes
+
+Derivatives and OCR do not decode untrusted bytes in the main process. `AndroidDerivativeClient` starts disposable child processes for one operation at a time:
+
+| Process | Manifest | Work | Input |
+| --- | --- | --- | --- |
+| `:media_decoder` | `isolatedProcess="true"` | in-process image codecs (JPEG, PNG, WebP, GIF, DNG/TIFF, EXIF), the JPEG XL decoder, PDF page rasterization for OCR on API 30 and later, and decoding of embedded audio artwork | Binder byte-range reader, or an encoded artwork region |
+| `:media_platform` | app UID | video frames, audio waveforms, extraction of embedded artwork, HEIF/AVIF stills, and PDF page rasterization for OCR on API 29 | Binder byte-range reader |
+| `:ocr` | app UID | Tesseract recognition | a region of decoded ARGB_8888 pixels |
+
+Rules:
+
+- No child receives a file descriptor for app data, a vault handle, a key, or a storage path. The parent serves source bytes through a Binder reader. Each read is at most 256 KiB. The child wraps the reader in an `InputStream` or a `MediaDataSource`. A non-seekable provider source is opened again from its URI in the parent for each pass that goes back, at most 16 times. A provider open can be cancelled.
+- Each child returns one bounded result in a descriptor of anonymous memory (a `memfd`; `SharedMemory` on API 29): at most 32 MiB for a derivative and 256 KiB of UTF-8 text for OCR. A receiver never maps a region that another process made. It refuses a region whose size is above the limit or below the stated length, and it copies exactly the stated length with positional reads. A region that its creator shrinks gives a short read and no result. The parent forwards page regions to `:ocr`, which applies the same checks, and closes every region; it does not overwrite a region that another process made.
+- Every child endpoint accepts calls only from `applicationInfo.uid`. Each child calls the parent back once during its identity check, so the parent learns its UID and PID from Binder and not from the child's report. The parent's reader and result sink accept calls only from that UID.
+- Before the parent sends a source to `:media_decoder`, its Binder UID must be an isolated UID, the child must report that it is isolated, and it must fail to open the app's `filesDir`. Otherwise the derivative is unavailable. A child that breaks the protocol makes only its own operation unavailable.
+- The parent links Binder death for each child. At the end it closes the readers first: a closed reader refuses later ranges, cancels a provider open, and waits up to 5 seconds for a running read. It then unbinds. The system ends an isolated process when its last binding ends; the app cannot signal another UID, so it waits for Binder death. The parent ends an app-UID child with `SIGKILL` and confirms the exit in `/proc`. If a read does not stop or an exit is not confirmed within the 5 seconds, no later operation may start a decoder (see `MEDIA_PIPELINE.md` section 6).
+- A derivative has 30 seconds and a recognition has 120 seconds. Cancellation, the deadline, or child death makes the result unavailable.
+
+Decision for the isolated process. An isolated process on API 37 has no readable or writable app directory, and SELinux refuses it the system media services (`media.player`, the Codec2 HAL, and the media extractor). Thus:
+
+- `MediaMetadataRetriever`, `MediaExtractor`, `MediaCodec`, and the HEIF/AVIF bitmap decoders do not work in `:media_decoder`. The AVIF bitmap path stops the process. These paths run in `:media_platform`. There, the platform media services parse and decode in their own sandboxed system processes, and the child receives frames, samples, or still-encoded artwork. The child returns artwork bytes, and `:media_decoder` decodes them.
+- Tesseract4Android 4.9.0 opens its models only from a directory path. An isolated process cannot read the installed models or write a copy. OCR therefore uses option (b): the separate app-UID `:ocr` process receives only rasterized pixels, never source bytes, a descriptor for app data, or a vault path, and it does not use the network. On API 30 and later, `:media_decoder` rasterizes each image or PDF page; it copies a PDF into a `memfd` of at most 32 MiB because `PdfRenderer` needs a seekable descriptor with a size.
+- API 29 has no `memfd_create`, and an ashmem descriptor reports no size to `PdfRenderer`. On API 29, `:media_platform` therefore rasterizes PDF pages for OCR. It serves the Binder reader to `PdfRenderer` through a proxy descriptor of its own, with the same 32 MiB cap. On API 29, PDF parsing for OCR thus stays in an app-UID process, as it was before the isolated decoder.
+
+Residual risk: `:media_platform` and `:ocr` run as the app UID and can read app files and use the network permission. A defect in the HEIF/AVIF client path, in `ExifInterface` on a HEIF still, or in Tesseract and Leptonica on hostile pixels runs with app privileges. The probe in the main process still reads image headers with `BitmapFactory` bounds decoding and reads metadata through `MediaMetadataRetriever`.
+
 ---
 
 ## 16. Private image pipeline
