@@ -150,7 +150,7 @@ fn the_header_carries_every_registered_status_and_no_other() {
     for (name, value) in &expected {
         assert_eq!(header.get(name), Some(value), "{name} has the wrong value");
     }
-    assert_eq!(header.len(), 33);
+    assert_eq!(header.len(), 34);
 }
 
 #[test]

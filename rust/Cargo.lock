@@ -275,6 +275,7 @@ dependencies = [
  "chur-format",
  "chur-media",
  "chur-sync-protocol",
+ "libc",
  "sha2",
  "zeroize",
 ]

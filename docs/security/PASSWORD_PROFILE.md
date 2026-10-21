@@ -142,6 +142,20 @@ The UI must distinguish:
 
 Offline resistance comes from Argon2id. Local UI may add delay/rate limiting against casual attempts, but it is not a cryptographic substitute and must not permanently deny recovery after process reinstall or backup restore.
 
+The Rust core enforces one local delay in `chur_vault_unlock`, so a host cannot skip it by calling the C ABI directly:
+
+- only the password factor is delayed. A recovery phrase and a device unlock are never delayed, and no count wipes or locks anything;
+- five failed password attempts are free. The next attempt waits 30 seconds after the last failure, then 1 minute, then 5 minutes, then 15 minutes for every later failure. 15 minutes is the cap;
+- each password attempt is counted durably before the key derivation starts. If the count cannot be written, the attempt is refused with `IO_FAILURE` and nothing is derived. A process killed during the derivation therefore keeps the failure;
+- a success of any identity with any factor resets the count. A password attempt that fails before a credential is tested, for example with `KDF_MEMORY_UNAVAILABLE`, gives its count back;
+- a delayed attempt returns `UNLOCK_DELAYED` before any derivation, and the interface shows a neutral wait message that names no identity;
+- the count is one record, `unlock-attempts`, in the storage root beside `registry/` and `vaults/`. It is not in a vault, the backup rules do not include it, and a reinstall removes it. A sibling lock file serializes every runtime and process that reads or writes it;
+- the record keeps the end of the delay on the boot clock (`CLOCK_BOOTTIME` on Android, `CLOCK_MONOTONIC` on Apple platforms, which count time asleep) and the boot identifier (`/proc/sys/kernel/random/boot_id` on Android, `kern.bootsessionuuid` on Apple platforms). The wall clock has no part in the decision, so changing it does not shorten the delay;
+- after a reboot, the full delay of the current count runs again, measured from the boot. A reboot therefore gains nothing, and a user waits at most one delay. Where the boot identifier cannot be read, a boot clock below the time of the last failure shows the reboot;
+- a record that cannot be read counts as the first delayed failure.
+
+A user who deletes app data removes the count. This is accepted: the delay slows casual guessing on the device, and Argon2id remains the defence against an offline attack.
+
 A future server may rate-limit account operations but cannot be trusted as the only password defense.
 
 ## 12. UX and recovery

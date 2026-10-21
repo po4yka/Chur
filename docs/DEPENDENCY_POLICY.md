@@ -324,6 +324,10 @@ A dependency that captures logs, crashes, analytics, sessions, screens, or netwo
 - **Compatibility and cost:** validate Android and iOS with this repository's pinned Kotlin/Compose toolchain. Parsing/highlighting adds code size, CPU and transient document/layout allocations; benchmark actual long notes before changing existing note bounds. No claim of zero-copy or secure erasure follows from these dependencies.
 - **Updates/removal:** update exact versions and locks deliberately, reviewing syntax/layout and private lifecycle regressions. Stored Markdown is independent of renderer serialization, so replacement does not require converting user source.
 
+### Boot clock for the password-attempt delay
+
+`chur-ffi` adds a direct edge to `libc` 0.2, default features off, on Unix targets only. It reads `CLOCK_BOOTTIME` on Android and `CLOCK_MONOTONIC` on Apple platforms through `clock_gettime`, and `kern.bootsessionuuid` through `sysctlbyname` on Apple platforms, which the standard library does not expose, for the delay of [`security/PASSWORD_PROFILE.md`](security/PASSWORD_PROFILE.md) §11. `std::time::Instant` cannot be stored across a process restart and does not count time asleep on every target. `libc` 0.2.189 is already in the production lockfile through `getrandom` and `cpufeatures`, so no package version is added. The edge adds two `unsafe` calls in `chur-ffi`, each with its SAFETY comment. No build script, network access, permission, or telemetry is added. Remove the edge if the standard library exposes a boot clock.
+
 ### Note attachment serialization
 
 The catalog reuses already-pinned workspace `serde`/`serde_json` and existing `base64ct` 1.8.3 (alloc) for the portable JSON package and standard padded Base64. These are direct dependency edges to libraries already present in the production lockfile; no package version, crypto algorithm, network loader, or archive extractor is added. Temporary file bytes, Base64 strings and export buffers are zeroized. Native catalog validation remains independent of the UI package decoder.

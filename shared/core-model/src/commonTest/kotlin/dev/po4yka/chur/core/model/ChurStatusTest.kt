@@ -15,7 +15,7 @@ import kotlin.test.assertTrue
 class ChurStatusTest {
     @Test
     fun the_registry_holds_the_documented_codes() {
-        assertEquals(33, ChurStatus.entries.size)
+        assertEquals(34, ChurStatus.entries.size)
         assertEquals(0, ChurStatus.OK)
     }
 
@@ -81,6 +81,14 @@ class ChurStatusTest {
         // credential is used and reveals nothing about which slots exist.
         assertEquals(107, ChurStatus.KDF_MEMORY_UNAVAILABLE.value)
         assertEquals(Retry.YES, ChurStatus.KDF_MEMORY_UNAVAILABLE.retry)
+    }
+
+    @Test
+    fun the_unlock_delay_is_a_retryable_state_that_names_no_identity() {
+        // PASSWORD_PROFILE.md section 11: one count for the whole installation.
+        assertEquals(108, ChurStatus.UNLOCK_DELAYED.value)
+        assertEquals(Retry.YES, ChurStatus.UNLOCK_DELAYED.retry)
+        assertEquals(ChurStatus.UNLOCK_DELAYED, ChurStatus.fromValue(108))
     }
 
     @Test

@@ -362,43 +362,53 @@ pub unsafe extern "C" fn chur_vault_unlock(
             (guard.root().clone(), in_flight)
         };
         let now = now_ms();
-        let mut session = match request.factor {
-            1 => vault::unlock_with_password(&root, secret, now),
-            2 => {
-                let phrase = core::str::from_utf8(secret).map_err(|_| {
-                    Error::new(
-                        ChurStatus::AuthenticationFailed,
-                        "the recovery phrase is not UTF-8",
-                    )
-                })?;
-                vault::unlock_with_recovery(&root, phrase, now)
-            }
-            3 => {
-                let bytes: [u8; 32] = secret.try_into().map_err(|_| {
-                    Error::new(
-                        ChurStatus::AuthenticationFailed,
-                        "a device secret is 32 bytes",
-                    )
-                })?;
-                vault::unlock_with_apple_keychain(&root, &Key::new(bytes), now)
-            }
-            4 => {
-                // The Keystore already performed the unwrap, so what arrives is
-                // the root itself rather than a secret a slot body opens.
-                // ADR-0041 records why this family is the exception.
-                let bytes: [u8; 32] = secret.try_into().map_err(|_| {
-                    Error::new(
-                        ChurStatus::AuthenticationFailed,
-                        "an unwrapped root secret is 32 bytes",
-                    )
-                })?;
-                vault::unlock_with_android_keystore(&root, &Key::new(bytes), now)
-            }
-            _ => Err(Error::new(
-                ChurStatus::InvalidInput,
-                "the unlock request names an unallocated factor",
-            )),
-        }?;
+        // `PASSWORD_PROFILE.md` §11: a password attempt waits after repeated
+        // failures. The other factors are never delayed, and any success
+        // resets the count.
+        let factor = request.factor;
+        let unlocked = crate::unlock_throttle::guarded(
+            &root,
+            factor == 1,
+            crate::unlock_throttle::Clocks::now,
+            || match factor {
+                1 => vault::unlock_with_password(&root, secret, now),
+                2 => {
+                    let phrase = core::str::from_utf8(secret).map_err(|_| {
+                        Error::new(
+                            ChurStatus::AuthenticationFailed,
+                            "the recovery phrase is not UTF-8",
+                        )
+                    })?;
+                    vault::unlock_with_recovery(&root, phrase, now)
+                }
+                3 => {
+                    let bytes: [u8; 32] = secret.try_into().map_err(|_| {
+                        Error::new(
+                            ChurStatus::AuthenticationFailed,
+                            "a device secret is 32 bytes",
+                        )
+                    })?;
+                    vault::unlock_with_apple_keychain(&root, &Key::new(bytes), now)
+                }
+                4 => {
+                    // The Keystore already performed the unwrap, so what arrives is
+                    // the root itself rather than a secret a slot body opens.
+                    // ADR-0041 records why this family is the exception.
+                    let bytes: [u8; 32] = secret.try_into().map_err(|_| {
+                        Error::new(
+                            ChurStatus::AuthenticationFailed,
+                            "an unwrapped root secret is 32 bytes",
+                        )
+                    })?;
+                    vault::unlock_with_android_keystore(&root, &Key::new(bytes), now)
+                }
+                _ => Err(Error::new(
+                    ChurStatus::InvalidInput,
+                    "the unlock request names an unallocated factor",
+                )),
+            },
+        );
+        let mut session = unlocked?;
         // `ARCHITECTURE.md` §21.3 scans the journal after a crash, and
         // `OBJECT_CONTAINER_V1.md` §14.4 gives the cleanup its order. It runs
         // here rather than at each call site, so no unlock path can skip it,

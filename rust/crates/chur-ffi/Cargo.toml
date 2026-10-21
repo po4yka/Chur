@@ -21,6 +21,9 @@ chur-sync-protocol.workspace = true
 zeroize.workspace = true
 sha2.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 # `chur-ffi` is the one crate permitted to contain `unsafe`. The workspace sets
 # `unsafe_code = "forbid"`, which no inner `allow` or `expect` can lift, and the
 # v1 C ABI of docs/interop/FFI_CONTRACT.md cannot be exported under it. This

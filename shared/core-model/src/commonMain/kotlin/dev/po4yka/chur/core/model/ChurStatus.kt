@@ -41,6 +41,9 @@ public enum class ChurStatus(
     /** The device cannot allocate the approved Argon2id memory. */
     KDF_MEMORY_UNAVAILABLE(107, Retry.YES),
 
+    /** Password unlock waits after repeated failed attempts. */
+    UNLOCK_DELAYED(108, Retry.YES),
+
     /** The caller or a lock transition cancelled the work. */
     CANCELLED(200, Retry.YES),
 

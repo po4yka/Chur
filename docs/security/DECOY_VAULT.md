@@ -88,6 +88,8 @@ The residual signal is this. The locked unlock screen cannot know which identity
 
 Re-encryption after a revocation, [`../sync/REVOCATION.md`](../sync/REVOCATION.md) §3.2, is a residual signal and is accepted here. It runs only in an identity that owns a completed collection rotation, that is, one that revoked a sharing member, and only after that identity is unlocked. It never runs inside an unlock, so unlock latency is the same in every identity. While it runs, storage use, network traffic to current members, and battery use differ from an identity with no revoked member; Settings shows a line only when some object cannot be re-encrypted. These show that the open identity revoked a member, not that a sibling identity exists.
 
+The password-attempt delay of [`PASSWORD_PROFILE.md`](PASSWORD_PROFILE.md) §11 is not a signal. One count covers the whole installation and lives outside every vault. A password attempt tries every identity in one call, so a failure counts against no identity in particular, and a success of the real or the decoy identity resets the count in the same way. The wait copy names no identity.
+
 Direct P2P requires an explicit foreground action. Local network prompts, direct connection timing, and traffic volume can reveal that networking is being used; this is a residual signal. No persistent endpoint, account, invitation, or run projection may be shared between vault identities.
 
 ## 6. Public and decoy UI
@@ -149,6 +151,7 @@ This bounds the claim: Decoy Vault raises the cost of a demand to open the vault
 - correct real credential opens only real data;
 - correct decoy credential opens only decoy data;
 - wrong credential produces equivalent external failure;
+- the password-attempt delay counts failures for the whole installation, and a decoy success resets it exactly as a real success does;
 - caches and navigation do not cross sessions;
 - platform alias invalidation affects only its identity;
 - a device-slot enrollment is refused while another identity holds a device slot, with the copy of any unavailable device unlock, and the identity that holds the slot can still replace it;

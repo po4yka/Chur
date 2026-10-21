@@ -130,6 +130,12 @@ chur_status! {
     /// it reveals nothing about which slots exist. Never retry it with reduced
     /// parameters: `docs/security/PASSWORD_PROFILE.md` section 6 forbids that.
     KdfMemoryUnavailable = 107, "KDF_MEMORY_UNAVAILABLE", Yes;
+    /// Password unlock waits after repeated failed attempts.
+    ///
+    /// The delay counts failures of the whole installation, so it is the same
+    /// for every identity. `docs/security/PASSWORD_PROFILE.md` section 11
+    /// fixes the schedule; a recovery phrase is never delayed.
+    UnlockDelayed = 108, "UNLOCK_DELAYED", Yes;
 
     /// The caller or a lock transition cancelled the work.
     Cancelled = 200, "CANCELLED", Yes;
@@ -251,6 +257,6 @@ mod tests {
 
     #[test]
     fn the_registry_holds_the_documented_count() {
-        assert_eq!(ChurStatus::ALL.len(), 33);
+        assert_eq!(ChurStatus::ALL.len(), 34);
     }
 }

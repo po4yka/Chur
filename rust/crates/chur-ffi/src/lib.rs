@@ -53,6 +53,7 @@ pub mod records;
 pub mod reencrypt;
 mod registry;
 mod runtime;
+mod unlock_throttle;
 
 use chur_core::ChurStatus;
 use chur_format::constants::{CONTAINER_VERSION_V1, CONTAINER_VERSION_V2, SLOT_VERSION_V1};
@@ -71,7 +72,7 @@ pub const ABI_VERSION_MAJOR: u32 = 7;
 /// behaviour; it never selects a cryptographic suite from untrusted input.
 ///
 /// Minor 2 adds encrypted local video resume positions.
-/// Minor 3 adds re-encryption after a revocation.
+/// Minor 3 adds re-encryption after a revocation and the `UNLOCK_DELAYED` status.
 /// ABI 7 removes service credentials from pairing and adds ephemeral direct peer IO.
 /// ABI 6 reads bounded query text for every scope and binds cursors to its complete filter.
 /// It retains ABI 3 caller-persisted import and album identities for safe desktop retries.

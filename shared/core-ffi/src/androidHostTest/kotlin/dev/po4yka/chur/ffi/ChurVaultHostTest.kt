@@ -311,6 +311,33 @@ class ChurVaultHostTest {
     }
 
     @Test
+    fun repeated_password_failures_delay_the_password_but_never_the_recovery_phrase() {
+        // PASSWORD_PROFILE.md section 11: five free attempts, then a delay
+        // that Rust enforces before any derivation.
+        val runtime = openRuntime()
+        val creation = ChurVault.beginCreation(runtime, PASSWORD.encodeToByteArray())
+        val phrase = ChurVault.creationAddRecoverySlot(creation)
+        ChurVault.closeSession(ChurVault.activateCreation(creation))
+        repeat(5) {
+            val failure = assertFailsWith<ChurFailure> {
+                ChurVault.unlockWithPassword(runtime, "wrong".encodeToByteArray())
+            }
+            assertEquals(ChurStatus.AUTHENTICATION_FAILED, failure.status)
+        }
+        val delayed = assertFailsWith<ChurFailure> {
+            ChurVault.unlockWithPassword(runtime, PASSWORD.encodeToByteArray())
+        }
+        assertEquals(ChurStatus.UNLOCK_DELAYED, delayed.status)
+        assertTrue(delayed.retryable)
+        assertTrue(ChurVault.statusIsKnown(ChurStatus.UNLOCK_DELAYED.value))
+
+        val recovered = ChurVault.unlockWithRecovery(runtime, phrase.encodeToByteArray())
+        ChurVault.closeSession(recovered)
+        // The recovery success reset the count.
+        ChurVault.closeSession(ChurVault.unlockWithPassword(runtime, PASSWORD.encodeToByteArray()))
+    }
+
+    @Test
     fun the_recovery_slot_offered_during_creation_unlocks_the_vault() {
         val runtime = openRuntime()
         val creation = ChurVault.beginCreation(runtime, PASSWORD.encodeToByteArray())

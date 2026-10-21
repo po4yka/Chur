@@ -28,6 +28,7 @@ This table is the sole registry of Chur error names and values. `ARCHITECTURE.md
 | 105 | `SESSION_EXPIRED` | handle belongs to a locked/older generation | Yes | reopen after unlock |
 | 106 | `PROTECTED_DATA_UNAVAILABLE` | device-level protected storage is not accessible | Yes | unlock the device and retry |
 | 107 | `KDF_MEMORY_UNAVAILABLE` | the device cannot allocate the memory the approved Argon2id profile of `security/PASSWORD_PROFILE.md` §4 requires | Yes | free memory or return to the foreground and retry; never retry with reduced parameters |
+| 108 | `UNLOCK_DELAYED` | password unlock waits after repeated failed attempts, per `security/PASSWORD_PROFILE.md` §11; the count is the same for every identity | Yes | wait, then retry, or use the recovery phrase, which is never delayed |
 | 200 | `CANCELLED` | caller or lock transition cancelled work | Yes | retry intentionally |
 | 201 | `INVALID_INPUT` | argument, length, alignment, or range failed validation | No | correct the call |
 | 202 | `RESOURCE_LIMIT_EXCEEDED` | declared size, KDF parameter, or collection exceeds the parser limits of the owning format specification | No | reject input or use supported parameters |

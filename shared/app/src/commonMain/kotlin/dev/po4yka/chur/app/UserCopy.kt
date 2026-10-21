@@ -32,6 +32,10 @@ import dev.po4yka.chur.core.model.ChurStatus
  * Opening or restoring a vault already runs every migration this build knows,
  * so the status reaches the app only for a format newer than the build, and
  * the migration the table's "run migration" names runs in the updated app.
+ *
+ * [ChurStatus.UNLOCK_DELAYED] is neutral: the count belongs to the whole
+ * installation, `PASSWORD_PROFILE.md` §11, so the line names no identity and
+ * reads the same whichever vault the next password opens.
  */
 fun userCopy(status: ChurStatus): String = when (status) {
     ChurStatus.AUTHENTICATION_FAILED,
@@ -44,6 +48,7 @@ fun userCopy(status: ChurStatus): String = when (status) {
     -> "The vault locked. Unlock it to continue."
     ChurStatus.PROTECTED_DATA_UNAVAILABLE -> "Unlock your device, then try again."
     ChurStatus.KDF_MEMORY_UNAVAILABLE -> "Not enough free memory. Close other apps, then try again."
+    ChurStatus.UNLOCK_DELAYED -> "Too many attempts. Wait a few minutes, then try again, or use recovery."
     ChurStatus.CANCELLED -> "Cancelled."
     ChurStatus.INVALID_INPUT -> "Chur could not use what was entered. Check it and try again."
     ChurStatus.RESOURCE_LIMIT_EXCEEDED -> "This is larger than Chur supports. Choose another file."
