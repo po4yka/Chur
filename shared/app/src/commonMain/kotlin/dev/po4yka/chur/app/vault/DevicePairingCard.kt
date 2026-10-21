@@ -5,7 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.text.selection.SelectionContainer
+import dev.po4yka.chur.app.rememberSensitiveCopy
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -62,6 +62,7 @@ internal fun DevicePairingCard(
         )
     }
     var request by remember { mutableStateOf("") }
+    val copy = rememberSensitiveCopy()
     var confirmed by remember(request) { mutableStateOf(false) }
     NavigationBusyEffect(request.isNotEmpty() || revoke != null, onNavigationBusyChange)
     val inspectedFingerprint = state.inspectedFingerprint.takeIf {
@@ -84,7 +85,8 @@ internal fun DevicePairingCard(
                 state.requestFingerprint?.let { Text("New device fingerprint: $it") }
                 state.requestCode?.let { code ->
                     Text("Send this request to your connected device:")
-                    SelectionContainer { Text(code, style = MaterialTheme.typography.bodySmall) }
+                    Text(code, style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = { copy("Chur pairing request", code) }) { Text("Copy request") }
                 }
                 Text("Open the encrypted approval file from your connected device then connect directly to finish pairing.")
                 Button(onClick = onOpenApproval, enabled = !busy) {

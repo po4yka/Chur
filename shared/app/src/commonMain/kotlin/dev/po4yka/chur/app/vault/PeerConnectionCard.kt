@@ -4,11 +4,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import dev.po4yka.chur.app.privateKeyboardOptions
+import dev.po4yka.chur.app.rememberSensitiveCopy
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.churOutlinedTextFieldColors
 import dev.po4yka.chur.app.peerCopy
@@ -19,6 +19,7 @@ import dev.po4yka.chur.sync.PeerSyncStatus
 internal fun PeerConnectionCard(state: PeerSyncStatus, onListen: (String) -> Unit, onConnect: (String) -> Unit, onStop: () -> Unit) {
     var address by remember { mutableStateOf("") }
     var invitation by remember { mutableStateOf("") }
+    val copy = rememberSensitiveCopy()
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(ChurSpacing.three), verticalArrangement = Arrangement.spacedBy(ChurSpacing.two)) {
             Text("Direct device sync", style = MaterialTheme.typography.titleMedium)
@@ -37,7 +38,8 @@ internal fun PeerConnectionCard(state: PeerSyncStatus, onListen: (String) -> Uni
             } else {
                 state.invitation?.let { code ->
                     Text("Enter this invitation on your other device. Share it only with that device; it expires when you stop or leave the app.")
-                    SelectionContainer { Text(code, style = MaterialTheme.typography.bodySmall) }
+                    Text(code, style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = { copy("Chur sync invitation", code) }) { Text("Copy invitation") }
                 }
                 OutlinedButton(onClick = onStop) { Text("Stop connection") }
             }

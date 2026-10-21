@@ -819,6 +819,8 @@ The Android share sheet receives plaintext by user request. Chur cannot force a 
 
 Private filenames, captions, recovery material, keys, and media bytes MUST NOT be copied to the clipboard implicitly. Explicit copy actions require a separate UX and privacy review.
 
+A sync invitation and a device pairing request are not selectable text, because a selection copy cannot mark the clip as sensitive. Each has an explicit Copy button that writes a plain-text clip with `EXTRA_IS_SENSITIVE`, so the clipboard preview and keyboard clipboard history do not show the code. On iOS the same button writes a local-only pasteboard item that expires after two minutes.
+
 ---
 
 ## 19. Locking and lifecycle
