@@ -104,8 +104,18 @@ impl LockedStaging {
             return Ok(());
         }
 
-        let temporary = self.temporary_path(&id);
-        let installed = self.record_path(&id);
+        // The new record is installed before any old record is evicted. A
+        // process that dies between the two steps leaves one record above the
+        // bound, which the next stage evicts; the reverse order would lose an
+        // old record and the new one together.
+        self.install(&id, staged_at_ms, payload_len, bytes)?;
+        self.evict_for(&id, staged_at_ms, payload_len)
+    }
+
+    /// Writes one record under its temporary name, then renames it into place.
+    fn install(&self, id: &Id, staged_at_ms: u64, payload_len: u64, bytes: &[u8]) -> Result<()> {
+        let temporary = self.temporary_path(id);
+        let installed = self.record_path(id);
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -132,30 +142,6 @@ impl LockedStaging {
                     "staged record could not be made durable",
                 )
             })?;
-
-        let mut entries = self.scan(staged_at_ms)?;
-        let mut total = entries.iter().try_fold(0u64, |sum, entry| {
-            sum.checked_add(entry.payload_len).ok_or_else(|| {
-                Error::new(
-                    ChurStatus::ResourceLimitExceeded,
-                    "staged byte total overflows",
-                )
-            })
-        })?;
-        while entries.len() >= bounds::STAGED_RECORDS_MAX
-            || total
-                .checked_add(payload_len)
-                .is_none_or(|sum| sum > bounds::STAGED_BYTES_MAX)
-        {
-            let oldest = entries.remove(0);
-            std::fs::remove_file(&oldest.path).map_err(|_| {
-                Error::new(
-                    ChurStatus::IoFailure,
-                    "old staged record could not be evicted",
-                )
-            })?;
-            total -= oldest.payload_len;
-        }
         std::fs::rename(&temporary, &installed).map_err(|_| {
             Error::new(
                 ChurStatus::IoFailure,
@@ -164,6 +150,43 @@ impl LockedStaging {
         })?;
         temporary_file.installed = true;
         sync_directory(&self.directory)
+    }
+
+    /// Evicts the oldest records other than `kept` until the area is within
+    /// its bounds again, counting `kept` with `kept_len` bytes.
+    fn evict_for(&self, kept: &Id, now_ms: u64, kept_len: u64) -> Result<()> {
+        let mut entries: Vec<Entry> = self
+            .scan(now_ms)?
+            .into_iter()
+            .filter(|entry| &entry.id != kept)
+            .collect();
+        let mut total = entries.iter().try_fold(kept_len, |sum, entry| {
+            sum.checked_add(entry.payload_len).ok_or_else(|| {
+                Error::new(
+                    ChurStatus::ResourceLimitExceeded,
+                    "staged byte total overflows",
+                )
+            })
+        })?;
+        let mut evicted = false;
+        while entries.len() >= bounds::STAGED_RECORDS_MAX || total > bounds::STAGED_BYTES_MAX {
+            if entries.is_empty() {
+                break;
+            }
+            let oldest = entries.remove(0);
+            std::fs::remove_file(&oldest.path).map_err(|_| {
+                Error::new(
+                    ChurStatus::IoFailure,
+                    "old staged record could not be evicted",
+                )
+            })?;
+            total -= oldest.payload_len;
+            evicted = true;
+        }
+        if evicted {
+            sync_directory(&self.directory)?;
+        }
+        Ok(())
     }
 
     /// Returns the oldest retained record without acknowledging or deleting it.
@@ -426,6 +449,41 @@ mod tests {
         );
         assert_eq!(bounds::STAGED_RECORDS_MAX, 4_096);
         assert_eq!(bounds::STAGED_BYTES_MAX, 64 * 1_024 * 1_024);
+        std::fs::remove_dir_all(path).expect("cleanup");
+    }
+
+    #[test]
+    fn a_new_record_is_installed_before_an_old_one_is_evicted() {
+        let (path, mut area) = area();
+        let size = usize::try_from(bounds::STAGED_BYTES_MAX / 2 + 1).expect("size");
+        let oldest = random::id().expect("id");
+        area.stage(oldest, 1, &vec![1u8; size]).expect("oldest");
+
+        // A death after the install and before the eviction: both records
+        // stay readable, and the area is one record over its byte bound.
+        let survivor = random::id().expect("id");
+        area.install(&survivor, 2, size as u64, &vec![2u8; size])
+            .expect("install");
+        let ids: Vec<Id> = area
+            .records(2)
+            .expect("records")
+            .iter()
+            .map(|record| *record.id())
+            .collect();
+        assert_eq!(ids, vec![oldest, survivor]);
+
+        // The next stage restores the bound and keeps the newer records.
+        let reopened = LockedStaging::open(&path).expect("reopen");
+        let mut area = reopened;
+        let newest = random::id().expect("id");
+        area.stage(newest, 3, b"newest").expect("newest");
+        let ids: Vec<Id> = area
+            .records(3)
+            .expect("records")
+            .iter()
+            .map(|record| *record.id())
+            .collect();
+        assert_eq!(ids, vec![survivor, newest]);
         std::fs::remove_dir_all(path).expect("cleanup");
     }
 }
