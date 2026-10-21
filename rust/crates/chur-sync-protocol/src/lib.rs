@@ -30,6 +30,7 @@ pub mod object_grant;
 pub mod operation;
 pub mod operation_log;
 pub mod payload;
+pub mod peer_auth;
 pub mod rotation;
 pub mod state;
 

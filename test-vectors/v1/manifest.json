@@ -1,10 +1,10 @@
 {
   "manifest_version": 1,
-  "spec_commit": "83539817623855a0b0e50876878eb13e9d6c1e6e",
+  "spec_commit": "4420cb4f550c409c49a3f6ec4d6a1dc39f8af8ab",
   "generator": {
     "name": "chur-cli",
     "version": "0.1.0",
-    "commit": "83539817623855a0b0e50876878eb13e9d6c1e6e",
+    "commit": "4420cb4f550c409c49a3f6ec4d6a1dc39f8af8ab",
     "toolchain": "1.99.1-aarch64-apple-darwin"
   },
   "vectors": [
@@ -738,6 +738,42 @@
         "derived_key": "086776cc35fc19a4baa777783d91bf5a7700d538d925ae9d1bff0c0f985ce954",
         "info": "43485552004b444600494e464f00563100000017636875722f76312f6f626a6563742f77617665666f726d33333333333333333333333333333333020000000100000001",
         "info_length": 68
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-peer-session",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/peer/session` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "666666666666666666666666666666666666666666666666666666666666666601",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/peer/session"
+      },
+      "expected": {
+        "derived_key": "6cb4446bb95397b50992297a37665d3f421249b281a27eb6640aa4c38fe21e3e",
+        "info": "43485552004b444600494e464f00563100000014636875722f76312f706565722f73657373696f6e666666666666666666666666666666666666666666666666666666666666666601",
+        "info_length": 73
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "key-derivation-v1-peer-transcript-binding",
+      "spec": "docs/security/KEY_HIERARCHY.md",
+      "spec_section": "3",
+      "purpose": "HKDF-SHA-256 under `chur/v1/peer/transcript-binding` with its registered context.",
+      "outcome": "accept",
+      "inputs": {
+        "context_elements": "6666666666666666666666666666666666666666666666666666666666666666",
+        "input_key": "9999999999999999999999999999999999999999999999999999999999999999",
+        "label": "chur/v1/peer/transcript-binding"
+      },
+      "expected": {
+        "derived_key": "a3211edcd9473fbead9b9c1787e673ed89096cca5f52eb96a0181feafd9b2057",
+        "info": "43485552004b444600494e464f0056310000001f636875722f76312f706565722f7472616e7363726970742d62696e64696e676666666666666666666666666666666666666666666666666666666666666666",
+        "info_length": 83
       },
       "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
     },

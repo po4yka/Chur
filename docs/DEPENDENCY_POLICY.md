@@ -165,7 +165,7 @@ A skill synchronisation updates both hashes and the commit, and the checker is w
 
 ### `x25519-dalek` 3.0.0, Rust sync core
 
-- **Capability:** X25519 device key pairs for Phase 3 enrollment, collection-key grants, and portable identity recovery. The protocol already selects X25519 and requires a key separate from Ed25519.
+- **Capability:** X25519 device key pairs for Phase 3 enrollment, collection-key grants, and portable identity recovery, and the ephemeral key exchange of the version-2 direct peer handshake in `chur-crypto` (ADR-0067). The handshake uses the same `static_secrets` and `zeroize` features with one fresh key pair for each connection; no feature is added. The protocol already selects X25519 and requires a key separate from Ed25519.
 - **Alternatives:** the Rust standard library and the existing Chur crates have no X25519 API. A local implementation would add an unaudited cryptographic primitive. A general TLS or cryptography library would add unrelated protocols and native code.
 - **Owner and maintenance:** the dalek-cryptography project maintains it in the same active `curve25519-dalek` workspace as `ed25519-dalek`. Version 3.0.0 has MSRV 1.85, below this workspace's floor of 1.89.
 - **License:** BSD-3-Clause, with the same notice obligation as the repository.

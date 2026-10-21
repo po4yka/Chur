@@ -125,7 +125,6 @@ class PeerSyncHostTest {
         override suspend fun process() = ChurVault.processSync(session, 1_700_000_000_000L)
         override suspend fun forkState() = ChurVault.syncForkState(session)
         override suspend fun sourcePage(collectionId: ByteArray, afterObjectId: ByteArray) = ChurVault.sharedSourcePage(session, collectionId, afterObjectId)
-        override suspend fun sourceRange(objectId: ByteArray, offset: ULong, maxBytes: Int) = ChurVault.sharedSourceRange(session, objectId, offset, maxBytes)
         override suspend fun ownSyncCollections() = ChurVault.ownSyncCollections(session)
         override suspend fun ownSyncOperations(after: ULong) = ChurVault.ownSyncOperations(session, after)
         override suspend fun ownSyncPlan(collectionId: ByteArray) = ChurVault.ownSyncPlan(session, collectionId)
@@ -140,7 +139,6 @@ class PeerSyncHostTest {
         override suspend fun pairedDevices() = ChurVault.pairedDevices(session)
         override suspend fun prepareDeviceRevocation(deviceId: ByteArray, nowMs: Long) = ChurVault.prepareDeviceRevocation(session, deviceId, nowMs)
         override suspend fun objectKeyRequest(collectionId: ByteArray, objectId: ByteArray) = ChurVault.objectKeyRequest(session, collectionId, objectId)
-        override suspend fun objectKeyIssue(prekey: ByteArray) = ChurVault.objectKeyIssue(session, prekey)
         override suspend fun objectKeyAccept(packageBytes: ByteArray, grant: ByteArray): Boolean { ChurVault.objectKeyAccept(session, packageBytes, grant); return true }
         override suspend fun sharedDownloadOffset(collectionId: ByteArray, objectId: ByteArray) = ChurVault.sharedDownloadOffset(session, collectionId, objectId)
         override suspend fun appendSharedDownload(collectionId: ByteArray, objectId: ByteArray, offset: ULong, bytes: ByteArray): Boolean {

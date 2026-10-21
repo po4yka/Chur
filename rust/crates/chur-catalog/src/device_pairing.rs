@@ -12,6 +12,7 @@ use chur_sync_protocol::membership::{EnrollmentRecord, RevocationRecord};
 use chur_sync_protocol::operation::Operation;
 use chur_sync_protocol::operation_log::ApplyOutcome;
 use chur_sync_protocol::payload::{OperationPayload, PayloadBody};
+use chur_sync_protocol::peer_auth::PeerCredential;
 use chur_sync_protocol::state::{DeviceStatus, MembershipState};
 use chur_sync_protocol::{KeyDirectory, KeyDomain};
 use rusqlite::{OptionalExtension, params};
@@ -562,6 +563,131 @@ pub fn resume(db: &mut CatalogDb, root: &Key, vault: Id) -> Result<Option<PairCr
     approval
         .map(|bytes| accept_start(db, root, vault, &bytes))
         .transpose()
+}
+
+/// Loads the enrolled signer and the active device keys for one direct peer session.
+/// An ordinary device trusts its current membership. A restored recovery-only device
+/// with a verified pending approval signs with its approved identity and trusts the
+/// newer of its local membership and the approval authority.
+pub fn peer_credential(db: &mut CatalogDb, root: &Key, vault: Id) -> Result<PeerCredential> {
+    let membership = local_membership(db, vault)?;
+    let Some((request, envelope, approval)) = approved_pending(db, root, &membership)? else {
+        // A restored recovery identity cannot sign until pairing is approved.
+        ensure!(
+            !sync_keys::is_recovery_only(db, root, &membership)?,
+            RecoveryRequired,
+            "direct sync needs an ordinary or approved device identity"
+        );
+        let (device, identity) =
+            sync_keys::local_identity(db, root, &membership)?.ok_or_else(|| {
+                Error::new(
+                    ChurStatus::RecoveryRequired,
+                    "direct sync needs an ordinary or approved device identity",
+                )
+            })?;
+        return Ok(PeerCredential::new(
+            vault,
+            device,
+            identity,
+            active_keys(&membership),
+        ));
+    };
+    ensure!(
+        request.vault_id() == &vault,
+        AuthenticationFailed,
+        "pairing target belongs to another vault"
+    );
+    let identity = DeviceIdentityEnvelope::decode(&envelope)?.open_for_local(root)?;
+    ensure!(
+        identity.signing_public_key() == *request.signing_public_key(),
+        CatalogCorrupt,
+        "pending pairing identity differs from its request"
+    );
+    let trusted = trusted_membership(db, membership, &approval)?;
+    Ok(PeerCredential::new(
+        vault,
+        *request.device_id(),
+        identity,
+        active_keys(&trusted),
+    ))
+}
+
+/// The membership that a direct peer session trusts at this moment.
+///
+/// # Errors
+///
+/// Fails when the local membership is absent or the pending approval does not verify.
+pub fn peer_membership(db: &CatalogDb, root: &Key, vault: Id) -> Result<MembershipState> {
+    let membership = local_membership(db, vault)?;
+    match approved_pending(db, root, &membership)? {
+        Some((_, _, approval)) => trusted_membership(db, membership, &approval),
+        None => Ok(membership),
+    }
+}
+
+/// Confirms that an authenticated peer device is active in the membership trusted now.
+/// Call it before each served or accepted frame: a device can be revoked after the
+/// handshake, while the session credential still holds the earlier key list.
+///
+/// # Errors
+///
+/// Returns [`ChurStatus::AuthenticationFailed`] for a revoked or unknown device.
+pub fn verify_peer(db: &CatalogDb, root: &Key, vault: Id, device: &Id) -> Result<()> {
+    ensure!(
+        peer_membership(db, root, vault)?.is_active(device),
+        AuthenticationFailed,
+        "peer device is revoked or unknown"
+    );
+    Ok(())
+}
+
+/// A pending request, its sealed identity envelope, and its verified approval.
+type ApprovedPending = (PairingRequest, Vec<u8>, Vec<u8>);
+/// The unfinished approved pairing of a restored recovery-only device. An ordinary
+/// identity never signs as a pending request, whatever the pending row holds.
+fn approved_pending(
+    db: &CatalogDb,
+    root: &Key,
+    membership: &MembershipState,
+) -> Result<Option<ApprovedPending>> {
+    if !sync_keys::is_recovery_only(db, root, membership)? {
+        return Ok(None);
+    }
+    match pending(db) {
+        Ok((request, Some(envelope), Some(approval), Some(_), false)) => {
+            Ok(Some((request, envelope, approval)))
+        }
+        Ok(_) => Ok(None),
+        Err(error) if error.status() == ChurStatus::RecoveryRequired => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// The newer of the local membership and a verified approval authority. The authority
+/// extends the local membership when it is newer. When it is an older prefix, the local
+/// membership wins, so a device that was revoked later is not trusted again.
+fn trusted_membership(
+    db: &CatalogDb,
+    local: MembershipState,
+    approval: &[u8],
+) -> Result<MembershipState> {
+    let authority = validate_authority(db, PairingApproval::decode(approval)?.authority_records())?;
+    Ok(if authority.generation() > local.generation() {
+        authority
+    } else {
+        local
+    })
+}
+
+fn active_keys(membership: &MembershipState) -> Vec<(Id, [u8; 32])> {
+    membership
+        .active_device_ids()
+        .filter_map(|device| {
+            membership
+                .device(device)
+                .map(|member| (*device, *member.signing_public_key()))
+        })
+        .collect()
 }
 
 /// Installs the fresh ordinary identity only after downloaded signed prefixes

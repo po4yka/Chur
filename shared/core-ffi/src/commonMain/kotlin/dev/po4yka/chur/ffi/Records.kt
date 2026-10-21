@@ -255,7 +255,6 @@ class SharedSourceObject(
 )
 
 /** One bounded committed ciphertext range from the source vault. */
-class SharedSourceRange(val bytes: ByteArray, val sha256: ByteArray)
 
 /** Decodes a native source publication page without inspecting signed payloads. */
 fun decodeSharedSourcePage(

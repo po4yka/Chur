@@ -195,15 +195,10 @@ public class PeerSyncCoordinator(private val clock: () -> Long = { 0L }) {
     }
     private suspend fun request(message: PeerMessage): PeerMessage { send(message); return receive().also { require(it.kind == message.kind) } }
     private suspend fun hello() {
-        val vault = boundary ?: locked()
-        val credentials = pendingPairing
-        val identity = if (credentials == null) vault.identity() ?: locked() else null
-        val vaultId = credentials?.vaultId ?: identity!!.vaultId
-        send(PeerMessage("hello", bytes = vaultId, id = credentials?.deviceId ?: identity!!.deviceId))
-        val remote = receive()
-        require(remote.kind == "hello" && remote.bytes.contentEquals(vaultId) && remote.id.size == 16) { "peer belongs to another vault" }
-        // Native membership validation happens before any history, key, or object is served.
-        io(byteArrayOf(9) + remote.id)
+        // Native verified the vault and the signed device transcript during the handshake.
+        // The remote device ID comes from that verification, never from a peer message.
+        val remote = io(byteArrayOf(9))
+        require(remote.size == 16) { "peer device is not authenticated" }
     }
     private suspend fun prepareMedia() {
         val vault = boundary ?: locked()
@@ -243,15 +238,22 @@ public class PeerSyncCoordinator(private val clock: () -> Long = { 0L }) {
                         PeerMessage("history", records = records, offset = last).also { page.end() }
                     }
                     "checkpoint" -> PeerMessage("checkpoint", bytes = checkpoint ?: throw ChurFailure(ChurStatus.INVALID_INPUT, "request peer heads first"))
-                    "key" -> PeerMessage("key", bytes = vault.objectKeyIssue(request.bytes) ?: locked())
+                    // Native issues the grant only to the authenticated peer device and serves
+                    // ciphertext only while that device is active.
+                    "key" -> PeerMessage("key", bytes = io(byteArrayOf(11) + request.bytes))
                     "range" -> {
                         require(request.id.size == 16)
-                        val range = vault.sourceRange(request.id, request.offset.toULong(), 256 * 1024) ?: locked()
-                        PeerMessage("range", bytes = range.bytes)
+                        val range = io(byteArrayOf(12) + request.id + number(request.offset.toULong(), 8) + number(256uL * 1024uL, 4))
+                        PeerMessage("range", bytes = range)
                     }
                     else -> throw ChurFailure(ChurStatus.INVALID_INPUT, "unexpected peer request")
                 }
-            } catch (failure: ChurFailure) { PeerMessage(request.kind, failure = failure.status.value) }
+            } catch (failure: ChurFailure) {
+                // Native keeps the connection open after a request-level failure; answer and continue.
+                PeerMessage(request.kind, failure = failure.status.value)
+            } catch (_: IllegalArgumentException) {
+                PeerMessage(request.kind, failure = ChurStatus.INVALID_INPUT.value)
+            }
             send(response)
         }
     }

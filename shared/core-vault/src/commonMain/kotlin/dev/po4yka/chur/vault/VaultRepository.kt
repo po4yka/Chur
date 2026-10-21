@@ -30,7 +30,6 @@ import dev.po4yka.chur.ffi.SharingPermission
 import dev.po4yka.chur.ffi.SharingRecipient
 import dev.po4yka.chur.ffi.SharedReceivePlan
 import dev.po4yka.chur.ffi.SharedSourceObject
-import dev.po4yka.chur.ffi.SharedSourceRange
 import dev.po4yka.chur.ffi.PreparedShare
 import dev.po4yka.chur.ffi.PreparedShareRevocation
 import dev.po4yka.chur.ffi.SlotSummary
@@ -1006,10 +1005,6 @@ class VaultRepository(
         ChurVault.objectKeyRequest(session, collectionId, objectId)
     }
 
-    suspend fun objectKeyIssue(prekey: ByteArray): ByteArray? = mutex.withLock {
-        if (session == 0L) null else ChurVault.objectKeyIssue(session, prekey)
-    }
-
     suspend fun objectKeyAccept(packageBytes: ByteArray, grant: ByteArray): Boolean = mutex.withLock {
         if (session == 0L) false else {
             ChurVault.objectKeyAccept(session, packageBytes, grant)
@@ -1035,10 +1030,6 @@ class VaultRepository(
 
     suspend fun sourcePage(collectionId: ByteArray, afterObjectId: ByteArray): List<SharedSourceObject>? = mutex.withLock {
         if (session == 0L) null else ChurVault.sharedSourcePage(session, collectionId, afterObjectId)
-    }
-
-    suspend fun sourceRange(objectId: ByteArray, offset: ULong, maxBytes: Int): SharedSourceRange? = mutex.withLock {
-        if (session == 0L) null else ChurVault.sharedSourceRange(session, objectId, offset, maxBytes)
     }
 
     suspend fun sourceAuthor(source: SharedSourceObject): SharedSourceObject? = mutex.withLock {

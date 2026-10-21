@@ -77,7 +77,6 @@ import dev.po4yka.chur.native.chur_session_close
 import dev.po4yka.chur.native.chur_sharing_accept
 import dev.po4yka.chur.native.chur_sharing_publication
 import dev.po4yka.chur.native.chur_sharing_author
-import dev.po4yka.chur.native.chur_sharing_object_read
 import dev.po4yka.chur.native.chur_sharing_receive
 import dev.po4yka.chur.native.chur_sharing_download_append
 import dev.po4yka.chur.native.chur_sharing_download_finish
@@ -560,37 +559,9 @@ internal actual object ChurNative {
         }
     }
 
-    actual fun sharingObjectRead(
-        session: Long,
-        objectId: ByteArray,
-        offset: Long,
-        maxBytes: Int,
-        destination: ChurBuffer,
-        outWritten: IntArray,
-        rangeSha256: ByteArray,
-    ): Int = objectId.pinnedPointer { objectPointer ->
-        rangeSha256.pinnedPointer { sha ->
-            memScoped {
-                writtenCall(outWritten) { written ->
-                    chur_sharing_object_read(
-                        session.toULong(), objectPointer, offset.toULong(), maxBytes.toUInt(),
-                        destination.pointer, destination.size.toULong(), written, sha,
-                    )
-                }
-            }
-        }
-    }
-
     actual fun objectKeyRequest(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
         writtenCall(outWritten) { written ->
             dev.po4yka.chur.native.chur_object_key_request(session.toULong(), input.pointer, length.toUInt(),
-                destination.pointer, destination.size.toULong(), written)
-        }
-    }
-
-    actual fun objectKeyIssue(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int = memScoped {
-        writtenCall(outWritten) { written ->
-            dev.po4yka.chur.native.chur_object_key_issue(session.toULong(), input.pointer, length.toUInt(),
                 destination.pointer, destination.size.toULong(), written)
         }
     }

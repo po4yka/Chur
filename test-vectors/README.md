@@ -17,4 +17,4 @@ Read [`docs/format/TEST_VECTORS.md`](../docs/format/TEST_VECTORS.md) for governa
 
 ## Versions
 
-- [`v1/`](v1/README.md) — the current manifest contains 106 vectors covering canonical encoding, HKDF labels, key slots and envelopes, descriptors, containers, backup structures, waveforms, device identities, signed operations, and collection grants. Read the manifest for the exact current set; phase evidence retains historical counts.
+- [`v1/`](v1/README.md) — the current manifest contains 108 vectors covering canonical encoding, HKDF labels, key slots and envelopes, descriptors, containers, backup structures, waveforms, device identities, signed operations, and collection grants. Read the manifest for the exact current set; phase evidence retains historical counts.

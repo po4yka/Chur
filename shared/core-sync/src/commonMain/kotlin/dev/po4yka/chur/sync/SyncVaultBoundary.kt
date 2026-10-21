@@ -9,7 +9,6 @@ import dev.po4yka.chur.ffi.PreparedDevicePairing
 import dev.po4yka.chur.ffi.PreparedDeviceRevocation
 import dev.po4yka.chur.ffi.SharedReceivePlan
 import dev.po4yka.chur.ffi.SharedSourceObject
-import dev.po4yka.chur.ffi.SharedSourceRange
 import dev.po4yka.chur.ffi.SharingIdentity
 import dev.po4yka.chur.ffi.SyncForkState
 import dev.po4yka.chur.ffi.SyncProcessReport
@@ -36,10 +35,8 @@ public interface SyncVaultBoundary {
     public suspend fun process(): SyncProcessReport?
     public suspend fun forkState(): SyncForkState?
     public suspend fun objectKeyRequest(collectionId: ByteArray, objectId: ByteArray): ByteArray?
-    public suspend fun objectKeyIssue(prekey: ByteArray): ByteArray?
     public suspend fun objectKeyAccept(packageBytes: ByteArray, grant: ByteArray): Boolean
     public suspend fun sourcePage(collectionId: ByteArray, afterObjectId: ByteArray): List<SharedSourceObject>?
-    public suspend fun sourceRange(objectId: ByteArray, offset: ULong, maxBytes: Int): SharedSourceRange?
     public suspend fun sharedDownloadOffset(collectionId: ByteArray, objectId: ByteArray): ULong?
     public suspend fun appendSharedDownload(collectionId: ByteArray, objectId: ByteArray, offset: ULong, bytes: ByteArray): Boolean
     public suspend fun finishSharedDownload(collectionId: ByteArray, objectId: ByteArray, nowMs: Long): Boolean

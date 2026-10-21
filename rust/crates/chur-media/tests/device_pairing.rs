@@ -812,3 +812,305 @@ fn a_concurrent_ready_before_genesis_revocation_preserves_history_and_other_devi
             .is_ok()
     );
 }
+
+/// A source device S, a device T paired after the backup, and a restored device R
+/// whose pending approval T issued. R's local membership knows only S. With `extra`,
+/// T also enrolls a device U before it approves R.
+struct PeerWorld {
+    extra_device: Option<chur_core::Id>,
+    secret: chur_crypto::Key,
+    vault_id: chur_core::Id,
+    source: vault::Session,
+    source_device: chur_core::Id,
+    approver: vault::Session,
+    approver_device: chur_core::Id,
+    restored: vault::Session,
+    restored_root: VaultRoot,
+    restored_device: chur_core::Id,
+}
+fn peer_world(extra: bool) -> PeerWorld {
+    let source_root = root();
+    let mut source = vault::create(&source_root, PASSWORD, NOW)
+        .unwrap()
+        .activate()
+        .unwrap();
+    let secret = source.root_secret().unwrap().duplicate();
+    let vault_id = source.vault_id();
+    let (original, _) =
+        sync_receive::provision_local_identity(source.catalog().unwrap(), &secret, vault_id)
+            .unwrap();
+    let mut backup_bytes = Cursor::new(Vec::new());
+    backup::create(&mut source, &mut backup_bytes, NOW, &mut Uninterrupted).unwrap();
+    let restore = || {
+        let path = root();
+        backup::restore(
+            &path,
+            &mut Cursor::new(backup_bytes.get_ref().clone()),
+            PASSWORD,
+            &mut Uninterrupted,
+        )
+        .unwrap();
+        let session = vault::unlock_with_password(&path, PASSWORD, NOW + 1).unwrap();
+        (path, session)
+    };
+    let (approver_root, mut approver) = restore();
+    let approver_request =
+        device_pairing::prepare_request(approver.catalog().unwrap(), &secret, vault_id).unwrap();
+    let approval = device_pairing::approve(
+        source.catalog().unwrap(),
+        &secret,
+        vault_id,
+        &approver_request,
+        NOW + 2,
+    )
+    .unwrap();
+    device_pairing::accept_start(
+        approver.catalog().unwrap(),
+        &secret,
+        vault_id,
+        &approval.approval,
+    )
+    .unwrap();
+    receive_device(
+        source.catalog_ref().unwrap(),
+        original.device_id(),
+        &mut approver,
+        &approver_root,
+        &secret,
+        vault_id,
+    );
+    device_pairing::finalize(approver.catalog().unwrap(), &secret, vault_id, NOW + 3).unwrap();
+    let approver_device = *approver_request.device_id();
+    let extra_device = extra.then(|| {
+        let (extra_root, mut extra) = restore();
+        let request =
+            device_pairing::prepare_request(extra.catalog().unwrap(), &secret, vault_id).unwrap();
+        let approval = device_pairing::approve(
+            approver.catalog().unwrap(),
+            &secret,
+            vault_id,
+            &request,
+            NOW + 4,
+        )
+        .unwrap();
+        device_pairing::accept_start(
+            extra.catalog().unwrap(),
+            &secret,
+            vault_id,
+            &approval.approval,
+        )
+        .unwrap();
+        for (db, device) in [
+            (source.catalog_ref().unwrap(), *original.device_id()),
+            (approver.catalog_ref().unwrap(), approver_device),
+        ] {
+            receive_device(db, &device, &mut extra, &extra_root, &secret, vault_id);
+        }
+        device_pairing::finalize(extra.catalog().unwrap(), &secret, vault_id, NOW + 4).unwrap();
+        *request.device_id()
+    });
+    let (restored_root, mut restored) = restore();
+    let request =
+        device_pairing::prepare_request(restored.catalog().unwrap(), &secret, vault_id).unwrap();
+    let approval = device_pairing::approve(
+        approver.catalog().unwrap(),
+        &secret,
+        vault_id,
+        &request,
+        NOW + 4,
+    )
+    .unwrap();
+    device_pairing::accept_start(
+        restored.catalog().unwrap(),
+        &secret,
+        vault_id,
+        &approval.approval,
+    )
+    .unwrap();
+    PeerWorld {
+        extra_device,
+        secret,
+        vault_id,
+        source,
+        source_device: *original.device_id(),
+        approver,
+        approver_device,
+        restored,
+        restored_root,
+        restored_device: *request.device_id(),
+    }
+}
+/// Completes one loopback handshake and returns both peers.
+fn handshake(
+    listener_session: &mut vault::Session,
+    connector_session: &mut vault::Session,
+    world_secret: &chur_crypto::Key,
+    vault_id: chur_core::Id,
+) -> (Peer, Peer) {
+    let credential = device_pairing::peer_credential(
+        listener_session.catalog().unwrap(),
+        world_secret,
+        vault_id,
+    )
+    .unwrap();
+    let (mut listener, port, secret) = Peer::listen(LOOPBACK, credential).unwrap();
+    let credential = device_pairing::peer_credential(
+        connector_session.catalog().unwrap(),
+        world_secret,
+        vault_id,
+    )
+    .unwrap();
+    let mut connector = Peer::connect(LOOPBACK, port, secret, credential).unwrap();
+    complete(&mut listener, &mut connector);
+    (listener, connector)
+}
+fn complete(listener: &mut Peer, connector: &mut Peer) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "handshake did not finish"
+        );
+        let left = listener.poll().unwrap();
+        let right = connector.poll().unwrap();
+        if left && right {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+const LOOPBACK: std::net::IpAddr = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+use chur_media::peer_transport::Peer;
+
+#[test]
+fn a_pending_device_trusts_an_approver_enrolled_after_its_backup() {
+    let mut world = peer_world(false);
+    // R's local membership predates the approver; the newer approval authority governs.
+    let local = chur_catalog::sync_membership::load(world.restored.catalog_ref().unwrap())
+        .unwrap()
+        .unwrap();
+    assert!(!local.is_active(&world.approver_device));
+    let (listener, connector) = handshake(
+        &mut world.approver,
+        &mut world.restored,
+        &world.secret,
+        world.vault_id,
+    );
+    assert_eq!(listener.remote_device(), Some(&world.restored_device));
+    assert_eq!(connector.remote_device(), Some(&world.approver_device));
+    device_pairing::verify_peer(
+        world.restored.catalog_ref().unwrap(),
+        &world.secret,
+        world.vault_id,
+        &world.approver_device,
+    )
+    .expect("the approver is active in the newer approval authority");
+    device_pairing::verify_peer(
+        world.approver.catalog_ref().unwrap(),
+        &world.secret,
+        world.vault_id,
+        &world.restored_device,
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_device_revoked_during_the_invitation_window_is_refused_at_its_next_frame() {
+    let mut world = peer_world(false);
+    let credential = device_pairing::peer_credential(
+        world.approver.catalog().unwrap(),
+        &world.secret,
+        world.vault_id,
+    )
+    .unwrap();
+    let (mut listener, port, secret) = Peer::listen(LOOPBACK, credential).unwrap();
+    // The invitation is open with a key list that still holds R. R is revoked now.
+    device_pairing::prepare_revoke(
+        world.approver.catalog().unwrap(),
+        &world.secret,
+        world.vault_id,
+        world.restored_device,
+        NOW + 5,
+    )
+    .unwrap();
+    let credential = device_pairing::peer_credential(
+        world.restored.catalog().unwrap(),
+        &world.secret,
+        world.vault_id,
+    )
+    .unwrap();
+    let mut connector = Peer::connect(LOOPBACK, port, secret, credential).unwrap();
+    complete(&mut listener, &mut connector);
+    // The transport verified R against the earlier list; the per-call check refuses R.
+    assert_eq!(listener.remote_device(), Some(&world.restored_device));
+    assert_eq!(
+        device_pairing::verify_peer(
+            world.approver.catalog_ref().unwrap(),
+            &world.secret,
+            world.vault_id,
+            &world.restored_device,
+        )
+        .unwrap_err()
+        .status(),
+        chur_core::ChurStatus::AuthenticationFailed
+    );
+}
+
+#[test]
+fn an_older_approval_prefix_does_not_trust_a_device_revoked_later() {
+    let mut world = peer_world(true);
+    let revoked = world.extra_device.unwrap();
+    // T revokes U after its approval of R, and R downloads that newer membership.
+    device_pairing::prepare_revoke(
+        world.approver.catalog().unwrap(),
+        &world.secret,
+        world.vault_id,
+        revoked,
+        NOW + 5,
+    )
+    .unwrap();
+    for (db, device) in [
+        (world.source.catalog_ref().unwrap(), world.source_device),
+        (world.approver.catalog_ref().unwrap(), world.approver_device),
+    ] {
+        receive_device(
+            db,
+            &device,
+            &mut world.restored,
+            &world.restored_root,
+            &world.secret,
+            world.vault_id,
+        );
+    }
+    let local = chur_catalog::sync_membership::load(world.restored.catalog_ref().unwrap())
+        .unwrap()
+        .unwrap();
+    assert!(!local.is_active(&revoked));
+    // The approval authority still lists U as active; it is an older prefix and must lose.
+    let trusted = device_pairing::peer_membership(
+        world.restored.catalog_ref().unwrap(),
+        &world.secret,
+        world.vault_id,
+    )
+    .unwrap();
+    assert_eq!(trusted.generation(), local.generation());
+    assert!(!trusted.is_active(&revoked));
+    assert_eq!(
+        device_pairing::verify_peer(
+            world.restored.catalog_ref().unwrap(),
+            &world.secret,
+            world.vault_id,
+            &revoked,
+        )
+        .unwrap_err()
+        .status(),
+        chur_core::ChurStatus::AuthenticationFailed
+    );
+    device_pairing::verify_peer(
+        world.restored.catalog_ref().unwrap(),
+        &world.secret,
+        world.vault_id,
+        &world.approver_device,
+    )
+    .unwrap();
+}

@@ -261,6 +261,7 @@ dependencies = [
  "sha2",
  "subtle",
  "unicode-normalization",
+ "x25519-dalek",
  "zeroize",
 ]
 

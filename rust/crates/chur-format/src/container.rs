@@ -2572,6 +2572,13 @@ impl<R: ReadAt> StreamReader<R> {
         self.size
     }
 
+    /// Returns the source whose manifest and final commit this reader authenticated,
+    /// so a caller reads raw ciphertext from the same handle.
+    #[must_use]
+    pub fn into_source(self) -> R {
+        self.source
+    }
+
     /// The container version of the preamble.
     #[must_use]
     pub const fn version(&self) -> ContainerVersion {

@@ -297,6 +297,8 @@ fn sample_context(shape: ContextShape) -> Result<Context> {
         }
         ContextShape::ObjectMetadata => Context::object_metadata(&id(0x33)?, 1),
         ContextShape::Slot => Context::slot(&id(0x11)?, &id(0x55)?, 1),
+        ContextShape::PeerSession => Context::peer_session(&[0x66; 32], 1),
+        ContextShape::PeerTranscript => Context::peer_transcript(&[0x66; 32]),
     })
 }
 

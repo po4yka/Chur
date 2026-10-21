@@ -250,6 +250,12 @@ pub fn portable_identity_envelope(
     Ok(envelope)
 }
 
+/// Whether the active identity is a restored recovery-only identity.
+pub fn is_recovery_only(db: &CatalogDb, root: &Key, membership: &MembershipState) -> Result<bool> {
+    Ok(active_identity_envelope(db, root, membership)?
+        .is_some_and(|envelope| envelope.is_recovery_only()))
+}
+
 /// Loads and authenticates the ordinary local identity, when present.
 pub fn local_identity(
     db: &CatalogDb,

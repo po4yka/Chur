@@ -129,3 +129,4 @@ This list registers the decisions that still require an ADR. [`../ARCHITECTURE.m
 - post-quantum recipient profile per [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §56 and [`../sync/COLLECTION_GRANTS.md`](../sync/COLLECTION_GRANTS.md) §11.
 
 - [ADR-0065: Peer-only sync without accounts](0065-peer-only-sync-without-accounts.md) — excludes every service backend and limits synchronization to explicit direct foreground connections.
+- [ADR-0067: Signed peer transcript with X25519](0067-signed-peer-transcript-with-x25519.md) — authenticates each peer device with its enrolled key and adds an ephemeral X25519 exchange to the direct peer handshake.

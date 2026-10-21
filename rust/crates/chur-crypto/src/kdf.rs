@@ -47,6 +47,10 @@ pub enum ContextShape {
     ObjectMetadata,
     /// `vault_id`, `slot_id`, `slot_generation`.
     Slot,
+    /// `transcript_hash`, `direction`.
+    PeerSession,
+    /// `transcript_hash`.
+    PeerTranscript,
 }
 
 macro_rules! labels {
@@ -147,6 +151,11 @@ labels! {
     RecoveryRootEnvelope = "chur/v1/recovery/root-envelope", Slot;
     /// Wraps the root under a Keychain-held secret. Input: `DeviceUnlockSecret`.
     SlotAppleDeviceKek = "chur/v1/slot/apple-device-kek", Slot;
+
+    /// Encrypts one direction of a direct peer session. Input: `PeerHandshakeSecret`.
+    PeerSession = "chur/v1/peer/session", PeerSession;
+    /// Binds signed peer authentication to one session. Input: `PeerHandshakeSecret`.
+    PeerTranscriptBinding = "chur/v1/peer/transcript-binding", PeerTranscript;
 }
 
 /// The encoded context elements of one derivation.
@@ -271,6 +280,27 @@ impl Context {
         }
     }
 
+    /// `transcript_hash`, `direction`: one direction of a direct peer session.
+    #[must_use]
+    pub fn peer_session(transcript_hash: &[u8; 32], direction: u8) -> Self {
+        let mut elements = Vec::with_capacity(33);
+        elements.extend_from_slice(transcript_hash);
+        elements.push(direction);
+        Self {
+            shape: ContextShape::PeerSession,
+            elements,
+        }
+    }
+
+    /// `transcript_hash`: the handshake of one direct peer session.
+    #[must_use]
+    pub fn peer_transcript(transcript_hash: &[u8; 32]) -> Self {
+        Self {
+            shape: ContextShape::PeerTranscript,
+            elements: transcript_hash.to_vec(),
+        }
+    }
+
     /// The element list this context carries.
     #[must_use]
     pub const fn shape(&self) -> ContextShape {
@@ -345,8 +375,8 @@ mod tests {
     }
 
     #[test]
-    fn the_registry_holds_twenty_nine_labels() {
-        assert_eq!(Label::ALL.len(), 29);
+    fn the_registry_holds_thirty_one_labels() {
+        assert_eq!(Label::ALL.len(), 31);
         assert!(Label::ALL.contains(&Label::RootSyncOperations));
         assert!(Label::ALL.contains(&Label::RootSyncSelector));
         assert!(Label::ALL.contains(&Label::CollectionSyncOperations));
@@ -366,7 +396,7 @@ mod tests {
             assert!(
                 matches!(
                     segments[2],
-                    "root" | "collection" | "object" | "recovery" | "slot"
+                    "root" | "collection" | "object" | "recovery" | "slot" | "peer"
                 ),
                 "{text} names an unregistered tier"
             );
@@ -417,11 +447,13 @@ mod tests {
                 ContextShape::DerivedAsset => Context::derived_asset(&id(3), 2, 1, 1),
                 ContextShape::ObjectMetadata => Context::object_metadata(&id(3), 1),
                 ContextShape::Slot => Context::slot(&id(1), &id(5), 1),
+                ContextShape::PeerSession => Context::peer_session(&[6; 32], 1),
+                ContextShape::PeerTranscript => Context::peer_transcript(&[6; 32]),
             };
             let key = derive(&input, *label, &context).unwrap();
             assert!(keys.insert(*key.expose()), "{} collides", label.as_str());
         }
-        assert_eq!(keys.len(), 29);
+        assert_eq!(keys.len(), 31);
     }
 
     #[test]

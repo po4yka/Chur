@@ -163,6 +163,7 @@ The complete platform documents are [`ANDROID.md`](ANDROID.md) and [`IOS.md`](IO
 ## Direct peer synchronization
 
 - [`adr/0065-peer-only-sync-without-accounts.md`](adr/0065-peer-only-sync-without-accounts.md) — no accounts or services; direct foreground P2P only.
+- [`adr/0067-signed-peer-transcript-with-x25519.md`](adr/0067-signed-peer-transcript-with-x25519.md) — peer protocol version 2: signed device transcript and X25519.
 - [`sync/DEVICE_PAIRING.md`](sync/DEVICE_PAIRING.md) — device enrollment and pairing.
 - [`sync/OBJECT_KEY_GRANTS.md`](sync/OBJECT_KEY_GRANTS.md) — current object-key grant protocol.
 

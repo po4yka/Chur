@@ -150,19 +150,7 @@ internal expect object ChurNative {
         outWritten: IntArray,
     ): Int
 
-    fun sharingObjectRead(
-        session: Long,
-        objectId: ByteArray,
-        offset: Long,
-        maxBytes: Int,
-        destination: ChurBuffer,
-        outWritten: IntArray,
-        rangeSha256: ByteArray,
-    ): Int
-
     fun objectKeyRequest(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int
-
-    fun objectKeyIssue(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int
 
     fun objectKeyAccept(session: Long, input: ChurBuffer, length: Int, destination: ChurBuffer, outWritten: IntArray): Int
 
