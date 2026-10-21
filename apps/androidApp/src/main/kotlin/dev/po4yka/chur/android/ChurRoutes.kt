@@ -1175,6 +1175,7 @@ private fun VaultRoute(controller: ChurController) {
     if (showingPrivateNotes) {
         PrivateNotesRoute(
             vault = controller.vault, generation = generation,
+            lockOwner = controller,
             initialCreateRequest = privateNoteCreateRequest,
             onNavigationBusyChange = { privateNotesBusy = it },
             onClose = { focusManager.clearFocus(); showingPrivateNotes = false; privateNoteCreateRequest = null },

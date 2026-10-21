@@ -111,6 +111,8 @@ Panic lock performs the same security transition immediately. It is not a data d
 
 Both ordinary and panic lock conceal private content and clear feature projections before waiting for native work to drain. Pending creation, recovery, and private metadata results belong to the session epoch that requested them and must not restore a phrase, private route, or projection after that epoch ends. Native lock completion remains necessary before another session may be used.
 
+After the concealment, an ordinary lock saves an open private note with unsaved text before the native close. The save must start within 2 seconds; a native call that already started finishes first ([Private notes](PRIVATE_NOTES.md)). Panic lock does not wait for a save: it ends the save wait of an earlier lock, starts no save, and the unsaved text is lost. Only a native call that is already in progress delays the panic close.
+
 ### The panic gesture
 
 The panic transition is bound to **a long press on the lock control**, and an ordinary press performs the ordinary lock. The lock stays visible when viewer controls are hidden. Private dialogs, sheets, and popup menus also offer Lock and hide, so hiding content never requires dismissing another surface first.

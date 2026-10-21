@@ -394,6 +394,9 @@ class ChurController(
     /** The repository, for a host flow that drives operations itself. */
     val vault: VaultRepository get() = repository
 
+    /** Unsaved private-note text that an ordinary lock saves first, `PRIVATE_NOTES.md`. */
+    internal val lockDrafts = LockDrafts()
+
     /**
      * Opens the runtime, loads the public shell, and starts the idle timer.
      *
@@ -988,11 +991,24 @@ class ChurController(
         null
     }
 
-    /** Conceals on the caller's UI turn; native cleanup must never delay the public screen. */
+    /**
+     * Conceals on the caller's UI turn; native cleanup must never delay the
+     * public screen. An open private note with unsaved text is captured
+     * before the concealment and saved after it, before the native close,
+     * within the bound of [LockDrafts]. The panic reason captures nothing
+     * and ends the save wait of an earlier lock, so it never waits for a
+     * save that has not started, `DISCREET_MODE.md`.
+     */
     fun lock(reason: LockReason = LockReason.USER) {
+        val drafts = if (reason == LockReason.PANIC) {
+            lockDrafts.abort()
+            emptyList()
+        } else {
+            lockDrafts.capture()
+        }
         concealPrivateSession()
         enablePrivacyCover()
-        queueNativeLock(reason)
+        queueNativeLock(reason, drafts)
     }
 
     /** The same immediate concealment, recorded by Rust with the panic reason. */
@@ -1016,7 +1032,7 @@ class ChurController(
         setRoute(if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell)
     }
 
-    private fun queueNativeLock(reason: LockReason) {
+    private fun queueNativeLock(reason: LockReason, drafts: List<LockDrafts.Save> = emptyList()) {
         val previous = pendingLock
         val epoch = lockEpoch
         val token = ++cleanupToken
@@ -1026,13 +1042,24 @@ class ChurController(
             // Native calls are synchronous and cannot be cancelled. Their
             // tickets end before teardown; public masking already happened.
             entriesBeforeLock.forEach { it.await() }
+            // The session is still open for the captured saves. No save
+            // starts after their bound; one native call that started in it
+            // ends before the close can take the repository mutex.
+            val interrupted = try {
+                lockDrafts.save(drafts)
+                null
+            } catch (failure: Throwable) {
+                failure
+            }
             // Provider or filesystem revocation can fail. The native session
             // must still close; a failure keeps the cover enabled and is
-            // reported by the controller's exception handler.
-            try {
-                exports.cancelPending()
-            } finally {
-                closeNativeSession(reason)
+            // reported by the controller's exception handler. An interrupted
+            // save wait still closes, and its failure follows the close.
+            if (interrupted == null) {
+                closeAfterLockSaves(reason)
+            } else {
+                withContext(NonCancellable) { closeAfterLockSaves(reason) }
+                throw interrupted
             }
             // An earlier cleanup may finish after another lock, but must
             // never remove the newer transition's privacy cover. A failed
@@ -1041,6 +1068,14 @@ class ChurController(
                 privacy.setEnabled(needsPrivacyCover(repository.state.value, _route.value, _recoveryPhrase.value != null))
                 launcherLocking = false
             }
+        }
+    }
+
+    private suspend fun closeAfterLockSaves(reason: LockReason) {
+        try {
+            exports.cancelPending()
+        } finally {
+            closeNativeSession(reason)
         }
     }
 
@@ -1241,15 +1276,26 @@ class ChurController(
      * also works on the host: the iOS fetch of an iCloud original, the
      * opening of each picked item, and its previews. Under the 30-second
      * choice such a phase locked the vault and dropped the rest of the pick.
+     *
+     * Unsaved private-note text is captured after the idle decision, and
+     * saved after the concealment and before the close, within the bound of
+     * [LockDrafts], as at every ordinary lock.
      */
     suspend fun checkIdle() {
         withContext(NonCancellable) {
             var concealedEpoch: Long? = null
             var concealedRoute: AppRoute? = null
+            var drafts = emptyList<LockDrafts.Save>()
+            // An open private editor moves the concealment out of the
+            // repository mutex, so its save can run after it and before the close.
+            val beforeClose: (suspend () -> Unit)? = if (!lockDrafts.active) null else {
+                { withContext(NonCancellable + Dispatchers.Main) { lockDrafts.save(drafts) } }
+            }
             if (withContext(Dispatchers.Default) {
                 if (_activeOperation.value?.let { !it.cancelling && it.name != "external-archive" } == true) repository.noteActivity()
-                repository.lockIfIdle {
+                repository.lockIfIdle(beforeClose) {
                     withContext(NonCancellable + Dispatchers.Main) {
+                        drafts = lockDrafts.capture()
                         concealPrivateSession()
                         concealedEpoch = lockEpoch
                         concealedRoute = _route.value

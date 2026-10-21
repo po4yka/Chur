@@ -37,6 +37,10 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.po4yka.chur.app.AppRoute
 import dev.po4yka.chur.app.ChurApp
+import dev.po4yka.chur.app.ChurController
+import dev.po4yka.chur.app.ExportSink
+import dev.po4yka.chur.app.ExportTarget
+import dev.po4yka.chur.app.NoPrivacyCover
 import dev.po4yka.chur.app.notes.NotesScreen
 import dev.po4yka.chur.app.vault.PrivateNotesRoute
 import dev.po4yka.chur.ffi.LockReason
@@ -146,7 +150,7 @@ class PrivateNotesAndroidTest {
     @Test
     fun explicit_save_routes_to_native_notes_without_changing_public_notes_or_saved_state() = present { fixture ->
         fixture.create("Public synthetic title", "Public synthetic body for native notes")
-        assertTrue(fixture.await { fixture.hasText("Unsaved changes are cleared") })
+        assertTrue(fixture.await { fixture.hasText("Lock saves unsaved changes.") })
         assertTrue(fixture.savedState().isEmpty())
         fixture.clickTag("private-note-save")
         assertTrue(fixture.await { fixture.hasText("Saved in this vault.") })
@@ -244,15 +248,37 @@ class PrivateNotesAndroidTest {
         assertTrue(runBlocking { fixture.vault.privateNotes(fixture.generation).notes.isEmpty() })
     }
 
+    @Test
+    fun the_lock_control_saves_the_open_unsaved_note_and_lock_and_hide_does_not() = present { fixture ->
+        fixture.create("Lock save synthetic title", "LOCK_SAVED_FIXTURE_5b21")
+        assertTrue(fixture.await { fixture.hasText("Lock saves unsaved changes.") })
+        fixture.clickDescription("Lock now")
+        assertTrue(fixture.await { fixture.hasText("Public fixture note") })
+        runBlocking { fixture.vault.unlock(PASSWORD.encodeToByteArray()) }
+        val saved = runBlocking { fixture.vault.privateNotes(fixture.generation).notes }
+        assertEquals(1, saved.size)
+        val note = runBlocking { fixture.vault.privateNote(fixture.generation, saved.single().noteId) }
+        assertEquals("LOCK_SAVED_FIXTURE_5b21", note.body)
+        assertTrue(fixture.await { fixture.hasText("Lock save synthetic title") })
+        fixture.create("Panic synthetic title", "PANIC_DROPPED_FIXTURE_91c4")
+        // A long press on the lock control is the panic lock.
+        fixture.longClickDescription("Lock now")
+        assertTrue(fixture.await { fixture.hasText("Public fixture note") })
+        runBlocking { fixture.vault.unlock(PASSWORD.encodeToByteArray()) }
+        assertEquals(1, runBlocking { fixture.vault.privateNotes(fixture.generation).notes }.size)
+    }
+
     private fun present(fontScale: Float = 1f, prepare: suspend (VaultRepository) -> Unit = {}, test: (Fixture) -> Unit) {
         val root = File(instrumentation.targetContext.cacheDir, "private-notes-ui-${System.nanoTime()}").apply { mkdirs() }
-        val vault = VaultRepository(File(root, "vault").path, { System.currentTimeMillis() })
+        // The controller owns the ordinary lock and its save of unsaved private text.
+        val controller = ChurController(File(root, "vault").path, NoPrivacyCover, UnusedExports, clock = { System.currentTimeMillis() })
+        val vault = controller.vault
         val publicFile = File(root, "public/notes.json")
         val publicStore = FileNoteStore(publicFile.path)
         runBlocking { publicStore.put(PUBLIC_NOTE); vault.start(); vault.create(PASSWORD.encodeToByteArray(), false); prepare(vault) }
         val activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
-        val fixture = Fixture(activity, vault, publicFile, publicStore)
+        val fixture = Fixture(activity, controller, vault, publicFile, publicStore)
         try {
             fixture.main {
                 val density = activity.resources.displayMetrics.density
@@ -266,8 +292,9 @@ class PrivateNotesAndroidTest {
                             val state by vault.state.collectAsState()
                             ChurApp(runGate(activity), if (state is VaultState.Unlocked) AppRoute.Vault else AppRoute.PublicShell) {
                                 if (state is VaultState.Unlocked) PrivateNotesRoute(vault, (state as VaultState.Unlocked).generation,
-                                    onClose = {}, onLock = { fixture.scope.launch { vault.lock(LockReason.USER) } },
-                                    onPanic = { fixture.scope.launch { vault.lock(LockReason.PANIC) } }, onTouch = {}, onExport = {}, systemBack = { _, _ -> })
+                                    onClose = {}, onLock = { controller.lock() },
+                                    onPanic = { fixture.scope.launch { vault.lock(LockReason.PANIC) } }, onTouch = {}, onExport = {}, systemBack = { _, _ -> },
+                                    lockOwner = controller)
                                 else NotesScreen(listOf(PUBLIC_NOTE), "", {}, {}, {}, {})
                             }
                         }
@@ -284,7 +311,7 @@ class PrivateNotesAndroidTest {
         }
     }
 
-    private inner class Fixture(val activity: MainActivity, val vault: VaultRepository, val publicFile: File, val publicStore: FileNoteStore) {
+    private inner class Fixture(val activity: MainActivity, val controller: ChurController, val vault: VaultRepository, val publicFile: File, val publicStore: FileNoteStore) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         val registry = SaveableStateRegistry(null) { true }
         val generation get() = (vault.state.value as VaultState.Unlocked).generation
@@ -312,6 +339,13 @@ class PrivateNotesAndroidTest {
             }
             assertTrue("enabled button with description: $text", await { clickable() != null })
             main { assertTrue(requireNotNull(clickable()).config[SemanticsActions.OnClick].action?.invoke() == true) }
+        }
+        fun longClickDescription(text: String) {
+            fun pressable() = nodes(merged = true).firstOrNull {
+                it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(text) == true && SemanticsActions.OnLongClick in it.config
+            }
+            assertTrue("long-pressable control with description: $text", await { pressable() != null })
+            main { assertTrue(requireNotNull(pressable()).config[SemanticsActions.OnLongClick].action?.invoke() == true) }
         }
         fun clickText(text: String) {
             fun clickable() = nodes(merged = true).firstOrNull {
@@ -402,5 +436,12 @@ class PrivateNotesAndroidTest {
     private companion object {
         const val PASSWORD = "Private-notes-android-fixture-password"
         val PUBLIC_NOTE = Note("public-fixture", "Public fixture note", "Public JSON stays independent", 1L)
+    }
+
+    private object UnusedExports : ExportSink {
+        override fun cancelPending() = Unit
+        override fun create(displayName: String, contentType: String): ExportSink.Destination? = error("No export in this test")
+        override fun create(displayName: String, contentType: String, target: ExportTarget, uri: String?): ExportSink.Destination? =
+            error("No export in this test")
     }
 }

@@ -316,7 +316,7 @@ private fun PrivateNoteEditor(editor: PrivateNoteEditorState, actions: PrivateNo
                     Checkbox(checked = editor.pinned, onCheckedChange = actions::pinned, enabled = !busy)
                     Text("Pinned", color = colors.ink)
                 }
-                Text(if (editor.dirty) "Unsaved changes are cleared when the vault locks."
+                Text(if (editor.dirty) "Lock saves unsaved changes. Lock and hide clears them."
                     else if (editor.saved != null) "Saved in this vault." else "Save to keep this note in the vault.",
                     style = MaterialTheme.typography.bodySmall, color = colors.inkMuted)
             }

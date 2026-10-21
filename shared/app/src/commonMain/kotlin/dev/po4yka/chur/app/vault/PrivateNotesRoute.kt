@@ -16,6 +16,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import dev.po4yka.chur.app.ActiveOperation
+import dev.po4yka.chur.app.ChurController
+import dev.po4yka.chur.app.LockDrafts
 import dev.po4yka.chur.app.Notice
 import dev.po4yka.chur.app.PrivateNotesController
 import dev.po4yka.chur.ffi.PrivateNote
@@ -43,6 +45,7 @@ fun PrivateNotesRoute(
     onNavigationBusyChange: (Boolean) -> Unit = {},
     onImportActivity: (Boolean) -> Unit = {},
     onAttachmentExport: (PrivateNote, dev.po4yka.chur.ffi.PrivateNoteAttachment) -> Unit = { _, _ -> },
+    lockOwner: ChurController? = null,
 ) {
     val scope = rememberCoroutineScope()
     val close by rememberUpdatedState(onClose)
@@ -53,7 +56,11 @@ fun PrivateNotesRoute(
     val controller = remember(vault, generation) {
         PrivateNotesController(vault, generation, scope, { close() }, { export(it) }, { touch() }, { encryptedExport(it) }, { note, attachment -> attachmentExport(note, attachment) })
     }
-    DisposableEffect(controller) { onDispose { controller.close() } }
+    DisposableEffect(controller, lockOwner) {
+        // An ordinary lock of [lockOwner] saves the open unsaved text before the session closes.
+        val unregister = lockOwner?.lockDrafts?.register(LockDrafts.Source(controller::captureForLock))
+        onDispose { unregister?.invoke(); controller.close() }
+    }
     val session by vault.state.collectAsState()
     val state by controller.state.collectAsState()
     if ((session as? VaultState.Unlocked)?.generation != generation) return

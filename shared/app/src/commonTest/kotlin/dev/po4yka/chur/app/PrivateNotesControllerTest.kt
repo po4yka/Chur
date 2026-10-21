@@ -504,6 +504,158 @@ class PrivateNotesControllerTest {
         onEncryptedExport: (List<PrivateNoteSelection>) -> Unit = {}): PrivateNotesController =
         PrivateNotesController(1, state, access, this, onLeave, onExport, StandardTestDispatcher(testScheduler), onActivity, onEncryptedExport)
 
+    private fun kotlinx.coroutines.test.TestScope.lockDrafts(vararg controllers: PrivateNotesController): LockDrafts =
+        LockDrafts(LOCK_DRAFT_SAVE_BOUND_MS, StandardTestDispatcher(testScheduler)).also { drafts ->
+            controllers.forEach { drafts.register(LockDrafts.Source(it::captureForLock)) }
+        }
+
+    @Test
+    fun a_lock_saves_edited_text_as_a_new_revision_before_it_ends() = runTest {
+        val access = Access().apply { strictRevision = true }
+        val controller = controller(access)
+        val drafts = lockDrafts(controller)
+        controller.open(summary(access.record)); advanceUntilIdle()
+        controller.body("Edited before the lock")
+        val saves = drafts.capture()
+        assertEquals(1, saves.size)
+        assertTrue(drafts.save(saves))
+        assertEquals(1, access.saves)
+        assertEquals(2, access.record.revision)
+        assertEquals("Edited before the lock", access.record.body)
+        assertEquals(0, drafts.lost)
+        controller.close()
+    }
+
+    @Test
+    fun a_lock_writes_nothing_for_a_clean_note_or_a_new_empty_editor() = runTest {
+        val access = Access()
+        val list = controller(access)
+        val clean = controller(access)
+        val empty = controller(access)
+        clean.open(summary(access.record)); advanceUntilIdle()
+        empty.create()
+        val drafts = lockDrafts(list, clean, empty)
+        assertTrue(drafts.capture().isEmpty())
+        assertTrue(drafts.save(drafts.capture()))
+        assertEquals(0, access.saves)
+        listOf(list, clean, empty).forEach { it.close() }
+    }
+
+    @Test
+    fun the_capture_is_the_last_action_so_a_new_note_is_saved_once() = runTest {
+        val access = Access()
+        val controller = controller(access)
+        val drafts = lockDrafts(controller)
+        controller.create()
+        controller.body("Never saved before")
+        val saves = drafts.capture()
+        assertEquals(1, saves.size)
+        // A second lock, a tap on Save, and further typing all come too late.
+        assertTrue(drafts.capture().isEmpty())
+        controller.save(); controller.body("Typed after the lock"); advanceUntilIdle()
+        assertEquals(0, access.saves)
+        assertTrue(drafts.save(saves))
+        assertEquals(1, access.saves)
+        assertEquals("Never saved before", access.record.body)
+        controller.close()
+    }
+
+    @Test
+    fun a_lock_save_with_a_stale_revision_keeps_the_newer_revision() = runTest {
+        val access = Access().apply { strictRevision = true }
+        val controller = controller(access)
+        val drafts = lockDrafts(controller)
+        controller.open(summary(access.record)); advanceUntilIdle()
+        controller.body("Stale editor text")
+        // Another writer committed a newer revision after the editor opened.
+        access.record = access.record.copy(revision = 7, body = "Newer saved body")
+        assertFalse(drafts.save(drafts.capture()))
+        assertEquals(7, access.record.revision)
+        assertEquals("Newer saved body", access.record.body)
+        assertEquals(1, drafts.lost)
+        controller.close()
+    }
+
+    @Test
+    fun a_native_save_that_does_not_return_stops_the_wait_at_the_bound() = runTest {
+        val access = Access()
+        val controller = controller(access)
+        val drafts = lockDrafts(controller)
+        controller.open(summary(access.record)); advanceUntilIdle()
+        controller.body("Edited text")
+        access.saveGate = CompletableDeferred()
+        val started = testScheduler.currentTime
+        assertFalse(drafts.save(drafts.capture()))
+        assertEquals(LOCK_DRAFT_SAVE_BOUND_MS, testScheduler.currentTime - started)
+        assertEquals(1, drafts.lost)
+        access.saveGate!!.complete(Unit); advanceUntilIdle()
+        controller.close()
+    }
+
+    @Test
+    fun a_save_still_waiting_for_the_repository_at_the_bound_never_starts() = runTest {
+        val access = Access()
+        val controller = controller(access)
+        val drafts = lockDrafts(controller)
+        controller.open(summary(access.record)); advanceUntilIdle()
+        controller.body("Edited text")
+        access.mutexGate = CompletableDeferred()
+        assertFalse(drafts.save(drafts.capture()))
+        // The repository becomes free only after the lock stopped waiting.
+        access.mutexGate!!.complete(Unit); advanceUntilIdle()
+        assertEquals(1, access.saves)
+        assertEquals(0, access.writes)
+        assertEquals("Saved body", access.record.body)
+        controller.close()
+    }
+
+    @Test
+    fun a_panic_ends_the_wait_of_an_earlier_lock_and_its_save_never_starts() = runTest {
+        val access = Access()
+        val controller = controller(access)
+        val drafts = lockDrafts(controller)
+        controller.open(summary(access.record)); advanceUntilIdle()
+        controller.body("Edited text")
+        access.mutexGate = CompletableDeferred()
+        val result = async { drafts.save(drafts.capture()) }
+        advanceTimeBy(100); runCurrent()
+        val panicAt = testScheduler.currentTime
+        drafts.abort()
+        runCurrent()
+        assertTrue(result.isCompleted)
+        assertFalse(result.await())
+        assertEquals(panicAt, testScheduler.currentTime)
+        access.mutexGate!!.complete(Unit); advanceUntilIdle()
+        assertEquals(0, access.writes)
+        assertEquals("Saved body", access.record.body)
+        controller.close()
+    }
+
+    @Test
+    fun any_failure_of_a_save_is_a_lost_edit_and_never_escapes_the_lock() = runTest {
+        val drafts = LockDrafts(LOCK_DRAFT_SAVE_BOUND_MS, StandardTestDispatcher(testScheduler))
+        val failures = listOf<Throwable>(IllegalStateException("failure"), AssertionError("error"),
+            kotlinx.coroutines.CancellationException("cancelled"))
+        assertFalse(drafts.save(failures.map { failure -> LockDrafts.Save { throw failure } }))
+        assertEquals(3, drafts.lost)
+    }
+
+    @Test
+    fun a_busy_editor_captures_nothing_because_its_action_owns_the_write() = runTest {
+        val access = Access()
+        val controller = controller(access)
+        val drafts = lockDrafts(controller)
+        controller.create()
+        controller.body("New note")
+        access.saveGate = CompletableDeferred()
+        controller.save(); runCurrent()
+        assertTrue(controller.state.value.busy)
+        assertTrue(drafts.capture().isEmpty())
+        access.saveGate!!.complete(Unit); advanceUntilIdle()
+        assertEquals(1, access.saves)
+        controller.close()
+    }
+
     @Test
     fun organization_is_explicit_filters_reach_storage_and_history_restore_replaces_current_editor() = runTest {
         val access = Access()
@@ -581,6 +733,11 @@ class PrivateNotesControllerTest {
         var loads = 0
         var saveFailure: ChurStatus? = null
         var saveGate: CompletableDeferred<Unit>? = null
+        /** Rejects a save whose expected revision is not the stored one, as Rust does. */
+        var strictRevision = false
+        /** Holds a save before the repository mutex, where `proceed` is checked. */
+        var mutexGate: CompletableDeferred<Unit>? = null
+        var writes = 0
         var paged = false
         var secondRecord: PrivateNote? = null
         val queries = mutableListOf<String>()
@@ -593,11 +750,15 @@ class PrivateNotesControllerTest {
                 if (paged && cursor == null) byteArrayOf(1) else null)
         }
         override suspend fun load(generation: Long, id: ByteArray): PrivateNote { loads++; return record }
-        override suspend fun save(generation: Long, saved: PrivateNote?, title: String, body: String, pinned: Boolean, format: dev.po4yka.chur.ffi.PrivateNoteFormat): PrivateNote {
+        override suspend fun save(generation: Long, saved: PrivateNote?, title: String, body: String, pinned: Boolean, format: dev.po4yka.chur.ffi.PrivateNoteFormat, proceed: () -> Boolean): PrivateNote {
             saves++
+            mutexGate?.let { withContext(NonCancellable) { it.await() } }
+            if (!proceed()) throw ChurFailure(ChurStatus.VAULT_LOCKED, "private note")
             saveGate?.let { withContext(NonCancellable) { it.await() } }
             saveFailure?.let { throw ChurFailure(it, "private note") }
+            if (strictRevision && saved != null && saved.revision != record.revision) throw ChurFailure(ChurStatus.CONFLICT, "private note")
             record = record.copy(revision = (saved?.revision ?: 0) + 1, title = title, body = body, pinned = pinned, format = format)
+            writes++
             return record
         }
         val files = mutableMapOf<String, dev.po4yka.chur.ffi.PrivateNoteAttachmentData>()
