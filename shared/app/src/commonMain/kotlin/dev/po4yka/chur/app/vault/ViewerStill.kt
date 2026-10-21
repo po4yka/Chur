@@ -40,12 +40,8 @@ internal fun stillSources(projection: ObjectProjection, highResolution: Boolean 
     MEDIA_CLASS_AUDIO -> listOf(StreamKind.SCREEN_PREVIEW, StreamKind.GRID_PREVIEW, StreamKind.THUMBNAIL)
     MEDIA_CLASS_IMAGE -> buildList {
         if (!highResolution) add(StreamKind.SCREEN_PREVIEW)
-        val edge = maxOf(projection.width, projection.height)
-        if (edge in 1..(if (highResolution) dev.po4yka.chur.imports.MediaBounds.IMAGE_EDGE_MAX else ORIGINAL_EDGE_MAX) &&
-            projection.width.toLong() * projection.height <= dev.po4yka.chur.imports.MediaBounds.IMAGE_AREA_MAX &&
-            projection.plaintextSize in 1..ORIGINAL_BYTES_MAX &&
-            PresentedState.of(projection) != PresentedState.QUARANTINED
-        ) {
+        if (originalImageCandidate(projection) &&
+            (highResolution || maxOf(projection.width, projection.height) <= ORIGINAL_EDGE_MAX)) {
             add(StreamKind.ORIGINAL)
         }
         if (highResolution) add(StreamKind.SCREEN_PREVIEW)
@@ -73,10 +69,6 @@ suspend fun viewerStill(
     highResolution: Boolean = false,
 ): ImageBitmap? {
     val sources = stillSources(projection, highResolution)
-    if (highResolution && projection.mediaKind == MEDIA_CLASS_IMAGE && StreamKind.ORIGINAL !in sources &&
-        PresentedState.of(projection) != PresentedState.QUARANTINED) {
-        decodeOriginal(vault, projection.objectId, ZOOM_EDGE_MAX)?.let { return it }
-    }
     for (kind in sources) {
         val image = if (kind == StreamKind.ORIGINAL) {
             decodeOriginal(vault, projection.objectId, if (highResolution) ZOOM_EDGE_MAX else ORIGINAL_EDGE_MAX)
@@ -85,8 +77,21 @@ suspend fun viewerStill(
         }
         if (image != null) return image
     }
+    // Peer sync transfers originals only. Decode a bounded still when this host
+    // has no derivatives, including images larger than the preview edge.
+    if (StreamKind.ORIGINAL !in sources && originalImageCandidate(projection)) {
+        return decodeOriginal(vault, projection.objectId, if (highResolution) ZOOM_EDGE_MAX else ORIGINAL_EDGE_MAX)
+    }
     return null
 }
+
+internal fun originalImageCandidate(projection: ObjectProjection): Boolean =
+    projection.mediaKind == MEDIA_CLASS_IMAGE &&
+        projection.width in 1..dev.po4yka.chur.imports.MediaBounds.IMAGE_EDGE_MAX &&
+        projection.height in 1..dev.po4yka.chur.imports.MediaBounds.IMAGE_EDGE_MAX &&
+        projection.width.toLong() * projection.height <= dev.po4yka.chur.imports.MediaBounds.IMAGE_AREA_MAX &&
+        projection.plaintextSize in 1..ORIGINAL_BYTES_MAX &&
+        PresentedState.of(projection) != PresentedState.QUARANTINED
 
 /**
  * Decodes the original of a small photograph, or `null` when it cannot.
@@ -106,7 +111,7 @@ suspend fun viewerStill(
  * clears it after the decode; the decoder's own buffers are not cleared,
  * `PLAINTEXT_LIFECYCLE.md` §9. Nothing reaches the disk, `MEDIA_PIPELINE.md` §8.
  */
-private suspend fun decodeOriginal(vault: VaultRepository, objectId: ByteArray, maxEdgePx: Int): ImageBitmap? =
+internal suspend fun decodeOriginal(vault: VaultRepository, objectId: ByteArray, maxEdgePx: Int): ImageBitmap? =
     withContext(Dispatchers.Default) {
         val reader = try {
             vault.leaseReader(objectId)

@@ -3,8 +3,10 @@ package dev.po4yka.chur.app.vault
 import androidx.compose.ui.graphics.ImageBitmap
 import dev.po4yka.chur.ffi.ChurBuffer
 import dev.po4yka.chur.ffi.ChurFailure
+import dev.po4yka.chur.ffi.ObjectProjection
 import dev.po4yka.chur.ffi.StreamKind
 import dev.po4yka.chur.vault.VaultRepository
+import dev.po4yka.chur.vault.VaultState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -81,6 +83,24 @@ class ThumbnailCache internal constructor(
         rendition: ThumbnailRendition = ThumbnailRendition.Plain,
     ): ImageBitmap? = load(generation, id, kind, rendition) { repository.readDerived(objectId, kind) }
 
+    /** Peer sync has no derivatives. Cache only a bounded, session-scoped raster. */
+    suspend fun loadOriginal(
+        repository: VaultRepository,
+        generation: Long,
+        projection: ObjectProjection,
+        rendition: ThumbnailRendition = ThumbnailRendition.Plain,
+    ): ImageBitmap? {
+        if (!originalImageCandidate(projection) ||
+            (repository.state.value as? VaultState.Unlocked)?.generation != generation) return null
+        return loadRendered(generation, projection.id, StreamKind.ORIGINAL, rendition) {
+            val decoded = decodeOriginal(repository, projection.objectId, 320) ?: return@loadRendered null
+            when (rendition) {
+                ThumbnailRendition.Plain -> decoded
+                ThumbnailRendition.Mosaic -> thumbnailMosaic(decoded)
+            }
+        }
+    }
+
     /** Internal source seam also permits deterministic checks of lock races. */
     internal suspend fun load(
         generation: Long,
@@ -88,6 +108,24 @@ class ThumbnailCache internal constructor(
         kind: StreamKind = StreamKind.THUMBNAIL,
         rendition: ThumbnailRendition = ThumbnailRendition.Plain,
         read: suspend () -> ByteArray,
+    ): ImageBitmap? {
+        val loadEpoch = epoch.value
+        return loadRendered(generation, id, kind, rendition) {
+            val bytes = read()
+            try {
+                if (epoch.value != loadEpoch) return@loadRendered null
+                currentCoroutineContext().ensureActive()
+                render(bytes, rendition)
+            } finally { bytes.fill(0) }
+        }
+    }
+
+    internal suspend fun loadRendered(
+        generation: Long,
+        id: String,
+        kind: StreamKind,
+        rendition: ThumbnailRendition,
+        decode: suspend () -> ImageBitmap?,
     ): ImageBitmap? {
         currentCoroutineContext().ensureActive()
         val key = Key(generation, id, kind, rendition)
@@ -103,16 +141,9 @@ class ThumbnailCache internal constructor(
         }
         val image = try {
             withContext(dispatcher) {
-                val bytes = read()
-                try {
-                    // A lock during the read needs no decode or raster allocation.
-                    if (epoch.value != loadEpoch) return@withContext null
-                    currentCoroutineContext().ensureActive()
-                    render(bytes, rendition)
-                } finally {
-                    // Clear on this dispatcher, including cancellation at its return boundary.
-                    bytes.fill(0)
-                }
+                if (epoch.value != loadEpoch) return@withContext null
+                currentCoroutineContext().ensureActive()
+                decode()
             }
         } catch (_: ChurFailure) {
             null

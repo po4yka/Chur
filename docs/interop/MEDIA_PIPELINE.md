@@ -344,6 +344,14 @@ played again. The player retains one displayed raster. Animation sources remain
 limited to 2048 pixels per edge and rendering to 1024 pixels. The general
 animation byte and frame limits also apply.
 
+Peer sync still transfers only the authenticated original. When an image has no
+local derivatives, the grid can decode a transient thumbnail inside the session
+cache and the viewer can decode a bounded screen still. Plain and mosaic cache
+entries remain separate. In-flight results are discarded after lock invalidation.
+This creates no plaintext file or catalog stream. Reads remain limited to 32 MiB;
+catalog image bounds must be valid and quarantined objects are never decoded.
+Full backups retain existing derivatives.
+
 The decoder limits encoded input to 64 MiB, source geometry to 16384 pixels per
 edge and 67108864 pixels total, tracked grids to 256 MiB, header prefix to 2 MiB,
 and encoded and decoded ICC profiles to 1 MiB each. Dimensions and ICC
@@ -357,4 +365,6 @@ cleared. This limit is recorded in the FFI contract and dependency policy.
 `tests/media/jpeg-xl` contains real synthetic codestream/container, orientation,
 alpha, associated-alpha, ICC, finite/infinite animation and boundary fixtures.
 Native and platform tests cover import, JPEG derivatives, displayed pixels,
-original export, animation timing and decoder disposal.
+original export, original-only sync presentation and session invalidation.
+The peer protocol test pairs real vaults, exchanges signed operations and grants,
+activates JXL originals and rejects modified ciphertext before export.

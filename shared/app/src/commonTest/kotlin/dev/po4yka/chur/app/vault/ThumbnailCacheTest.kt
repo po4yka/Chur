@@ -23,6 +23,44 @@ import kotlin.test.assertTrue
 @OptIn(ExperimentalCoroutinesApi::class)
 class ThumbnailCacheTest {
     @Test
+    fun a_synced_original_raster_has_its_own_stream_and_concealment_keys() = runTest {
+        val cache = ThumbnailCache(4, StandardTestDispatcher(testScheduler)) { _, _ -> CacheImage() }
+        var reads = 0
+        suspend fun original(rendition: ThumbnailRendition) = cache.loadRendered(1, "synced", StreamKind.ORIGINAL, rendition) {
+            reads += 1
+            CacheImage()
+        }
+        val plain = original(ThumbnailRendition.Plain)
+        assertSame(plain, original(ThumbnailRendition.Plain))
+        val concealed = original(ThumbnailRendition.Mosaic)
+        assertNotSame(plain, concealed)
+        assertSame(concealed, original(ThumbnailRendition.Mosaic))
+        assertEquals(2, reads)
+        cache.invalidate()
+        assertNotSame(plain, original(ThumbnailRendition.Plain))
+    }
+
+    @Test
+    fun locking_during_synced_original_decode_cannot_publish_or_cache_its_raster() = runTest {
+        val cache = ThumbnailCache(4, StandardTestDispatcher(testScheduler)) { _, _ -> CacheImage() }
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val loading = async {
+            cache.loadRendered(1, "synced", StreamKind.ORIGINAL, ThumbnailRendition.Plain) {
+                entered.complete(Unit)
+                release.await()
+                CacheImage()
+            }
+        }
+        entered.await()
+        cache.invalidate()
+        release.complete(Unit)
+        assertNull(loading.await())
+        val next = CacheImage()
+        assertSame(next, cache.loadRendered(2, "synced", StreamKind.ORIGINAL, ThumbnailRendition.Plain) { next })
+    }
+
+    @Test
     fun rendition_generation_and_stream_are_part_of_the_same_bounded_cache() = runTest {
         var renders = 0
         var reads = 0

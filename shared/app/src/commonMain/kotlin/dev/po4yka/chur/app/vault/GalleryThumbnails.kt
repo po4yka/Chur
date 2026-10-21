@@ -81,15 +81,16 @@ private fun rememberThumbnailImages(
         if (!enabled) return@LaunchedEffect
         val visible = objects.map { it.id }.toSet()
         images.keys.toList().filterNot { it in visible }.forEach { images.remove(it) }
-        for (projection in objects.filter { it.thumbnailReady }) {
+        for (projection in objects) {
             if (images.containsKey(projection.id)) continue
-            val image = cache.load(
+            val rendition = thumbnailRendition(projection.mediaKind, concealed)
+            val image = (if (projection.thumbnailReady) cache.load(
                 repository = repository,
                 generation = generation,
                 objectId = projection.objectId,
                 id = projection.id,
-                rendition = thumbnailRendition(projection.mediaKind, concealed),
-            )
+                rendition = rendition,
+            ) else null) ?: cache.loadOriginal(repository, generation, projection, rendition)
             currentCoroutineContext().ensureActive()
             if ((repository.state.value as? VaultState.Unlocked)?.generation != generation) {
                 images.clear()

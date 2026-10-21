@@ -1,6 +1,7 @@
 package dev.po4yka.chur.app
 
 import dev.po4yka.chur.app.vault.stillSources
+import dev.po4yka.chur.app.vault.originalImageCandidate
 import dev.po4yka.chur.ffi.ObjectProjection
 import dev.po4yka.chur.ffi.StreamKind.GRID_PREVIEW
 import dev.po4yka.chur.ffi.StreamKind.ORIGINAL
@@ -9,6 +10,8 @@ import dev.po4yka.chur.ffi.StreamKind.THUMBNAIL
 import dev.po4yka.chur.ffi.StreamKind.VIDEO_POSTER
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /**
  * The viewer's still, `MEDIA_PIPELINE.md` §8: a photograph with no screen
@@ -21,6 +24,18 @@ class ViewerStillTest {
         plaintextSize = 2L * 1024 * 1024, width = 1200, height = 1600, durationMs = 0,
         favorite = false, state = 1, integritySummary = 4, thumbnailReady = true,
     )
+
+    @Test
+    fun a_synced_image_without_derivatives_can_use_a_bounded_original() {
+        assertTrue(originalImageCandidate(photo.copy(width = 2050, height = 1025, thumbnailReady = false)))
+        assertFalse(originalImageCandidate(photo.copy(width = 0)))
+        assertFalse(originalImageCandidate(photo.copy(height = -1)))
+        assertFalse(originalImageCandidate(photo.copy(width = 16_385)))
+        assertFalse(originalImageCandidate(photo.copy(width = 16_384, height = 16_384)))
+        assertFalse(originalImageCandidate(photo.copy(plaintextSize = 33L * 1024 * 1024)))
+        assertFalse(originalImageCandidate(photo.copy(integritySummary = 6)))
+        assertFalse(originalImageCandidate(photo.copy(mediaKind = 4)))
+    }
 
     @Test
     fun a_photograph_inside_the_preview_edge_shows_its_original() {

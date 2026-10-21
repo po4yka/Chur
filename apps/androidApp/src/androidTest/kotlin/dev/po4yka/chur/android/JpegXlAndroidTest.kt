@@ -266,6 +266,49 @@ class JpegXlAndroidTest {
         } finally { expected.fill(0); vault.shutdown(); root.deleteRecursively() }
     }
 
+    @Test fun originalOnlySyncedImageSupportsGridMosaicViewerAndLockInvalidatesCache() = runBlocking {
+        val root = File(context.cacheDir, "jxl-original-only-${System.nanoTime()}").apply { mkdirs() }
+        val vault = VaultRepository(root.path, System::currentTimeMillis)
+        val source = sourceFile(fixture("large.jxl"))
+        val cache = ThumbnailCache()
+        try {
+            vault.start()
+            vault.create("jpeg xl original only password".encodeToByteArray(), false)
+            val objectId = ParcelFileDescriptor.open(source, ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
+                val operation = vault.beginImport(fd.fd, ImportRequest("image/jxl", true, MediaBounds.CLASS_IMAGE,
+                    width = 2050, height = 1025, knownLength = source.length(), originalFilename = "large.jxl"))
+                try {
+                    var progress = vault.poll(operation)
+                    while (!progress.terminal) { delay(20); progress = vault.poll(operation) }
+                    assertEquals(0, progress.status)
+                    requireNotNull(progress.importedObjectId())
+                } finally { vault.closeOperation(operation) }
+            }
+            val projection = vault.page(ObjectQuery()).objects.single { it.objectId.contentEquals(objectId) }
+            assertFalse(projection.thumbnailReady)
+            assertTrue("No derivative was manufactured by this import", runCatching { vault.readDerived(objectId, StreamKind.THUMBNAIL) }.isFailure)
+            val generation = (vault.state.value as VaultState.Unlocked).generation
+            val thumbnail = requireNotNull(cache.loadOriginal(vault, generation, projection))
+            assertEquals(320, thumbnail.width)
+            assertEquals(160, thumbnail.height)
+            val mosaic = requireNotNull(cache.loadOriginal(vault, generation, projection, ThumbnailRendition.Mosaic))
+            assertEquals(16, mosaic.width)
+            assertEquals(16, mosaic.height)
+            val still = requireNotNull(viewerStill(vault, cache, generation, projection))
+            try { assertEquals(2048, still.width); assertEquals(1024, still.height) }
+            finally { still.asAndroidBitmap().apply { eraseColor(Color.TRANSPARENT); recycle() } }
+            cache.invalidate()
+            vault.lock(LockReason.USER)
+            assertNull(cache.loadOriginal(vault, generation, projection))
+            vault.unlock("jpeg xl original only password".encodeToByteArray())
+            val nextGeneration = (vault.state.value as VaultState.Unlocked).generation
+            assertNotEquals(generation, nextGeneration)
+            assertNull(cache.loadOriginal(vault, generation, projection))
+            val reloaded = requireNotNull(cache.loadOriginal(vault, nextGeneration, projection))
+            assertNotSame(thumbnail, reloaded)
+        } finally { cache.clear(); vault.shutdown(); source.delete(); root.deleteRecursively() }
+    }
+
     private fun fixture(name: String) = instrumentation.context.assets.open("jpeg-xl/$name").use { it.readBytes() }
     private fun uri(file: File) = FileProvider.getUriForFile(context, "${context.packageName}.exports", file)
     private fun sourceFile(bytes: ByteArray) = File(context.cacheDir, "export-scratch/jxl-${System.nanoTime()}.bin").apply {
