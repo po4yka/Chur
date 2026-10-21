@@ -6,7 +6,7 @@ The standard `Chur.xcodeproj` and `project.yml` include this renderer. No altern
 
 ## Build
 
-Use the repository's Apple/Rust/Kotlin prerequisites from DEVELOPMENT.md. The normal app prebuild runs `stage-filament.sh`, which invokes `prepare-filament.sh`, verifies the official Filament1.77.3 SDK SHA-256 and stages the selected device/Simulator archives in DERIVED_FILE_DIR. There are no credentials, developer-account changes or newly generated signing identities.
+Use the repository's Apple/Rust/Kotlin prerequisites from DEVELOPMENT.md. The normal app prebuild runs `stage-filament.sh`, which invokes `prepare-filament.sh`, verifies the official Filament 1.77.3 SDK SHA-256 and stages the selected device/Simulator archives in DERIVED_FILE_DIR. There are no credentials, developer-account changes or newly generated signing identities.
 
     xcodebuild -project apps/iosApp/Chur.xcodeproj -scheme Chur \
       -configuration Debug -destination 'generic/platform=iOS Simulator' \
@@ -16,8 +16,8 @@ An already-downloaded archive can be supplied with `FILAMENT_ARCHIVE=/path/to/fi
 
 ## Runtime and validation
 
-The adapter requests30fps and caps drawable density at2×/1024px. The shared native visual contract uses no shadows/bloom/postprocessing. Visibility/lifecycle gates stop rendering and disposal releases native resources. An active, attached but hierarchy-hidden view uses a weak-owner200ms visibility timer solely for resumption; the timer is canceled on inactivity, detach and disposal.
+The adapter requests 30fps and caps drawable density at 2×/1024px. The shared native visual contract uses no shadows/bloom/postprocessing. Visibility/lifecycle gates stop rendering and disposal releases native resources. An active, attached but hierarchy-hidden view uses a weak-owner 200ms visibility timer solely for resumption; the timer is canceled on inactivity, detach and disposal.
 
-A missing asset or native initialization failure shows the PNG fallback. It is not animated3D. The final GLB is the same asset as Android; manifest and exact per-joint axes are bundled.
+A missing asset or native initialization failure shows the PNG fallback. It is not animated 3D. The final GLB is the same asset as Android; manifest and exact per-joint axes are bundled.
 
 C++ header/syntax and cross-language math checks are only partial Linux validation. Swift/Objective-C++/Kotlin-Native linking, Metal appearance, actual UIKit/Compose touch delivery, privacy covers and device performance require the Apple CI/native-device gates described in `docs/INTERACTIVE_SPIRIT.md`.

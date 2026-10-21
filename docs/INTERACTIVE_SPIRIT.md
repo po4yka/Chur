@@ -20,14 +20,14 @@ No persisted/wire format, migration, permission, account, cryptographic primitiv
 
 ## Native implementations
 
-Both standard application targets include Filament1.77.3. Android uses TextureView/transparent swapchain. The iOS checked-in Xcode project and its `project.yml` compile Swift→Objective-C++→Filament Metal; its prebuild script prepares the checksum-pinned official SDK and stages the selected platform's static archives. A missing model or renderer initialization failure uses the transparent PNG fallback. Fallback does not provide3D animation.
+Both standard application targets include Filament 1.77.3. Android uses TextureView/transparent swapchain. The iOS checked-in Xcode project and its `project.yml` compile Swift→Objective-C++→Filament Metal; its prebuild script prepares the checksum-pinned official SDK and stages the selected platform's static archives. A missing model or renderer initialization failure uses the transparent PNG fallback. Fallback does not provide 3D animation.
 
 The adapters share authored coordinates (+Yup,+Zfront), origin camera, square orthographic safe bounds±1.125, warm100klux sunlight and no bloom/postprocessing. Narrow surfaces expand the frame rather than crop. They restore base transforms before sampling, snapshot the displayed authored pose for interruptions, apply a sole eye controller, then bounded tail offsets. The first two tail joints remain stiff. Native pixel parity is still a device gate, not established by matching constants.
 
 ## Dependency review
 
-- **Capability/alternatives:** glTF skin/morph animation and transparent native rendering. Compose has no existing3D renderer. RealityKit/USDZ needs a separate iOS asset/parity path; WebView/game engines introduce a larger integration surface.
-- **Owner/license:** Google Filament, Apache2.0; official release pinned to1.77.3. License text is bundled on both platforms. No claim of independent security audit of this release.
+- **Capability/alternatives:** glTF skin/morph animation and transparent native rendering. Compose has no existing 3D renderer. RealityKit/USDZ needs a separate iOS asset/parity path; WebView/game engines introduce a larger integration surface.
+- **Owner/license:** Google Filament, Apache 2.0; official release pinned to 1.77.3. License text is bundled on both platforms. No claim of independent security audit of this release.
 - **Native surface:** Filament, backend, gltfio and its SDK static dependencies (including mesh/texture codecs). No runtime shader compiler, downloaded model or user-provided parser input. Android uses engine+gltfio AARs, without filament-utils.
 - **Build network/reproducibility:** Android uses Maven artifacts and generated Gradle locks. iOS preparation downloads only the official release URL and checks SHA-256 `40bc8e5a51040cc4b0bf8aaff7bf339ce16e13485644f60dbe1cb023b284fde7`; an existing matching archive can be supplied through `FILAMENT_ARCHIVE`. SDK/cache files are ignored and not committed.
 - **Targets/size:** Android arm64/x86_64 and iOS arm64/device+Simulator through the app's existing platform baselines. Downloaded Android AARs total about10.7MiB across all included ABIs; the official iOS SDK is much larger than the linked app delta. Final package-size, memory, thermal and frame-time impact are unmeasured.
@@ -37,11 +37,11 @@ The GLB/PNG are intentional product artwork, not compiled application binaries o
 
 ## Verification and remaining gates
 
-Local cloud checks cover2,634 Kotlin assertions,10,110 actual Kotlin/C++ clip/eye/tail sample pairs at30/60/120Hz, partial Android API signatures, and C++ syntax against exact Filament headers. The math pairs differ by at most1.1e-7. Dependency graphs are resolved with generated locks. None is a substitute for compiling Compose/the APK or Swift/UIKit/the app.
+Local cloud checks cover 2,634 Kotlin assertions, 10,110 actual Kotlin/C++ clip/eye/tail sample pairs at 30/60/120Hz, partial Android API signatures, and C++ syntax against exact Filament headers. The math pairs differ by at most 1.1e-7. Dependency graphs are resolved with generated locks. None is a substitute for compiling Compose/the APK or Swift/UIKit/the app.
 
-An independent actual-vertex skin/morph sweep covered1,377 clip/tail/±12°lean combinations within the common square frame; minimum margin is approximately4.6pixels at144pixels. Sixty-six Cycles-rendered diagnostic poses showed no obvious eye/silhouette/alpha defect. Those are asset diagnostics, not Filament screenshots or correctly timed live gesture recordings. Dark-tail contrast on dark backgrounds still needs native pixel review.
+An independent actual-vertex skin/morph sweep covered 1,377 clip/tail/±12° lean combinations within the common square frame; minimum margin is approximately 4.6 pixels at 144 pixels. Sixty-six Cycles-rendered diagnostic poses showed no obvious eye/silhouette/alpha defect. Those are asset diagnostics, not Filament screenshots or correctly timed live gesture recordings. Dark-tail contrast on dark backgrounds still needs native pixel review.
 
-The PR adds an Android presentation test covering default-off, opt-in/hide and suppression during search/disclosure/dialogs, plus128 pure presence-policy cases. Existing CI assembles instrumentation; it does not execute those device tests. The macOS job now compiles the actual Xcode app/Metal bridge in addition to Kotlin/Native checks.
+The PR adds an Android presentation test covering default-off, opt-in/hide and suppression during search/disclosure/dialogs, plus 128 pure presence-policy cases. Existing CI assembles instrumentation; it does not execute those device tests. The macOS job now compiles the actual Xcode app/Metal bridge in addition to Kotlin/Native checks.
 
 Local Android SDK installation remains blocked on agreement approval; Linux has no Apple SDK. CI results must be reported separately for the exact PR head. Before release, run synthetic-data device checks for live drag/cancel/repeat/multitouch, keyboard/modal/privacy transitions, accessibility, fallback, pixel transparency/color and performance.
 
