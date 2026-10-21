@@ -42,6 +42,7 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSourceException
@@ -147,7 +148,7 @@ actual fun VaultPlayer(
     // before a press. It also goes on the press that starts playback: a
     // stream the device cannot decode then shows the player's own controls
     // and the chrome, not a poster that still looks playable.
-    var problem by remember(player) { mutableStateOf(player.playerError?.let(::playbackProblem)) }
+    var problem by remember(player) { mutableStateOf(playbackProblem(player.playerError, player.currentTracks)) }
     val failed = problem != null
     var buffering by remember(player) { mutableStateOf(player.playbackState == Player.STATE_BUFFERING) }
     var requested by remember(player) { mutableStateOf(player.playWhenReady) }
@@ -191,7 +192,13 @@ actual fun VaultPlayer(
             }
 
             override fun onPlayerErrorChanged(error: PlaybackException?) {
-                problem = error?.let(::playbackProblem)
+                problem = playbackProblem(error, player.currentTracks)
+            }
+
+            override fun onTracksChanged(tracks: Tracks) {
+                // Media3 can play supported audio while silently omitting an
+                // unsupported video track. Report that partial selection too.
+                problem = playbackProblem(player.playerError, tracks)
             }
         }
         player.addListener(frames)
@@ -210,6 +217,7 @@ actual fun VaultPlayer(
         onControlsVisibleChange(true)
     }
     LaunchedEffect(problem, waiting) {
+        if (problem != null) player.pause()
         if (problem != null || waiting) reportControls(true)
     }
     // Read here, not in `update`: a report changes this and the chrome in the
@@ -444,6 +452,16 @@ internal fun playbackProblem(error: PlaybackException): PlaybackProblem {
         cause = cause.cause
     }
     return if (error.errorCode in 2000..2999) PlaybackProblem.UNAVAILABLE else PlaybackProblem.UNSUPPORTED
+}
+
+/** Decoder rejection can leave other tracks playing without a player error. */
+@androidx.annotation.OptIn(UnstableApi::class)
+internal fun playbackProblem(error: PlaybackException?, tracks: Tracks): PlaybackProblem? {
+    // An integrity or availability error must not be replaced by a codec warning.
+    if (error != null) return playbackProblem(error)
+    return if (listOf(C.TRACK_TYPE_VIDEO, C.TRACK_TYPE_AUDIO).any { type ->
+        tracks.containsType(type) && !tracks.isTypeSupported(type, /* allowExceedsCapabilities = */ true)
+    }) PlaybackProblem.UNSUPPORTED else null
 }
 
 /**
