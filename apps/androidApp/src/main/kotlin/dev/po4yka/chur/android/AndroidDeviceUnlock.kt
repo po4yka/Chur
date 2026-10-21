@@ -88,8 +88,11 @@ class AndroidDeviceUnlock(
                 aad,
             )
         } catch (cause: DeviceSlotException) {
-            // A slot that belongs to another identity fails the tag, which is
-            // not an error here: the caller walks every enrolled slot.
+            // A tag that does not verify is not an error here: the caller
+            // walks every enrolled slot. It does not tell identities apart,
+            // because each slot has its own key, alias and AAD, so a slot of
+            // any identity verifies. That is why `DECOY_VAULT.md` §10 lets
+            // only one identity hold a device slot, and Rust refuses a second.
             if (cause.status == ChurStatus.AUTHENTICATION_FAILED) null else throw cause
         }
     }

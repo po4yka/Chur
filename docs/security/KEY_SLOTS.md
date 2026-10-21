@@ -148,6 +148,12 @@ An unlock attempt that uses a password runs exactly two Argon2id derivations, wh
 
 The constant equalizes the derivation cost of one attempt. It does not hide the number of descriptors on the device or the Argon2 parameters they publish; the residual signals are in [`DECOY_VAULT.md`](DECOY_VAULT.md) §5.
 
+A device unlock tries the §4 and §5 slots of every identity in registry order and opens the first one that authenticates. Each slot has its own key or Keychain item, so a slot of any identity authenticates, and the order alone would choose the identity. Therefore at most one identity on a device holds a device slot:
+
+- `begin_android_keystore_slot` and `add_apple_keychain_slot` return `PLATFORM_KEY_UNAVAILABLE` when the session's identity holds no device slot and another registry entry that can be read and parsed holds a slot of either device family. They check this before they draw a slot identity or release the root, so a refused enrollment changes nothing;
+- an identity that holds a device slot can always add a replacement, which is what a device-slot policy change does under §9. This also keeps the policy change working on an install where both identities enrolled before this rule;
+- the residual signal this leaves is in [`DECOY_VAULT.md`](DECOY_VAULT.md) §5.
+
 ## 9. Transactions
 
 Creating/replacing a slot uses:

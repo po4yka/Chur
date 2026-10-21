@@ -1231,6 +1231,8 @@ impl Session {
     /// under a KEK derived from it, so the Keychain never holds vault
     /// ciphertext and the envelope stays test-vectorable at the Rust layer.
     pub fn add_apple_keychain_slot(&mut self, keychain_item_id: Id) -> Result<Key> {
+        self.root_secret()?;
+        self.refuse_device_slot_of_another_identity()?;
         let secret: Key = random::secret::<32>()?;
         let generation = self.next_slot_generation(SlotType::AppleKeychain);
         let slot_id = random::id()?;
@@ -1270,6 +1272,7 @@ impl Session {
         // recorded: a locked session must neither release the root nor leave a
         // half-opened enrollment behind.
         let root_secret = self.root_secret()?.duplicate();
+        self.refuse_device_slot_of_another_identity()?;
         let slot_id = random::id()?;
         let generation = self.next_slot_generation(SlotType::AndroidKeystore);
         let alias = random::array::<KEYSTORE_ALIAS_LEN>()?.to_vec();
@@ -1521,6 +1524,45 @@ impl Session {
             .map_or(1, |current| current + 1)
     }
 
+    /// Refuses a device slot when another identity already holds one.
+    ///
+    /// `DECOY_VAULT.md` §10 admits one device-slot identity per install. A
+    /// device unlock names no identity: it opens the first registry entry whose
+    /// slot authenticates, so a device slot in each of two identities would let
+    /// the filename order decide which vault a fingerprint opens. The refusal
+    /// is [`ChurStatus::PlatformKeyUnavailable`], the status of any device
+    /// unlock that is not available, so the message a host shows is the same
+    /// as for a device without the factor.
+    ///
+    /// An identity that already holds a device slot may always add another,
+    /// which is what a policy change does. That also keeps the policy change
+    /// working on an install where both identities enrolled before this rule.
+    /// An entry that cannot be read or does not parse is skipped, as every
+    /// unlock skips it.
+    fn refuse_device_slot_of_another_identity(&self) -> Result<()> {
+        if self.descriptor.key_slots.iter().any(is_device_slot) {
+            return Ok(());
+        }
+        for name in self.root_dir.registry_names()? {
+            if name == self.entry_name {
+                continue;
+            }
+            let Ok(bytes) = read_entry(&self.root_dir, &name) else {
+                continue;
+            };
+            let Ok(descriptor) = VaultDescriptor::parse(&bytes) else {
+                continue;
+            };
+            if descriptor.key_slots.iter().any(is_device_slot) {
+                bail!(
+                    PlatformKeyUnavailable,
+                    "device unlock is not available for this vault"
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Runs the slot transaction of `KEY_SLOTS.md` §9.
     ///
     /// Write the new descriptor to a temporary name, fsync it, read it back and
@@ -1606,6 +1648,14 @@ fn password_candidates(root_dir: &VaultRoot) -> Result<Vec<PasswordCandidate>> {
         });
     }
     Ok(candidates)
+}
+
+/// Whether a slot belongs to a device family, `KEY_SLOTS.md` §4 and §5.
+fn is_device_slot(entry: &KeySlotDescriptor) -> bool {
+    matches!(
+        entry.slot_type,
+        SlotType::AndroidKeystore | SlotType::AppleKeychain
+    )
 }
 
 fn read_entry(root_dir: &VaultRoot, name: &RegistryName) -> Result<Vec<u8>> {
@@ -2853,6 +2903,133 @@ mod tests {
             ),
             ChurStatus::Conflict
         );
+    }
+
+    #[test]
+    fn only_one_identity_can_hold_a_device_slot() {
+        let root_dir = scratch();
+        let mut first = make(&root_dir);
+        let enrollment = first.begin_android_keystore_slot().expect("begin");
+        let (nonce, wrapped) = keystore_wrap(&enrollment.aad, enrollment.root_secret.expose());
+        first
+            .finish_android_keystore_slot(nonce, wrapped)
+            .expect("finish");
+        // The identity that holds the slot can still replace it, which is what
+        // a policy change does.
+        let enrollment = first.begin_android_keystore_slot().expect("replace");
+        let (nonce, wrapped) = keystore_wrap(&enrollment.aad, enrollment.root_secret.expose());
+        first
+            .finish_android_keystore_slot(nonce, wrapped)
+            .expect("finish the replacement");
+        drop(first);
+
+        let mut second = create(&root_dir, b"the other identity", 1)
+            .expect("create")
+            .activate()
+            .expect("activate");
+        let before = second.slots().len();
+        assert_eq!(
+            rejection(second.begin_android_keystore_slot().map(|_| ())),
+            ChurStatus::PlatformKeyUnavailable
+        );
+        let item = random::id().expect("id");
+        assert_eq!(
+            rejection(second.add_apple_keychain_slot(item).map(|_| ())),
+            ChurStatus::PlatformKeyUnavailable
+        );
+        assert_eq!(second.slots().len(), before);
+        drop(second);
+
+        // Every device slot in the registry belongs to the first identity.
+        let material = android_keystore_material(&root_dir).expect("material");
+        assert_eq!(material.len(), 2);
+    }
+
+    #[test]
+    fn a_legacy_install_with_two_device_slots_can_still_replace_each() {
+        let root_dir = scratch();
+        let mut first = make(&root_dir);
+        let enrollment = first.begin_android_keystore_slot().expect("begin");
+        let (nonce, wrapped) = keystore_wrap(&enrollment.aad, enrollment.root_secret.expose());
+        first
+            .finish_android_keystore_slot(nonce, wrapped)
+            .expect("finish");
+
+        // An install from before the rule: the second identity committed its
+        // own device slot while the first already held one.
+        let mut second = create(&root_dir, b"the other identity", 1)
+            .expect("create")
+            .activate()
+            .expect("activate");
+        let slot_id = random::id().expect("id");
+        let generation = second.next_slot_generation(SlotType::AndroidKeystore);
+        let binding = SlotBinding::v1(
+            second.vault_id(),
+            slot_id,
+            SlotType::AndroidKeystore,
+            generation,
+        );
+        let alias = random::array::<KEYSTORE_ALIAS_LEN>()
+            .expect("alias")
+            .to_vec();
+        let body =
+            AndroidKeystoreSlotBody::new(&binding, alias, [1; GCM_NONCE_LEN], [2; WRAPPED_KEY_LEN])
+                .expect("body");
+        let legacy = KeySlotDescriptor::v1(
+            slot_id,
+            SlotType::AndroidKeystore,
+            generation,
+            body.encode(),
+        )
+        .expect("slot");
+        second
+            .commit_slots(|slots| slots.push(legacy))
+            .expect("commit the legacy slot");
+
+        // Each identity may still replace its own slot, which a policy change
+        // needs; neither is blocked by the other.
+        second
+            .begin_android_keystore_slot()
+            .expect("the second identity replaces its slot");
+        first
+            .begin_android_keystore_slot()
+            .expect("the first identity replaces its slot");
+        second
+            .add_apple_keychain_slot(random::id().expect("id"))
+            .expect("a second family in the same identity");
+    }
+
+    #[test]
+    fn an_unreadable_entry_does_not_block_an_enrollment() {
+        let root_dir = scratch();
+        drop(make(&root_dir));
+        let mut second = create(&root_dir, b"the other identity", 1)
+            .expect("create")
+            .activate()
+            .expect("activate");
+        let other = root_dir
+            .registry_names()
+            .expect("names")
+            .into_iter()
+            .find(|name| *name != second.entry_name)
+            .expect("the first entry");
+        // A directory where the entry file was cannot be read as a file.
+        let path = root_dir.registry_entry(&other);
+        std::fs::remove_file(&path).expect("remove");
+        std::fs::create_dir(&path).expect("directory");
+        second.begin_android_keystore_slot().expect("begin");
+    }
+
+    #[test]
+    fn an_identity_with_no_device_slot_does_not_block_another() {
+        let root_dir = scratch();
+        drop(make(&root_dir));
+        let mut second = create(&root_dir, b"the other identity", 1)
+            .expect("create")
+            .activate()
+            .expect("activate");
+        let item = random::id().expect("id");
+        second.add_apple_keychain_slot(item).expect("slot");
     }
 
     #[test]

@@ -98,6 +98,26 @@ fun recoveryCopy(status: ChurStatus): String = when (status) {
     else -> userCopy(status)
 }
 
+/**
+ * The sentence a refused device-slot enrollment shows.
+ *
+ * `DECOY_VAULT.md` §10 lets one identity hold a device slot, and Rust refuses a
+ * second with [ChurStatus.PLATFORM_KEY_UNAVAILABLE]. A device with no enrolled
+ * factor, or a factor the platform no longer accepts, reaches here with the
+ * same status or with [ChurStatus.PLATFORM_KEY_INVALIDATED], so the three read
+ * as one sentence and the refusal does not say that another identity exists.
+ * The unlock line of [userCopy] would tell the user to unlock a vault that is
+ * already open, so this sentence names no vault state and reads the same
+ * whether the vault is open or locked. Every other status reads as [userCopy]
+ * has it.
+ */
+fun deviceSlotCopy(status: ChurStatus): String = when (status) {
+    ChurStatus.PLATFORM_KEY_UNAVAILABLE,
+    ChurStatus.PLATFORM_KEY_INVALIDATED,
+    -> "Device unlock is not available. Your password still works."
+    else -> userCopy(status)
+}
+
 /** Peer authentication is independent of the local vault password. */
 fun peerCopy(status: ChurStatus): String = when (status) {
     ChurStatus.AUTHENTICATION_FAILED, ChurStatus.PERMISSION_DENIED ->

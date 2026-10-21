@@ -782,8 +782,12 @@ class ChurController(
      * The enrolment is bracketed the way an import is: authorizing the platform
      * key can put a system credential screen in front of this one, and the
      * background lock would otherwise close the session the enrolment needs.
+     *
+     * Rust refuses the enrolment when another identity already holds a device
+     * slot, `DECOY_VAULT.md` §10, and [deviceSlotCopy] gives that refusal the
+     * sentence of any device unlock that is not available.
      */
-    fun enrollDeviceSlot() = guarded {
+    fun enrollDeviceSlot() = guarded(copy = ::deviceSlotCopy) {
         beginHostActivity()
         try {
             // The only guarded action that used to stay on the main dispatcher,
@@ -801,7 +805,7 @@ class ChurController(
     }
 
     /** Stores a random Rust device secret under Keychain authorization. */
-    fun enrollAppleDeviceSlot() = guarded {
+    fun enrollAppleDeviceSlot() = guarded(copy = ::deviceSlotCopy) {
         beginHostActivity()
         try {
             withContext(Dispatchers.Default) { addAppleSlot() }
@@ -873,7 +877,7 @@ class ChurController(
      * process that dies inside the swap skips the read-back and can keep the
      * new policy in the setting until the next toggle replaces the slot.
      */
-    fun toggleDeviceSlotPolicy() = guarded {
+    fun toggleDeviceSlotPolicy() = guarded(copy = ::deviceSlotCopy) {
         val previous = _deviceSlotStrict.value
         val next = !previous
         // The slot types [SlotSummary.familyName] gives: 2 is the Android

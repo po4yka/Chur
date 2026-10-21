@@ -78,6 +78,14 @@ A third residual signal is structural and is accepted here rather than in §10, 
 
 What that costs is bounded. A coercer inside a decoy session who provokes the refusal learns that two identities exist, which is the fact §10 protects. They learn nothing about the second one: not its credential, not its size, not its content, and not whether it is the real one — §11's storage rule and §2's session routing still hold. And they must already know the feature exists to try, which the "Assumed adversary knowledge" section below states they may.
 
+A fourth residual signal comes from the device slot, and it is also accepted here. A device unlock (Android Keystore or Apple Keychain) names no identity: the platform authorizes once, and Chur opens the first registry entry whose slot authenticates. If two identities each held a device slot, the registry order would decide which vault a fingerprint opens, and a coercer who forces the fingerprint could open the real vault. Therefore **one identity at a time holds a device slot**:
+
+- Rust refuses a new Android Keystore or Apple Keychain slot when another registry entry that parses already holds a device slot of either family. The refusal is `PLATFORM_KEY_UNAVAILABLE`, the status of any device unlock that is not available.
+- The application shows that refusal with the same sentence as a device that has no enrolled factor or a factor the platform no longer accepts. The sentence names no other identity.
+- An identity that holds a device slot can always add a replacement, for example to change the device-slot policy. This also holds on an install where both identities enrolled before this rule. The other identity can enroll only after the first one removes its slot.
+
+The residual signal is this. The locked unlock screen cannot know which identity the user will open, so it offers the device unlock when any identity holds a device slot. A coercer inside a session that holds no device slot can see that the unlock screen offers the device unlock, and that enrollment in this session is refused. The refusal also comes at once and with no biometric prompt, because Rust refuses before the platform asks for the factor, while a device without the factor usually refuses after the platform checks it. Together, these show that another identity exists and holds the device slot. They do not show its credential, size or content. A user who does not want this signal does not enroll a device slot in either identity, or enrolls it only in the decoy.
+
 Direct P2P requires an explicit foreground action. Local network prompts, direct connection timing, and traffic volume can reveal that networking is being used; this is a residual signal. No persistent endpoint, account, invitation, or run projection may be shared between vault identities.
 
 ## 6. Public and decoy UI
@@ -128,7 +136,7 @@ The existence of this feature is public by design. [`../product/DISCREET_MODE.md
 
 What remains is indistinguishability, not concealment: the defence holds only where the coercer cannot tell an opened decoy from a vault that has no sibling. Therefore:
 
-- a decoy session must not prove or disprove the existence of a sibling identity from inside the application. No count, setting, notification, backup state, error, timing class, or management surface reachable from a decoy session may differ according to whether a real vault exists. The two exceptions are the provisioning refusal of §5, which the registry cap of two makes structural, and the sync setup refusal of §5, which reads as an ordinary failed setup but still differs in its timing and the other signals that §5 records; both are stated there rather than hidden here;
+- a decoy session must not prove or disprove the existence of a sibling identity from inside the application. No count, setting, notification, backup state, error, timing class, or management surface reachable from a decoy session may differ according to whether a real vault exists. The three exceptions are the provisioning refusal of §5, which the registry cap of two makes structural; the sync setup refusal of §5, which reads as an ordinary failed setup but still differs in its timing and the other signals that §5 records; and the device-slot rule of §5, where the unlock screen offers a device unlock that a session without the device slot cannot enroll, and the refusal comes at once with no biometric prompt. All three are stated there rather than hidden here;
 - the same must hold in a real session with no decoy provisioned, so that "no decoy exists" and "the decoy was not opened" are one observation rather than two;
 - §3 provisioning must state this limitation before the user creates a decoy.
 
@@ -141,6 +149,7 @@ This bounds the claim: Decoy Vault raises the cost of a demand to open the vault
 - wrong credential produces equivalent external failure;
 - caches and navigation do not cross sessions;
 - platform alias invalidation affects only its identity;
+- a device-slot enrollment is refused while another identity holds a device slot, with the copy of any unavailable device unlock, and the identity that holds the slot can still replace it;
 - backup/restore of one identity does not expose or overwrite the other;
 - process death returns to public locked state;
 - storage/log/notification inspection finds no semantic real/decoy label;
