@@ -795,6 +795,7 @@ private fun VaultRoute(controller: ChurController) {
     // its platform limit, and on API levels without it the contract falls
     // back to a document picker that allows multiple selection (§14.1).
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(), onPicked)
+    val mediaFilePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments(), onPicked)
     val audioPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments(), onPicked)
     val livePhotoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments(), onPicked)
     val documentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -897,6 +898,22 @@ private fun VaultRoute(controller: ChurController) {
                     importAlbumId = openAlbum?.albumId
                     controller.beginHostActivity()
                     picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+                },
+            )
+            ListItem(
+                headlineContent = { Text("Media files") },
+                modifier = Modifier.clickable(role = Role.Button) {
+                    choosingImport = false
+                    importAlbumId = openAlbum?.albumId
+                    controller.beginHostActivity()
+                    try {
+                        // A file provider can report a portable image codec as
+                        // generic data. The media codec confirms the bytes.
+                        mediaFilePicker.launch(arrayOf("*/*"))
+                    } catch (_: Exception) {
+                        controller.endHostActivity()
+                        controller.report("The media file picker could not be opened.")
+                    }
                 },
             )
             ListItem(

@@ -1,10 +1,12 @@
 package dev.po4yka.chur.android
 
+import android.app.Instrumentation
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.ShortcutManager
 import android.content.res.Configuration
 import android.os.LocaleList
+import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.view.View
 import android.view.KeyEvent
@@ -35,9 +37,11 @@ import java.io.File
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -206,6 +210,80 @@ class LauncherActionsTest {
             assertEquals(1, runBlocking { controller.vault.privateNotes(reopened).notes.size })
             assertEquals("Public unsaved draft", runBlocking { controller.vault.privateNote(reopened, saved.noteId).body })
         } finally {
+            instrumentation.runOnMainSync { view?.disposeComposition(); activity.finish() }
+            runBlocking { controller.shutdown() }
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun media_files_row_opens_unrestricted_document_picker_and_cancel_keeps_vault_open() {
+        val activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        val root = File(activity.noBackupFilesDir, "media-files-picker-${System.nanoTime()}").apply { mkdirs() }
+        val controller = ChurController(root.absolutePath, NoPrivacyCover, UnusedExports, clock = { System.currentTimeMillis() })
+        val launched = AtomicReference<Intent?>()
+        // Observe the real picker launch. Return null so the system still opens it.
+        val monitor = object : Instrumentation.ActivityMonitor() {
+            override fun onStartActivity(intent: Intent): Instrumentation.ActivityResult? {
+                if (intent.action == Intent.ACTION_OPEN_DOCUMENT) launched.set(Intent(intent))
+                return null
+            }
+        }
+        var view: ComposeView? = null
+        instrumentation.addMonitor(monitor)
+        try {
+            runBlocking {
+                controller.start()
+                controller.create("Media files picker public password", offerRecovery = false)
+                withTimeout(10_000) { controller.route.first { it == AppRoute.Vault } }
+            }
+            instrumentation.runOnMainSync {
+                val compose = ComposeView(activity).apply {
+                    setContent {
+                        val route by controller.route.collectAsState()
+                        val state by controller.vaultState.collectAsState()
+                        ChurTheme { ChurRoutes(controller, route, state) }
+                    }
+                }
+                view = compose
+                activity.setContentView(FrameLayout(activity).apply { addView(compose) })
+            }
+            assertTrue(await { has("Library") })
+            request(controller, LauncherAction.IMPORT)
+            assertTrue(await { has("Media files") && has("Documents and files") })
+            instrumentation.runOnMainSync {
+                val row = nodes().first { node ->
+                    node.config.getOrNull(SemanticsProperties.Text).orEmpty().any { it.text == "Media files" }
+                }
+                assertTrue(row.config[SemanticsActions.OnClick].action?.invoke() == true)
+            }
+            assertTrue(await { launched.get() != null })
+            val intent = requireNotNull(launched.get())
+            assertEquals(Intent.ACTION_OPEN_DOCUMENT, intent.action)
+            assertEquals("*/*", intent.type)
+            assertTrue(intent.getBooleanExtra(Intent.EXTRA_ALLOW_MULTIPLE, false))
+            assertArrayEquals(arrayOf("*/*"), intent.getStringArrayExtra(Intent.EXTRA_MIME_TYPES))
+            // Shell resolution observes the installed system picker without
+            // changing production package visibility or assuming an OEM name.
+            val resolved = ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(
+                "cmd package resolve-activity --brief -a android.intent.action.OPEN_DOCUMENT -t '*/*'",
+            )).bufferedReader().use { it.readText() }
+            val pickerPackage = requireNotNull(resolved.lineSequence()
+                .mapNotNull { ComponentName.unflattenFromString(it.trim()) }.singleOrNull()) {
+                "The system must resolve one document picker: $resolved"
+            }.packageName
+            assertTrue("The actual document picker must receive focus", await {
+                instrumentation.uiAutomation.rootInActiveWindow?.packageName?.toString() == pickerPackage
+            })
+            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+            assertTrue(await {
+                instrumentation.uiAutomation.rootInActiveWindow?.packageName?.toString() == activity.packageName &&
+                    has("Library") && !has("Media files")
+            })
+            assertTrue(controller.vaultState.value is VaultState.Unlocked)
+        } finally {
+            instrumentation.removeMonitor(monitor)
             instrumentation.runOnMainSync { view?.disposeComposition(); activity.finish() }
             runBlocking { controller.shutdown() }
             root.deleteRecursively()
