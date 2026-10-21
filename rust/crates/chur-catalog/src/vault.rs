@@ -691,10 +691,18 @@ pub fn android_keystore_material(root_dir: &VaultRoot) -> Result<Vec<KeystoreUnl
             .iter()
             .filter(|entry| entry.slot_type == SlotType::AndroidKeystore)
         {
-            let body = AndroidKeystoreSlotBody::decode(&entry.slot_body)?;
+            // A malformed body is skipped rather than returned as an error,
+            // as an entry that fails the parser is: one bad slot must not
+            // stop device unlock for every other slot on the device.
+            let Ok(body) = AndroidKeystoreSlotBody::decode(&entry.slot_body) else {
+                continue;
+            };
             let binding = entry.binding(descriptor.vault_id);
+            let Ok(aad) = AndroidKeystoreSlotBody::aad(&binding, body.alias()) else {
+                continue;
+            };
             material.push(KeystoreUnlockMaterial {
-                aad: AndroidKeystoreSlotBody::aad(&binding, body.alias())?,
+                aad,
                 alias: body.alias().to_vec(),
                 gcm_nonce: *body.gcm_nonce(),
                 wrapped_root_secret: *body.wrapped_root_secret(),
@@ -3018,6 +3026,40 @@ mod tests {
         std::fs::remove_file(&path).expect("remove");
         std::fs::create_dir(&path).expect("directory");
         second.begin_android_keystore_slot().expect("begin");
+    }
+
+    #[test]
+    fn a_malformed_keystore_slot_does_not_hide_the_others() {
+        let root_dir = scratch();
+        let mut session = make(&root_dir);
+        let vault_id = session.vault_id();
+        let generation = session.next_slot_generation(SlotType::AndroidKeystore);
+        let damaged = KeySlotDescriptor::v1(
+            random::id().expect("id"),
+            SlotType::AndroidKeystore,
+            generation,
+            vec![0xff; 96],
+        )
+        .expect("slot");
+        session
+            .commit_slots(|slots| slots.push(damaged))
+            .expect("commit the damaged slot");
+        let enrollment = session.begin_android_keystore_slot().expect("begin");
+        let (nonce, wrapped) = keystore_wrap(&enrollment.aad, enrollment.root_secret.expose());
+        session
+            .finish_android_keystore_slot(nonce, wrapped)
+            .expect("finish");
+        drop(session);
+
+        let material = android_keystore_material(&root_dir).expect("material");
+        assert_eq!(material.len(), 1, "the damaged body is skipped");
+        let root = keystore_unwrap(&material[0]).expect("the good slot unwraps");
+        assert_eq!(
+            unlock_with_android_keystore(&root_dir, &root, 1)
+                .expect("unlock")
+                .vault_id(),
+            vault_id
+        );
     }
 
     #[test]

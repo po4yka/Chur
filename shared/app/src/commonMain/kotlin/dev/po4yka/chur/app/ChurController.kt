@@ -702,24 +702,36 @@ class ChurController(
         // Not `firstNotNullOfOrNull`: the unwrap suspends now, because the
         // platform asks the user to authorize it first.
         var root: ByteArray? = null
+        var worst: ChurFailure? = null
         val hostEpoch = promptEpoch
         beginHostActivity()
         try {
             withContext(Dispatchers.Default) {
                 for (entry in material) {
-                    root = deviceUnlock.unwrap(
-                        entry.alias,
-                        entry.aad,
-                        entry.gcmNonce,
-                        entry.wrappedRootSecret,
-                    )
+                    // One invalidated or malformed slot must not stop the
+                    // others: every entry is tried, and the most severe
+                    // failure is reported only when none opened. A cancel is
+                    // the user's answer and ends the walk.
+                    root = try {
+                        deviceUnlock.unwrap(
+                            entry.alias,
+                            entry.aad,
+                            entry.gcmNonce,
+                            entry.wrappedRootSecret,
+                        )
+                    } catch (failure: ChurFailure) {
+                        if (failure.status == ChurStatus.CANCELLED) throw failure
+                        worst = moreSevere(worst, failure)
+                        null
+                    }
                     if (root != null) break
                 }
             }
         } finally {
             if (hostEpoch == promptEpoch) endHostActivity()
         }
-        val opened = root ?: throw ChurFailure(ChurStatus.AUTHENTICATION_FAILED, "no device slot opened")
+        val opened = root
+            ?: throw worst ?: ChurFailure(ChurStatus.AUTHENTICATION_FAILED, "no device slot opened")
         try {
             if (epoch != lockEpoch || _route.value != target) return@attempt
             nativeEntry(epoch) { repository.unlockWithKeystoreRoot(opened) }
@@ -3466,4 +3478,23 @@ data class Notice(
         securityHapticDelivered = true
         return true
     }
+}
+
+/**
+ * The failure a device unlock reports when no slot opened.
+ *
+ * An invalidated key needs the user to re-enroll, `ANDROID.md` §9.4, so it
+ * outranks a factor that is only unavailable now, which outranks any other
+ * refusal. A tag that does not verify ranks last, because it is what every
+ * slot that is not the right one answers.
+ */
+internal fun moreSevere(current: ChurFailure?, next: ChurFailure): ChurFailure {
+    if (current == null) return next
+    fun rank(failure: ChurFailure): Int = when (failure.status) {
+        ChurStatus.PLATFORM_KEY_INVALIDATED -> 3
+        ChurStatus.PLATFORM_KEY_UNAVAILABLE -> 2
+        ChurStatus.AUTHENTICATION_FAILED -> 0
+        else -> 1
+    }
+    return if (rank(next) > rank(current)) next else current
 }
