@@ -34,6 +34,7 @@ import kotlin.test.assertContentEquals
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TestTimeSource
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -475,6 +476,27 @@ class MediaImporterHostTest {
     }
 
     @Test
+    fun an_unsupported_media_share_keeps_its_warning_after_the_adapter_falls_back_to_a_file() = withVault { controller, root ->
+        val source = picked(root, 0).copy(importAsFile = true, mediaPreviewUnavailable = true)
+        val codec = object : MediaCodec by Previewless {
+            override fun probe(media: PickedMedia): ProbedMedia? = error("adapter already probed this source")
+        }
+        val stored = assertIs<MediaImporter.Outcome.Imported>(MediaImporter(codec).import(controller.vault, source))
+        assertTrue(stored.storedAsFile)
+        assertEquals(MediaImporter.PreviewWarning.DECODING_FAILED, stored.previewWarning)
+        assertEquals(0, stored.derivatives)
+        assertContentEquals(ByteArray(2_048), controller.vault.readRange(stored.objectId, 0, 2_048))
+    }
+
+    @Test
+    fun an_explicit_file_import_has_no_unsupported_media_warning() = withVault { controller, root ->
+        val source = picked(root, 0).copy(importAsFile = true)
+        val stored = assertIs<MediaImporter.Outcome.Imported>(MediaImporter(Previewless).import(controller.vault, source))
+        assertFalse(stored.storedAsFile)
+        assertNull(stored.previewWarning)
+    }
+
+    @Test
     fun a_refusal_carries_its_status_rather_than_its_name() = withVault { controller, root ->
         // Import first binds a live session. The host then distinguishes a
         // cancellation from an unsupported source by its code, never by
@@ -767,7 +789,7 @@ class MediaImporterHostTest {
             withTimeout(10_000) { controller.route.first { it == AppRoute.Vault } }
             test(controller, root)
         } finally {
-            controller.vault.shutdown()
+            controller.shutdown()
             Dispatchers.resetMain()
             root.deleteRecursively()
         }

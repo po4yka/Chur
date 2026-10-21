@@ -50,6 +50,8 @@ data class PickedMedia(
     val importAsFile: Boolean = false,
     /** The complete resource package. The descriptor still points at its first byte. */
     val livePhoto: LivePhotoBundle? = null,
+    /** A media share fell back to a file because its decoder was unavailable. */
+    val mediaPreviewUnavailable: Boolean = false,
 )
 
 /** The canonical media facts a probe produced, §4. */

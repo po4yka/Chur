@@ -139,9 +139,13 @@ class IncomingShareAndroidTest {
                 try {
                     val picked = requireNotNull(source.open(0) { _, _ -> true })
                     assertEquals(path != "image", picked.importAsFile)
+                    assertEquals(path != "image", picked.mediaPreviewUnavailable)
                     val outcome = MediaImporter(AndroidMediaCodec(context)).import(vault, picked)
                     assertTrue("The source must remain storable: $path", outcome is MediaImporter.Outcome.Imported)
                     val id = (outcome as MediaImporter.Outcome.Imported).objectId
+                    assertEquals(path != "image", outcome.storedAsFile)
+                    assertEquals(if (path == "image") null else MediaImporter.PreviewWarning.DECODING_FAILED,
+                        outcome.previewWarning)
                     assertEquals(if (path == "image") "image/png" else "image/jpeg", vault.detail(id).contentType)
                     val output = File(root, path)
                     ParcelFileDescriptor.open(output, ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_READ_WRITE).use {

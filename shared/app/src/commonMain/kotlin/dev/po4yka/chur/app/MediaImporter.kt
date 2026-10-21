@@ -141,7 +141,8 @@ class MediaImporter(
             }
             val probe = if (livePhoto != null) (detected ?: fileImportProbe(media)).copy(contentType = LivePhotoBundle.CONTENT_TYPE)
                 else detected ?: fileImportProbe(media)
-            val storedAsFile = !media.importAsFile && probe.mediaClass == MediaBounds.CLASS_OPAQUE
+            val storedAsFile = media.mediaPreviewUnavailable ||
+                (!media.importAsFile && probe.mediaClass == MediaBounds.CLASS_OPAQUE)
             MediaBounds.check(probe)?.let { return Outcome.TooLarge(it) }
             if (cancelRequested()) return Outcome.Refused(ChurStatus.CANCELLED)
 

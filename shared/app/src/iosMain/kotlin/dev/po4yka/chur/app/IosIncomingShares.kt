@@ -40,8 +40,9 @@ public object IosIncomingShares {
                                 // A malformed or mislabeled media hint must not lose
                                 // an otherwise readable original.
                                 val probe = try { codec.probe(media) } catch (_: Exception) { null }
-                                val supported = probe != null && MediaBounds.check(probe) == null
+                                val supported = probe != null
                                 media.copy(contentTypeHint = type, importAsFile = !supported,
+                                    mediaPreviewUnavailable = !supported,
                                     close = { media.close(); release() })
                             }
                         } else {

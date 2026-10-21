@@ -44,7 +44,8 @@ internal class AndroidIncomingShareSource(
             // decoded. Receiving an arbitrary file must not require a codec.
             val opaque = asFile || runCatching { codec.probe(media) }.getOrNull() == null
             media.copy(originalFilename = safeIncomingFilename(media.originalFilename),
-                contentTypeHint = normalized, importAsFile = opaque)
+                contentTypeHint = normalized, importAsFile = opaque,
+                mediaPreviewUnavailable = !asFile && opaque)
         } else if (index == uriCount) {
             openText()
         } else null
