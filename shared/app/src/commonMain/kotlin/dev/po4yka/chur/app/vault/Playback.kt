@@ -50,6 +50,8 @@ class PlaybackSource(
     /** A resource range in a compound original. Player offsets are relative to this range. */
     val offset: Long = 0,
     val length: Long = plaintextSize,
+    /** Opens the host's explicit export action for the original object. */
+    val onExport: (() -> Unit)? = null,
 ) {
     /** True when the type names something a player can open. */
     val playable: Boolean
@@ -152,10 +154,11 @@ fun playbackFor(
     mediaKind: Int,
     detail: ObjectDetail?,
     onVerify: (() -> Unit)? = null,
+    onExport: (() -> Unit)? = null,
 ): PlaybackSource? {
     if (mediaKind != MEDIA_CLASS_VIDEO && mediaKind != MEDIA_CLASS_AUDIO) return null
     val record = detail ?: return null
-    val source = PlaybackSource(vault, objectId, record.contentType, record.plaintextSize, onVerify = onVerify)
+    val source = PlaybackSource(vault, objectId, record.contentType, record.plaintextSize, onVerify = onVerify, onExport = onExport)
     return if (source.playable) source else null
 }
 

@@ -108,7 +108,8 @@ actual fun VaultPlayer(
             AccessibilityManager.FLAG_CONTENT_CONTROLS or AccessibilityManager.FLAG_CONTENT_ICONS,
         )
     }
-    val player = remember(source.objectId, source.plaintextSize, source.offset, source.length) {
+    var attempt by remember(source.objectId, source.kind, source.offset) { mutableIntStateOf(0) }
+    val player = remember(source.objectId, source.kind, source.plaintextSize, source.offset, source.length, attempt) {
         val factory = ChurDataSource.Factory(source)
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(ProgressiveMediaSource.Factory(factory))
@@ -148,7 +149,8 @@ actual fun VaultPlayer(
     // before a press. It also goes on the press that starts playback: a
     // stream the device cannot decode then shows the player's own controls
     // and the chrome, not a poster that still looks playable.
-    var problem by remember(player) { mutableStateOf(playbackProblem(player.playerError, player.currentTracks)) }
+    var diagnostic by remember(player) { mutableStateOf(androidPlaybackDiagnostic(player.playerError, player.currentTracks)) }
+    val problem = diagnostic?.problem
     val failed = problem != null
     var buffering by remember(player) { mutableStateOf(player.playbackState == Player.STATE_BUFFERING) }
     var requested by remember(player) { mutableStateOf(player.playWhenReady) }
@@ -192,13 +194,13 @@ actual fun VaultPlayer(
             }
 
             override fun onPlayerErrorChanged(error: PlaybackException?) {
-                problem = playbackProblem(error, player.currentTracks)
+                diagnostic = androidPlaybackDiagnostic(error, player.currentTracks)
             }
 
             override fun onTracksChanged(tracks: Tracks) {
                 // Media3 can play supported audio while silently omitting an
                 // unsupported video track. Report that partial selection too.
-                problem = playbackProblem(player.playerError, tracks)
+                diagnostic = androidPlaybackDiagnostic(player.playerError, tracks)
             }
         }
         player.addListener(frames)
@@ -283,6 +285,7 @@ actual fun VaultPlayer(
                 }
             },
             update = { view ->
+                if (view.player !== player) view.player = player
                 // §13.2 and §25.5: the time bar and the settings sit above the
                 // viewer's actions and clear of the cutout. The padding moves
                 // the controls only, so the video keeps the whole canvas.
@@ -359,9 +362,10 @@ actual fun VaultPlayer(
                 modifier = Modifier.align(Alignment.TopCenter).padding(controlsPadding).padding(16.dp)
                     .background(ViewerColors.chromeScrim).semantics { liveRegion = LiveRegionMode.Polite })
         }
-        problem?.let {
+        diagnostic?.let {
             PlaybackProblemPanel(it, source.onVerify,
-                Modifier.align(Alignment.Center).padding(controlsPadding))
+                Modifier.align(Alignment.Center).padding(controlsPadding), onExport = source.onExport,
+                onRetry = { attempt += 1 })
         }
     }
 }

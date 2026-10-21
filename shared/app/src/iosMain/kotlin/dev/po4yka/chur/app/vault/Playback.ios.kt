@@ -18,11 +18,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -47,6 +49,7 @@ import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.usePinned
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.MutableStateFlow
 import platform.AVFoundation.AVErrorDecoderNotFound
@@ -149,11 +152,21 @@ actual fun VaultPlayer(
     val scrubInteractions = remember { MutableInteractionSource() }
     val dragging by scrubInteractions.collectIsDraggedAsState()
     var controlsFocused by remember { mutableStateOf(false) }
-    val loader = remember(source.objectId, source.kind, source.offset, source.length) { ChurResourceLoader(source) }
+    var attempt by remember(source.objectId, source.kind, source.offset) { mutableIntStateOf(0) }
+    val loader = remember(source.objectId, source.kind, source.offset, source.length, attempt) { ChurResourceLoader(source) }
     val player = remember(loader) { privatePlayer(privatePlayerItem(loader)) }
     val readerProblem by loader.problem.collectAsState()
-    var nativeProblem by remember(player) { mutableStateOf<PlaybackProblem?>(null) }
-    val problem = readerProblem ?: nativeProblem
+    var nativeDiagnostic by remember(player) { mutableStateOf<PlaybackDiagnostic?>(null) }
+    var containerFacts by remember(player) { mutableStateOf<PlaybackContainerFacts?>(null) }
+    LaunchedEffect(player) {
+        if (source.contentType in setOf("video/mp4", "video/quicktime", "audio/mp4")) {
+            try { containerFacts = inspectPlaybackContainer(source) }
+            catch (failure: CancellationException) { throw failure }
+            catch (failure: ChurFailure) { nativeDiagnostic = PlaybackDiagnostic(playbackProblem(failure.status)) }
+        }
+    }
+    val diagnostic = playbackDiagnostic(readerProblem, nativeDiagnostic)
+    val problem = diagnostic?.problem
     val layer = remember(player, audio) { if (audio) null else AVPlayerLayer.playerLayerWithPlayer(player) }
     var started by remember(player) { mutableStateOf(false) }
     var covered by remember(layer) { mutableStateOf(!audio) }
@@ -179,7 +192,9 @@ actual fun VaultPlayer(
                 // Native playback can accept AAC while silently dropping an
                 // unsupported MP4 video track. A ready item alone is not proof
                 // that this video asset is playable.
-                if (!audio && nativeProblem == null) nativeProblem = iosVideoPlaybackSupportProblem(item)
+                if (nativeDiagnostic == null) {
+                    nativeDiagnostic = iosAssetUnsupportedDiagnostic(item.asset, containerFacts)
+                }
                 if (!groupsLoaded) {
                     audioGroup = item.asset.mediaSelectionGroupForMediaCharacteristic(AVMediaCharacteristicAudible)
                     subtitleGroup = item.asset.mediaSelectionGroupForMediaCharacteristic(AVMediaCharacteristicLegible)
@@ -198,8 +213,10 @@ actual fun VaultPlayer(
                 position = position,
                 duration = duration,
             )
-            if (player.currentItem?.status == AVPlayerItemStatusFailed && nativeProblem == null) {
-                nativeProblem = iosNativePlaybackProblem(player.currentItem?.error)
+            if (player.currentItem?.status == AVPlayerItemStatusFailed && nativeDiagnostic == null) {
+                nativeDiagnostic = iosPlaybackDiagnostic(player.currentItem?.error,
+                    video = player.currentItem?.asset?.let(::iosAssetVideoDetails),
+                    audio = player.currentItem?.asset?.let(::iosAssetAudioFormat))
             }
             covered = !audio && (!started || layer?.readyForDisplay != true)
             if (phase == IosPlaybackPhase.PLAYING) source.vault.noteActivity()
@@ -242,7 +259,7 @@ actual fun VaultPlayer(
     }
     Box(modifier = modifier) {
         if (audio) AudioArtwork(poster, Modifier.fillMaxSize(), controlsPadding)
-        else UIKitView(
+        else key(player) { UIKitView(
             modifier = Modifier.fillMaxSize(),
             factory = {
                 val view = UIView(frame = CGRectMake(0.0, 0.0, 0.0, 0.0))
@@ -254,17 +271,19 @@ actual fun VaultPlayer(
                 // Compose surface resizes on rotation and on a split view.
                 (view.layer.sublayers?.firstOrNull() as? AVPlayerLayer)?.setFrame(view.bounds)
             },
-        )
+        ) }
         val posterShown = !audio && covered && poster != null && problem == null
         val posterOffersPlay = posterShown && !started
         if (posterShown) PlayerPoster(checkNotNull(poster), onPlay = if (posterOffersPlay) play else null)
         // The poster owns the only Play until it is pressed. Hidden transport
         // controls must not remain in the keyboard or VoiceOver focus order.
-        if (problem != null) {
+        if (diagnostic != null) {
             PlaybackProblemPanel(
-                problem = problem,
+                diagnostic = diagnostic,
                 onVerify = source.onVerify,
                 modifier = Modifier.align(Alignment.Center).padding(controlsPadding),
+                onExport = source.onExport,
+                onRetry = { attempt += 1 },
             )
         }
         if ((controlsVisible || controlsHeld) && !posterOffersPlay && problem == null) {

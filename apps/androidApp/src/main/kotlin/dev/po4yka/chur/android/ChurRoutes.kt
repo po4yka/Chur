@@ -1710,6 +1710,7 @@ private fun ViewerRoute(
             mediaKind = projection.mediaKind,
             detail = detail,
             onVerify = controller::verifyEverything,
+            onExport = { choosingExport = true },
         )
     }
 

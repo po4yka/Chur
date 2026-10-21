@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "ffmpeg_version": "ffmpeg version 9.0.2 Copyright (c) 2000-2026 the FFmpeg developers",
+  "source": {
+    "path": "tests/media/hevc-main10/sdr10-hvc1.mp4",
+    "sha256": "e1899bfaf18cfa813fcc592bdf5e87670054d0d82314437dc221f878fb29b84a"
+  },
+  "files": [
+    {
+      "filename": "hevc-dts.mp4",
+      "length": 78968,
+      "sha256": "1e16bd002dc6fb9236157caf44cc5e6b0abc51280dd08e313e7e2d252b6fe075",
+      "role": "device-dependent-unsupported-audio",
+      "ffprobe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "codec_name": "hevc",
+            "profile": "Main 10",
+            "codec_type": "video",
+            "codec_tag_string": "hvc1",
+            "width": 192,
+            "height": 96,
+            "pix_fmt": "yuv420p10le"
+          },
+          {
+            "codec_name": "dts",
+            "profile": "DTS",
+            "codec_type": "audio",
+            "codec_tag_string": "mp4a",
+            "sample_rate": "48000",
+            "channels": 1
+          }
+        ],
+        "format": {
+          "duration": "1.250000"
+        }
+      },
+      "provenance": "Unchanged synthetic Main10 video plus real FFmpeg dca-encoded DTS core sine audio. Not guaranteed unsupported on every device."
+    },
+    {
+      "filename": "truncated-container.mp4",
+      "length": 28,
+      "sha256": "eca37c7c34a073810c6a56f60a5c2f441296baeec0c500ed6c05e3b67e4c3a70",
+      "role": "invalid-container",
+      "ffprobe_exit": 1,
+      "provenance": "Exact ftyp prefix of the source MP4, truncated before moov; no fabricated codec wrapper or encrypted integrity failure."
+    }
+  ]
+}

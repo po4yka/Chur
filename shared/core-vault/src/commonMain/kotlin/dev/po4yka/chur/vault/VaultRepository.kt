@@ -683,8 +683,8 @@ class VaultRepository(
      * thread and a lock at once; the caller [releaseReader]s what it took, and a
      * call on a handle the lock already closed is `SESSION_EXPIRED`.
      */
-    suspend fun leaseReader(objectId: ByteArray, kind: StreamKind = StreamKind.ORIGINAL): Long =
-        withSession { current -> ChurVault.openReader(current, objectId, kind) }
+    suspend fun leaseReader(objectId: ByteArray, kind: StreamKind = StreamKind.ORIGINAL, expectedGeneration: Long? = null): Long =
+        withSession(expectedGeneration) { current -> ChurVault.openReader(current, objectId, kind) }
 
     /**
      * The content information a player needs before its first range request.

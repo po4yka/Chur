@@ -226,7 +226,7 @@ class HevcMain10AndroidTest {
                         }
                         assertEquals(name, PlaybackProblem.UNSUPPORTED, onMain { mappedProblem(native) })
                         assertTrue("$name unsupported warning must be visible", await {
-                            onMain { hasText(requireNotNull(composition), "This device cannot play this file.") }
+                            onMain { hasText(requireNotNull(composition), "This device cannot decode the HEVC") }
                         })
                         assertFalse(name, onMain { native.playWhenReady })
                         if (!capturedUnsupported) {

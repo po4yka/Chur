@@ -1,6 +1,9 @@
 package dev.po4yka.chur.android
 
 import android.content.Intent
+import android.app.KeyguardManager
+import android.os.PowerManager
+import android.view.WindowManager
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
@@ -37,6 +40,7 @@ internal class VideoAcceptanceSession private constructor(
     val directory: File,
     val vault: VaultRepository,
     val activity: MainActivity,
+    private val screen: VideoTestWindow,
 ) {
     val instrumentation get() = InstrumentationRegistry.getInstrumentation()
     val context get() = instrumentation.targetContext
@@ -49,8 +53,8 @@ internal class VideoAcceptanceSession private constructor(
         private set
     private var contentType = ""
 
-    suspend fun importFixture(name: String) {
-        val file = copyVideoFixture(directory, name)
+    suspend fun importFixture(name: String, assetDirectory: String = "video-acceptance") {
+        val file = copyVideoFixture(directory, name, assetDirectory)
         originalHash = fileDigest(file)
         originalSize = file.length()
         val codec = AndroidMediaCodec(context)
@@ -65,12 +69,12 @@ internal class VideoAcceptanceSession private constructor(
         assertTrue("Remove the import source before encrypted playback", file.delete())
     }
 
-    fun mount(): ExoPlayer {
+    fun mount(onExport: (() -> Unit)? = null): ExoPlayer {
         onVideoMain {
             composition?.disposeComposition()
             composition = ComposeView(activity).apply {
                 setContent { ChurTheme(dark = true) {
-                    VaultPlayer(PlaybackSource(vault, imported.objectId, contentType, originalSize),
+                    VaultPlayer(PlaybackSource(vault, imported.objectId, contentType, originalSize, onExport = onExport),
                         Modifier.fillMaxSize(), null, true, true, {}, PaddingValues(), 0)
                 } }
             }
@@ -106,7 +110,7 @@ internal class VideoAcceptanceSession private constructor(
 
     suspend fun close() {
         unmount()
-        onVideoMain { activity.finish() }
+        screen.close()
         try { vault.lock(LockReason.USER) } finally {
             vault.shutdown()
             directory.deleteRecursively()
@@ -120,14 +124,14 @@ internal class VideoAcceptanceSession private constructor(
             val directory = File(context.cacheDir, "export-scratch/video-acceptance-${System.nanoTime()}")
             assertTrue(directory.mkdirs())
             val vault = VaultRepository(File(directory, "vault").path, System::currentTimeMillis)
-            val activity = instrumentation.startActivitySync(Intent(context, MainActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+            val screen = VideoTestWindow.open()
+            val activity = screen.activity
             try {
                 vault.start()
                 vault.create("Video acceptance test vault password".encodeToByteArray(), false)
-                return VideoAcceptanceSession(directory, vault, activity)
+                return VideoAcceptanceSession(directory, vault, activity, screen)
             } catch (failure: Throwable) {
-                onVideoMain { activity.finish() }
+                screen.close()
                 runCatching { vault.shutdown() }
                 directory.deleteRecursively()
                 throw failure
@@ -136,8 +140,8 @@ internal class VideoAcceptanceSession private constructor(
     }
 }
 
-internal fun copyVideoFixture(directory: File, name: String): File = File(directory, name).also { output ->
-    InstrumentationRegistry.getInstrumentation().context.assets.open("video-acceptance/$name").use { input ->
+internal fun copyVideoFixture(directory: File, name: String, assetDirectory: String = "video-acceptance"): File = File(directory, name).also { output ->
+    InstrumentationRegistry.getInstrumentation().context.assets.open("$assetDirectory/$name").use { input ->
         output.outputStream().use { input.copyTo(it) }
     }
 }
@@ -191,4 +195,30 @@ internal fun <T> onVideoMain(block: () -> T): T {
     var result: T? = null
     InstrumentationRegistry.getInstrumentation().runOnMainSync { result = block() }
     @Suppress("UNCHECKED_CAST") return result as T
+}
+
+/** Keep only a test-owned foreground window awake; never dismiss system authentication. */
+internal class VideoTestWindow private constructor(val activity: MainActivity, private val previouslyKeptAwake: Boolean) {
+    fun close() = onVideoMain {
+        if (!previouslyKeptAwake) activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        activity.finish()
+    }
+    companion object {
+        fun open(blank: Boolean = false): VideoTestWindow {
+            val instrumentation = InstrumentationRegistry.getInstrumentation()
+            val context = instrumentation.targetContext
+            assertFalse("Unlock the test device before video acceptance. Tests do not dismiss a secured keyguard.",
+                requireNotNull(context.getSystemService(KeyguardManager::class.java)).isKeyguardLocked)
+            assertTrue("Wake the unlocked test device before video acceptance.",
+                requireNotNull(context.getSystemService(PowerManager::class.java)).isInteractive)
+            val activity = instrumentation.startActivitySync(Intent(context, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+            return onVideoMain {
+                val wasKeptAwake = activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON != 0
+                activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                if (blank) activity.setContentView(FrameLayout(activity).apply { setBackgroundColor(android.graphics.Color.BLACK) })
+                VideoTestWindow(activity, wasKeptAwake)
+            }
+        }
+    }
 }

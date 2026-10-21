@@ -1575,6 +1575,7 @@ private fun IosViewerRoute(
             mediaKind = projection.mediaKind,
             detail = detail,
             onVerify = { if (canInteract()) controller.verifyEverything() },
+            onExport = { if (canInteract()) choosingExport = true },
         )
     }
 
