@@ -11,6 +11,13 @@ targets:
       - Resources
       - Assets.xcassets
       - ChurMirror.icon
+      - SpiritRenderer/ChurSpiritRenderer.swift
+      - SpiritRenderer/ChurSpiritView.mm
+      - SpiritRenderer/SpiritScene.cpp
+      - path: SpiritRenderer/Resources/chur_interactive.glb
+        buildPhase: resources
+      - path: SpiritRenderer/Resources/chur_interactive.manifest.json
+        buildPhase: resources
     info:
       path: Info.plist
       properties:
@@ -66,13 +73,19 @@ targets:
         ARCHS: arm64
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "5.0"
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) CHUR_FILAMENT"
+        SWIFT_OBJC_BRIDGING_HEADER: "$(SRCROOT)/SpiritRenderer/ChurSpirit-Bridging-Header.h"
+        HEADER_SEARCH_PATHS: "$(inherited) $(SRCROOT)/SpiritRenderer/.vendor/filament/include"
+        CLANG_CXX_LANGUAGE_STANDARD: c++17
+        CLANG_CXX_LIBRARY: libc++
+        CLANG_ENABLE_OBJC_ARC: YES
         FRAMEWORK_SEARCH_PATHS: "$(inherited) $(DERIVED_FILE_DIR)"
-        OTHER_LDFLAGS: "$(inherited) $(DERIVED_FILE_DIR)/ChurApp.framework/ChurApp $(DERIVED_FILE_DIR)/libchur_ffi.a"
+        OTHER_LDFLAGS: "$(inherited) $(DERIVED_FILE_DIR)/ChurApp.framework/ChurApp $(DERIVED_FILE_DIR)/libchur_ffi.a -framework Metal -framework QuartzCore -framework CoreVideo -lc++ -lz $(DERIVED_FILE_DIR)/chur-filament/libgltfio_core.a $(DERIVED_FILE_DIR)/chur-filament/libuberarchive.a $(DERIVED_FILE_DIR)/chur-filament/libuberzlib.a $(DERIVED_FILE_DIR)/chur-filament/libfilament.a $(DERIVED_FILE_DIR)/chur-filament/libbackend.a $(DERIVED_FILE_DIR)/chur-filament/libfilabridge.a $(DERIVED_FILE_DIR)/chur-filament/libfilaflat.a $(DERIVED_FILE_DIR)/chur-filament/libutils.a $(DERIVED_FILE_DIR)/chur-filament/libgeometry.a $(DERIVED_FILE_DIR)/chur-filament/libstb.a $(DERIVED_FILE_DIR)/chur-filament/libktxreader.a $(DERIVED_FILE_DIR)/chur-filament/libbasis_transcoder.a $(DERIVED_FILE_DIR)/chur-filament/libdracodec.a $(DERIVED_FILE_DIR)/chur-filament/libmeshoptimizer.a $(DERIVED_FILE_DIR)/chur-filament/libzstd.a $(DERIVED_FILE_DIR)/chur-filament/libabseil.a $(DERIVED_FILE_DIR)/chur-filament/libimage.a $(DERIVED_FILE_DIR)/chur-filament/libibl.a $(DERIVED_FILE_DIR)/chur-filament/libmikktspace.a $(DERIVED_FILE_DIR)/chur-filament/libshaders.a $(DERIVED_FILE_DIR)/chur-filament/libsmol-v.a"
         ENABLE_USER_SCRIPT_SANDBOXING: NO
         CODE_SIGNING_ALLOWED: NO
       configs:
         Debug:
-          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "DEBUG CHUR_FILAMENT"
     dependencies:
       - target: ChurShare
         embed: true
@@ -81,6 +94,7 @@ targets:
         basedOnDependencyAnalysis: false
         script: |
           set -euo pipefail
+          "$SRCROOT/SpiritRenderer/stage-filament.sh"
           cd "$SRCROOT/../.."
           case "$PLATFORM_NAME" in
             iphonesimulator) target=IosSimulatorArm64; directory=iosSimulatorArm64; triple=aarch64-apple-ios-sim ;;

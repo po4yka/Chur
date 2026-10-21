@@ -104,6 +104,9 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         configureAdaptiveBars()
+        #if CHUR_FILAMENT
+        ChurSpiritRendererInstaller.install()
+        #endif
         #if DEBUG
         let releaseApplication = false
         #else

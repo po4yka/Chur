@@ -1,7 +1,14 @@
 package dev.po4yka.chur.app.notes
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import dev.po4yka.chur.app.spirit.SpiritOverlay
+import dev.po4yka.chur.app.spirit.shouldShowSpiritInNotes
+
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.FlowRow
@@ -93,6 +100,10 @@ fun NotesScreen(
     onPurge: suspend (String) -> Unit = { error("purge unavailable") },
 ) {
     val scope = rememberCoroutineScope()
+    var spiritControlsHeight by remember { mutableStateOf(0) }
+    val spiritDensity = LocalDensity.current
+    var spiritEnabled by remember { mutableStateOf(false) }
+    val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     var packageBusy by remember { mutableStateOf(false) }
     var packageFailed by remember { mutableStateOf(false) }
     var importFailed by remember { mutableStateOf(false) }
@@ -141,8 +152,12 @@ fun NotesScreen(
             }
         },
     ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            FlowRow {
+        Box(Modifier.fillMaxSize().padding(padding)) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            FlowRow(Modifier.onSizeChanged { spiritControlsHeight = it.height }) {
+                TextButton(onClick = { spiritEnabled = !spiritEnabled }) {
+                    Text(if (spiritEnabled) "Hide Chur" else "Show Chur")
+                }
                 TextButton(enabled = !packageBusy, onClick = { trash = !trash; if (trash) onRefreshTrash() }) {
                     Text(if (trash) "Active notes" else "Trash")
                 }
@@ -216,6 +231,12 @@ fun NotesScreen(
                     }
                 }
             }
+        }
+        if (shouldShowSpiritInNotes(spiritEnabled, query.isNotBlank(), keyboardVisible, trash,
+                filters || pendingPurge != null, packageBusy, showFirstWriteDisclosure)) {
+            // Top bar remains outside the hit region; reserve the bottom FAB strip.
+            SpiritOverlay(Modifier.fillMaxSize().padding(top = with(spiritDensity) { spiritControlsHeight.toDp() }, bottom = 88.dp), onDismiss = { spiritEnabled = false })
+        }
         }
     }
 }

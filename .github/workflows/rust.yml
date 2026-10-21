@@ -437,6 +437,13 @@ jobs:
       # application's; linking here proves the framework and the static library
       # agree on every symbol cinterop generated a binding for.
       - run: ./gradlew --no-daemon --no-parallel --max-workers=1 linkDebugFrameworkIosSimulatorArm64
+      # Compile the actual UIKit/Metal host, not only its Kotlin framework.
+      # The prebuild script stages checksum-pinned Filament archives for this SDK.
+      - name: compile the iOS app and interactive spirit host
+        run: >-
+          xcodebuild -project apps/iosApp/Chur.xcodeproj -scheme Chur
+          -configuration Debug -destination 'generic/platform=iOS Simulator'
+          CODE_SIGNING_ALLOWED=NO build
       # The same lockfile pin the Android job enforces, for the Kotlin/Native
       # configurations that only a macOS job resolves.
       - name: the Gradle lockfiles pin the resolution

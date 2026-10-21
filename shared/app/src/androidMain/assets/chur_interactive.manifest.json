@@ -1,0 +1,348 @@
+{
+  "schemaVersion": 1,
+  "asset": "chur_interactive.glb",
+  "sha256": "feb2a8450932520e63673a4b07cc4d5c37f1170cb7bafe9a880683a6582fa429",
+  "bytes": 1159312,
+  "units": "meters",
+  "up": "+Y",
+  "forward": "+Z",
+  "screenPlane": "XY",
+  "appRoot": "AppRoot",
+  "motionRoot": "MotionRoot",
+  "rig": "Spirit_Rig",
+  "body": "Spirit_Volume",
+  "joints": [
+    "Root",
+    "Head",
+    "Tail_01",
+    "Tail_02",
+    "Tail_03",
+    "Tail_04",
+    "Tail_05",
+    "Tail_06",
+    "Tail_07",
+    "Tail_08"
+  ],
+  "clips": [
+    {
+      "name": "idle_soft",
+      "duration": 4,
+      "loop": true,
+      "inPlace": true,
+      "interruptible": true
+    },
+    {
+      "name": "notice",
+      "duration": 0.6,
+      "loop": false,
+      "inPlace": true,
+      "interruptible": true
+    },
+    {
+      "name": "tap_react",
+      "duration": 0.8,
+      "loop": false,
+      "inPlace": true,
+      "interruptible": true
+    },
+    {
+      "name": "hold_enter",
+      "duration": 0.2,
+      "loop": false,
+      "inPlace": true,
+      "interruptible": true
+    },
+    {
+      "name": "hold_loop",
+      "duration": 1.2,
+      "loop": true,
+      "inPlace": true,
+      "interruptible": true
+    },
+    {
+      "name": "release_settle",
+      "duration": 0.8,
+      "loop": false,
+      "inPlace": true,
+      "interruptible": true
+    },
+    {
+      "name": "sleep_enter",
+      "duration": 1,
+      "loop": false,
+      "inPlace": true,
+      "interruptible": true
+    },
+    {
+      "name": "sleep_loop",
+      "duration": 3,
+      "loop": true,
+      "inPlace": true,
+      "interruptible": true
+    },
+    {
+      "name": "wake",
+      "duration": 0.7,
+      "loop": false,
+      "inPlace": true,
+      "interruptible": true
+    }
+  ],
+  "eyes": [
+    {
+      "node": "Spirit_Eye_L",
+      "mesh": "Spirit_Eye_L_SurfaceAperture",
+      "apertureLevels": [
+        0,
+        0.0025,
+        0.005,
+        0.01,
+        0.025,
+        0.075,
+        0.15,
+        0.3,
+        0.5,
+        0.7,
+        0.85,
+        1
+      ],
+      "targetNames": [
+        "Aperture_00000",
+        "Aperture_00025",
+        "Aperture_00050",
+        "Aperture_00100",
+        "Aperture_00250",
+        "Aperture_00750",
+        "Aperture_01500",
+        "Aperture_03000",
+        "Aperture_05000",
+        "Aperture_07000",
+        "Aperture_08500"
+      ],
+      "targetLevels": [
+        0,
+        0.0025,
+        0.005,
+        0.01,
+        0.025,
+        0.075,
+        0.15,
+        0.3,
+        0.5,
+        0.7,
+        0.85
+      ],
+      "basisOpening": 1
+    },
+    {
+      "node": "Spirit_Eye_R",
+      "mesh": "Spirit_Eye_R_SurfaceAperture",
+      "apertureLevels": [
+        0,
+        0.0025,
+        0.005,
+        0.01,
+        0.025,
+        0.075,
+        0.15,
+        0.3,
+        0.5,
+        0.7,
+        0.85,
+        1
+      ],
+      "targetNames": [
+        "Aperture_00000",
+        "Aperture_00025",
+        "Aperture_00050",
+        "Aperture_00100",
+        "Aperture_00250",
+        "Aperture_00750",
+        "Aperture_01500",
+        "Aperture_03000",
+        "Aperture_05000",
+        "Aperture_07000",
+        "Aperture_08500"
+      ],
+      "targetLevels": [
+        0,
+        0.0025,
+        0.005,
+        0.01,
+        0.025,
+        0.075,
+        0.15,
+        0.3,
+        0.5,
+        0.7,
+        0.85
+      ],
+      "basisOpening": 1
+    }
+  ],
+  "constraints": {
+    "proceduralTailEnabled": true,
+    "proceduralTail": {
+      "joints": [
+        {
+          "name": "Tail_01",
+          "axisLocal": [
+            -0.6625739625133669,
+            -7.406696641750592e-8,
+            0.748996491446609
+          ],
+          "maxAbsRadians": 0
+        },
+        {
+          "name": "Tail_02",
+          "axisLocal": [
+            -0.6139406452393908,
+            -9.084065704530473e-8,
+            0.7893521927017322
+          ],
+          "maxAbsRadians": 0
+        },
+        {
+          "name": "Tail_03",
+          "axisLocal": [
+            -0.3896400771372453,
+            -1.3761976635958492e-7,
+            0.9209672145567738
+          ],
+          "maxAbsRadians": 0.004
+        },
+        {
+          "name": "Tail_04",
+          "axisLocal": [
+            0.03996804484625962,
+            -2.1324455056325855e-7,
+            0.9992009584618713
+          ],
+          "maxAbsRadians": 0.008
+        },
+        {
+          "name": "Tail_05",
+          "axisLocal": [
+            0.48564314380859,
+            -2.6638179395419143e-7,
+            0.874157157993709
+          ],
+          "maxAbsRadians": 0.012
+        },
+        {
+          "name": "Tail_06",
+          "axisLocal": [
+            0.7474095073409063,
+            -2.7011082288225103e-7,
+            0.6643636265904016
+          ],
+          "maxAbsRadians": 0.016
+        },
+        {
+          "name": "Tail_07",
+          "axisLocal": [
+            0.8320503874746037,
+            -2.9271955926168636e-7,
+            0.5547000565199866
+          ],
+          "maxAbsRadians": 0.02
+        },
+        {
+          "name": "Tail_08",
+          "axisLocal": [
+            0.9405539039307058,
+            -2.567438838188141e-7,
+            0.33964445203866167
+          ],
+          "maxAbsRadians": 0.024
+        }
+      ],
+      "composition": "authoredLocalQuaternion * axisAngle(axisLocal, clampedOffset)",
+      "maxMasterSignal": 1,
+      "resetFromAuthoredPoseEveryFrame": true,
+      "reduceMotionDisables": true,
+      "validationCases": 252,
+      "validation": "Sampled authored poses plus signed and wave extremes; not continuous proof or device certification."
+    }
+  },
+  "notes": [
+    "AppRoot must only be controlled by application.",
+    "Use a single owner for eye morph weights, applied after clip mixing.",
+    "Eye aperture is piecewise interpolation of absolute states; omitted basis at opening=1 has all weights zero.",
+    "Body mesh preserved, eyes reduced to 40x10 samples and 11 morph targets each.",
+    "No mobile performance certification."
+  ],
+  "neutralBounds": {
+    "min": [
+      -0.4222147464752197,
+      -0.8673747777938843,
+      -0.33139097690582275
+    ],
+    "max": [
+      0.4681544303894043,
+      0.6869288682937622,
+      0.3514579236507416
+    ]
+  },
+  "framing": {
+    "orthographicHeight": 2.25,
+    "target": [
+      0,
+      0,
+      0
+    ],
+    "cameraDirection": [
+      0,
+      0,
+      -1
+    ]
+  },
+  "eyeAnimation": {
+    "model": "smoothstep plateau",
+    "idle_soft": {
+      "blinkKnotsSeconds": [
+        2.6,
+        2.66,
+        2.78,
+        2.9
+      ]
+    },
+    "tap_react": {
+      "blinkKnotsSeconds": [
+        0.09,
+        0.15,
+        0.25,
+        0.36
+      ]
+    },
+    "notice": {
+      "constant": 1
+    },
+    "hold_enter": {
+      "from": 1,
+      "to": 0.84,
+      "easing": "smoothstep"
+    },
+    "hold_loop": {
+      "constant": 0.84
+    },
+    "release_settle": {
+      "from": 0.84,
+      "to": 1,
+      "easing": "smoothstep"
+    },
+    "sleep_enter": {
+      "from": 1,
+      "to": 0,
+      "easing": "smoothstep"
+    },
+    "sleep_loop": {
+      "constant": 0
+    },
+    "wake": {
+      "from": 0,
+      "to": 1,
+      "easing": "smoothstep"
+    }
+  }
+}
