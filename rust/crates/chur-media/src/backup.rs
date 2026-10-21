@@ -764,6 +764,22 @@ fn restore_inner(
                 "the archive verification was cancelled",
             ));
         }
+        // §8 step 6: the catalog is the one the sealed manifest describes. The
+        // header commitment above is the file's salt, which every copy of the
+        // same catalog shares, so it cannot tell this package's catalog from
+        // an older package's. The generation can: the manifest records the
+        // snapshot's generation under the manifest key, and the final commit
+        // binds the manifest to this package. The descriptor records the
+        // generation of the source's last lock, which the snapshot can only
+        // equal or pass. Both are checked before migration changes the value.
+        let restored_generation = schema::generation(&catalog)
+            .map_err(|_| chur_core::err!(VaultCorrupt, "the backup catalog has no generation"))?;
+        ensure!(
+            restored_generation == manifest.catalog_generation
+                && restored_generation >= descriptor.catalog.catalog_generation,
+            VaultCorrupt,
+            "the package's catalog is not the one its manifest describes"
+        );
         if vault::prepare_restored_catalog(&mut catalog, &local)? {
             let target = chur_format::constants::CATALOG_FORMAT_VERSION_V15;
             let migration_steps = target - local.catalog.catalog_format_version;

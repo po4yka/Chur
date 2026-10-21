@@ -221,7 +221,7 @@ The domain tag is a fixed ASCII byte constant with no length prefix, per [`CANON
 3. authenticate manifest and root context;
 4. verify package/inventory completeness;
 5. restore to temporary app-private namespace;
-6. validate catalog and object-key references;
+6. validate catalog and object-key references. The catalog's `catalog_generation` must equal the manifest's `catalog_generation`, and must not be lower than the `catalog_generation` that the package descriptor records. If not, the restore stops with `VAULT_CORRUPT` before it installs anything. The catalog header commitment identifies the catalog file only, and every copy of the same catalog has the same header, so this check is what refuses a catalog export from a different package of the same vault;
 7. verify object final commits at the required level;
 8. create new local platform key slot;
 9. commit local vault descriptor atomically;
