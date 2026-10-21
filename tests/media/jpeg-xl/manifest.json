@@ -1,0 +1,54 @@
+{
+  "alpha.jxl": {
+    "bytes": 85,
+    "sha256": "6a66f0e22b165ceca9f3e6ceb4f429d5fd703065fc99538a51a4bc6377f8cf8b"
+  },
+  "animated.jxl": {
+    "bytes": 148,
+    "sha256": "1510b8466f58f254788bfefe945b7da81f58fc3d7043093e56649ab707e475a5"
+  },
+  "associated-alpha.jxl": {
+    "bytes": 70,
+    "sha256": "2bb31dc6aed184f4c60cc46dddc91ae69596e097221439e293bb01588a95771c"
+  },
+  "finite-animation.jxl": {
+    "bytes": 144,
+    "sha256": "a0e78b12f75f7383b68272085823e3ae1389370f71f91368bf1e0e8f0594dfb0"
+  },
+  "icc-limit.jxl": {
+    "bytes": 328,
+    "sha256": "efa5ee320c7c0eadbabf846410e78332091809220edd77212acaa5ae83294f40"
+  },
+  "large.jxl": {
+    "bytes": 1778,
+    "sha256": "ca1e4907907e696004e42749d8669f27f5d42f8e2da511ba3adddace30fc52c0"
+  },
+  "malformed.jxl": {
+    "bytes": 10,
+    "sha256": "14684c89b2f446942ab6bdea14683bab615ce7babad85f012cdbee45577fb697"
+  },
+  "oriented.jxl": {
+    "bytes": 146,
+    "sha256": "2388e23bc2b768897755f0fdd1010801cfd98f8cb7ac83915a60d98da9294f99"
+  },
+  "oversized.jxl": {
+    "bytes": 628,
+    "sha256": "f1a1ba1df091c3c0604fc3c75e2abafa300a55d1f7afe2d25d55d94c4aecfb1d"
+  },
+  "profiled.jxl": {
+    "bytes": 302,
+    "sha256": "3785e4f4a2fa139d5e8860c776a5d561958702ead0af9a011813e0b8d349d8fb"
+  },
+  "still-codestream.jxl": {
+    "bytes": 45,
+    "sha256": "952c6cd6cbef9ba59fa2926ff50aac955474659a2e8418b1c441f053be82fcbc"
+  },
+  "still-container.jxl": {
+    "bytes": 85,
+    "sha256": "f6cd355ffcb98e8968ff1f4983cbcaf5f7082ec63001671c1be559ca6a2f884b"
+  },
+  "truncated.jxl": {
+    "bytes": 20,
+    "sha256": "379a9f285aacd8fafc28843dc7b652ff0bc60fc4c4aa9dc6fc87cde0ec18079c"
+  }
+}
