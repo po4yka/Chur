@@ -59,8 +59,8 @@ int main(void) {
           "object format range is ordered");
     check(chur_key_slot_format_min() <= chur_key_slot_format_max(),
           "key slot format range is ordered");
-    check(chur_object_format_min() == 1 && chur_object_format_max() == 1,
-          "object format range is 1..=1");
+    check(chur_object_format_min() == 1 && chur_object_format_max() == 2,
+          "object format range is 1..=2, v2 being the padded container of ADR-0066");
     check(chur_key_slot_format_min() == 1 && chur_key_slot_format_max() == 1,
           "key slot format range is 1..=1");
 

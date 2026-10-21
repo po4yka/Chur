@@ -110,6 +110,39 @@ fn an_imported_object_reads_back_byte_for_byte() {
 }
 
 #[test]
+fn imports_write_padded_containers_that_report_the_true_size() {
+    // ADR-0066: both objects fall in the 512 KiB bucket, so their containers
+    // have one length, while every size the catalog and the reader report is
+    // the object's own.
+    let (root, mut session) = new_vault();
+    let mut lengths = Vec::new();
+    for (length, name) in [(300_000usize, "a.jpg"), (500_000, "b.jpg")] {
+        let (object_id, expected) = import_photo(&mut session, length, name);
+        let stream = &store::streams(session.catalog_ref().unwrap(), &object_id).unwrap()[0];
+        assert_eq!(stream.container_version, 2);
+        assert_eq!(stream.plaintext_size, length as u64);
+        let path = root.container(&session.object_store_id(), &stream.container_path_id);
+        let on_disk = std::fs::metadata(&path).unwrap().len();
+        assert_eq!(stream.ciphertext_size, on_disk);
+        lengths.push(on_disk);
+
+        let mut handle = reader::open(&session, &object_id, StreamKind::Original).expect("open");
+        assert_eq!(handle.size(), length as u64);
+        let read = handle.read_range(0, length as u64).expect("read");
+        assert_eq!(read.as_slice(), expected.as_slice());
+        assert_eq!(
+            rejection(handle.read_range(length as u64, 1)),
+            ChurStatus::InvalidInput
+        );
+    }
+    assert_eq!(lengths[0], lengths[1]);
+    assert_eq!(
+        session.descriptor().object_store.container_version_ceiling,
+        2
+    );
+}
+
+#[test]
 fn a_range_read_returns_the_same_bytes_as_the_whole() {
     let (_root, mut session) = new_vault();
     let length = 262_144 * 2 + 500;
@@ -388,6 +421,47 @@ fn a_journal_reservation_is_durable_before_the_record_is_written() {
             "the reservation did not advance with the record"
         );
     }
+    running.abandon(&mut session).expect("abandon");
+}
+
+#[test]
+fn a_resume_never_counts_bucket_padding_as_object_bytes() {
+    // 300000 bytes are one full 262144-byte chunk and a short one; the short
+    // one is padded to the 512 KiB bucket, so after it the next source offset
+    // would lie past the object.
+    let (_root, mut session) = new_vault();
+    let mut running =
+        import::begin(&mut session, source("a.jpg", 300_000), photo(), NOW).expect("begin");
+    let transaction_id = running.transaction_id();
+    running
+        .write(&mut session, &plaintext(262_144))
+        .expect("write");
+    assert_eq!(
+        import::resume_offset(&session, &transaction_id, true).unwrap(),
+        Some(262_144)
+    );
+    running
+        .write(&mut session, &plaintext(300_000 - 262_144))
+        .expect("write");
+    assert_eq!(
+        import::resume_offset(&session, &transaction_id, true).unwrap(),
+        None,
+        "a reserved record that holds padding must not resume past the object"
+    );
+    running.abandon(&mut session).expect("abandon");
+
+    // Without a known length, no reserved record is provably object bytes.
+    let mut unknown = source("b.jpg", 0);
+    unknown.known_length = None;
+    let mut running = import::begin(&mut session, unknown, photo(), NOW).expect("begin");
+    let transaction_id = running.transaction_id();
+    running
+        .write(&mut session, &plaintext(262_144))
+        .expect("write");
+    assert_eq!(
+        import::resume_offset(&session, &transaction_id, true).unwrap(),
+        None
+    );
     running.abandon(&mut session).expect("abandon");
 }
 

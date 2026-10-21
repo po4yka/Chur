@@ -18,9 +18,10 @@ use chur_catalog::store;
 use chur_catalog::vault::Session;
 use chur_core::{Id, Result, ensure, limits::media as media_bounds};
 use chur_crypto::{Nonce, random};
-use chur_format::constants::{CONTAINER_VERSION_V1, MediaClass, ObjectState, SUITE_V1, StreamKind};
+use chur_format::constants::{MediaClass, ObjectState, SUITE_V1, StreamKind};
 use chur_format::container::{
-    CanonicalManifest, ContainerWriter, MediaProperties, StreamIdentity, StreamReader,
+    CanonicalManifest, ContainerVersion, ContainerWriter, MediaProperties, StreamIdentity,
+    StreamReader,
 };
 use chur_format::waveform::Waveform;
 use zeroize::Zeroizing;
@@ -167,6 +168,7 @@ pub fn put(
             opened_ms: now_ms,
         },
     )?;
+    session.admit_container_version(ContainerVersion::CURRENT.value())?;
     let store_id = session.object_store_id();
     let mut temporary = TemporaryContainer::open(session.root_dir(), &store_id, &temp_path_id)?;
     temporary.truncate_to(0)?;
@@ -180,8 +182,15 @@ pub fn put(
         writer.write_chunk(piece)?;
         writer.sink_mut().sync()?;
     }
+    // ADR-0066: each padding chunk takes a reserved index like an object chunk.
+    while writer.padding_pending() {
+        journal::reserve_chunk(session.catalog()?, &transaction_id, writer.chunk_count())?;
+        writer.write_padding_chunk()?;
+        writer.sink_mut().sync()?;
+    }
     journal::mark_committing(session.catalog()?, &transaction_id)?;
     let plaintext_size = writer.total_plaintext_length();
+    let container_version = writer.version().value();
     let mut container = writer.finish(Nonce::random()?, 1)?;
     container.sync()?;
     let ciphertext_size = container.length()?;
@@ -218,7 +227,7 @@ pub fn put(
             stream_revision,
             source_content_revision,
             container_path_id,
-            container_version: CONTAINER_VERSION_V1,
+            container_version,
             suite_id: SUITE_V1,
             ciphertext_size,
             plaintext_size,

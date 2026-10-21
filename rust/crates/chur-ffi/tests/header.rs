@@ -460,7 +460,7 @@ fn every_declared_function_is_exported() {
             | chur_ffi::CHUR_CAP_JPEG_XL
     );
     assert_eq!(chur_ffi::chur_object_format_min(), 1);
-    assert_eq!(chur_ffi::chur_object_format_max(), 1);
+    assert_eq!(chur_ffi::chur_object_format_max(), 2);
     assert_eq!(chur_ffi::chur_key_slot_format_min(), 1);
     assert_eq!(chur_ffi::chur_key_slot_format_max(), 1);
     assert_ne!(chur_ffi::chur_build_flavor(), 0);

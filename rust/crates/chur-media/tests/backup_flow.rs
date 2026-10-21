@@ -212,6 +212,35 @@ fn a_package_restores_a_vault_whose_objects_export_the_original_bytes() {
 }
 
 #[test]
+fn a_restored_vault_keeps_the_container_ceiling_of_its_padded_objects() {
+    // ADR-0066: the restored descriptor must still admit the v2 containers it
+    // installs, or a v1-only build would open the vault and fail per object.
+    let (_root, mut session) = new_vault();
+    let (object_id, bytes) = import_one(&mut session, 300_000, "a.jpg", 0x3333);
+    assert_eq!(
+        session.descriptor().object_store.container_version_ceiling,
+        2
+    );
+    let mut package = Cursor::new(Vec::new());
+    backup::create(&mut session, &mut package, NOW, &mut Uninterrupted).expect("create");
+    session.lock().expect("lock");
+
+    let destination = scratch_root();
+    backup::restore(&destination, &mut package, PASSWORD, &mut Uninterrupted).expect("restore");
+    let opened = vault::unlock_with_password(&destination, PASSWORD, NOW + 2_000).expect("unlock");
+    assert_eq!(opened.descriptor().object_store.container_version_floor, 1);
+    assert_eq!(
+        opened.descriptor().object_store.container_version_ceiling,
+        2
+    );
+    let stream =
+        &chur_catalog::store::streams(opened.catalog_ref().unwrap(), &object_id).unwrap()[0];
+    assert_eq!(stream.container_version, 2);
+    assert_eq!(stream.plaintext_size, 300_000);
+    assert_eq!(exported(&opened, &object_id), bytes);
+}
+
+#[test]
 fn backup_rejects_damaged_source_containers_before_writing_a_package() {
     for damage_final_commit in [false, true] {
         let (_root, mut session) = new_vault();

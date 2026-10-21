@@ -884,9 +884,16 @@ fn inspect(path: &Path) -> Result<(), String> {
         preamble.manifest_record_length()
     );
     println!("first chunk offset       {}", layout.first_chunk_offset());
-    println!("chunk records            {}", layout.chunk_count());
     println!(
-        "declared plaintext       {}",
+        "container version        {}",
+        layout.container_version().value()
+    );
+    println!("chunk records            {}", layout.chunk_count());
+    // In a v2 container the chunk headers include the bucket padding, so this
+    // is the stored stream length; the object size is inside the sealed final
+    // commit and needs the object key.
+    println!(
+        "stored chunk plaintext   {}",
         layout.declared_plaintext_length()
     );
     println!(

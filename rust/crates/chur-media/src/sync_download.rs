@@ -7,11 +7,9 @@ use chur_catalog::store::{self as catalog_store, ObjectActivation};
 use chur_catalog::vault::Session;
 use chur_core::{ChurStatus, Error, Id, Result, ensure};
 use chur_crypto::Key;
-use chur_format::constants::{
-    CONTAINER_VERSION_V1, IntegritySummary, ObjectState, SUITE_V1, StreamKind,
-};
+use chur_format::constants::{IntegritySummary, ObjectState, SUITE_V1, StreamKind};
 use chur_format::container::{
-    CanonicalFinalCommit, CanonicalManifest, ReadAt, StreamIdentity, StreamReader,
+    CanonicalFinalCommit, CanonicalManifest, ContainerVersion, ReadAt, StreamIdentity, StreamReader,
 };
 
 use crate::keys;
@@ -103,6 +101,7 @@ pub struct VerifiedDownload {
     manifest: CanonicalManifest,
     final_commit: CanonicalFinalCommit,
     ciphertext_size: u64,
+    container_version: ContainerVersion,
 }
 
 impl VerifiedDownload {
@@ -122,6 +121,12 @@ impl VerifiedDownload {
     #[must_use]
     pub const fn ciphertext_size(&self) -> u64 {
         self.ciphertext_size
+    }
+
+    /// The container version of the verified bytes.
+    #[must_use]
+    pub const fn container_version(&self) -> ContainerVersion {
+        self.container_version
     }
 
     /// Authenticated original plaintext length.
@@ -252,6 +257,7 @@ fn verify_container(
     };
     let mut reader = StreamReader::open(&mut view, object_key, &expected.identity)?;
     let manifest = reader.manifest().clone();
+    let container_version = reader.version();
     let final_commit = reader.read_final_commit()?;
     reader.verify_complete()?;
     ensure!(
@@ -265,6 +271,7 @@ fn verify_container(
         manifest,
         final_commit,
         ciphertext_size: expected.container_length,
+        container_version,
     })
 }
 
@@ -342,7 +349,7 @@ pub fn activate_shared(session: &mut Session, object: &SharedObject, now_ms: u64
         object.container_commitment,
     )?;
     let local_store_id = session.object_store_id();
-    let (manifest, plaintext_size, ciphertext_size, staged) =
+    let (manifest, plaintext_size, ciphertext_size, container_version, staged) =
         if store::container_exists(session.root_dir(), &local_store_id, &object.object_id) {
             match verify_committed(
                 session.root_dir(),
@@ -351,9 +358,13 @@ pub fn activate_shared(session: &mut Session, object: &SharedObject, now_ms: u64
                 &object_key,
                 &expected,
             ) {
-                Ok((manifest, plaintext_size)) => {
-                    (manifest, plaintext_size, expected.container_length, None)
-                }
+                Ok((manifest, plaintext_size, version)) => (
+                    manifest,
+                    plaintext_size,
+                    expected.container_length,
+                    version,
+                    None,
+                ),
                 Err(_)
                     if store::temporary_exists(
                         session.root_dir(),
@@ -371,7 +382,14 @@ pub fn activate_shared(session: &mut Session, object: &SharedObject, now_ms: u64
                     let manifest = verified.manifest().clone();
                     let plaintext_size = verified.plaintext_size();
                     let ciphertext_size = verified.ciphertext_size();
-                    (manifest, plaintext_size, ciphertext_size, Some(verified))
+                    let version = verified.container_version();
+                    (
+                        manifest,
+                        plaintext_size,
+                        ciphertext_size,
+                        version,
+                        Some(verified),
+                    )
                 }
                 Err(error) => return Err(error),
             }
@@ -386,7 +404,14 @@ pub fn activate_shared(session: &mut Session, object: &SharedObject, now_ms: u64
             let manifest = verified.manifest().clone();
             let plaintext_size = verified.plaintext_size();
             let ciphertext_size = verified.ciphertext_size();
-            (manifest, plaintext_size, ciphertext_size, Some(verified))
+            let version = verified.container_version();
+            (
+                manifest,
+                plaintext_size,
+                ciphertext_size,
+                version,
+                Some(verified),
+            )
         };
     let properties = *manifest.media_properties();
     let chunk_size = manifest.chunk_size();
@@ -434,6 +459,8 @@ pub fn activate_shared(session: &mut Session, object: &SharedObject, now_ms: u64
                 })
         })
         .transpose()?;
+    // A received container may carry a version this store does not yet hold.
+    session.admit_container_version(container_version.value())?;
     if let Some(verified) = staged {
         if store::container_exists(session.root_dir(), &local_store_id, &object.object_id) {
             store::unlink_container(session.root_dir(), &local_store_id, &object.object_id)?;
@@ -469,7 +496,7 @@ pub fn activate_shared(session: &mut Session, object: &SharedObject, now_ms: u64
                 stream_revision: 1,
                 source_content_revision: 0,
                 container_path_id: object.object_id,
-                container_version: CONTAINER_VERSION_V1,
+                container_version: container_version.value(),
                 suite_id: SUITE_V1,
                 ciphertext_size,
                 plaintext_size,
@@ -513,7 +540,7 @@ fn verify_committed(
     container_path_id: &Id,
     object_key: &Key,
     expected: &Expectation,
-) -> Result<(CanonicalManifest, u64)> {
+) -> Result<(CanonicalManifest, u64, ContainerVersion)> {
     let mut file = ContainerFile::open(root_dir, local_store_id, container_path_id)?;
     ensure!(
         file.length() == expected.container_length,
@@ -529,7 +556,7 @@ fn verify_committed(
         ObjectCorrupt,
         "committed shared container differs from signed commit"
     );
-    Ok((manifest, plaintext_size))
+    Ok((manifest, plaintext_size, reader.version()))
 }
 
 struct Downloaded<'a> {

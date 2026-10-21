@@ -32,7 +32,7 @@ Group directories follow the §9 format-word table. A vector whose `outcome` is 
 | `vault-descriptor` | 5 | the 220-byte minimum, `MIGRATING`, and three rejections |
 | `collection-envelope` | 2 | the 126-byte record and a foreign vault identity |
 | `object-key-envelope` | 2 | the 142-byte record and an unsupported suite |
-| `object` | 10 | the three §13 shapes, a partial final chunk, and six rejections |
+| `object` | 15 | the three §13 shapes, a partial final chunk, and six rejections; for the bucket-padded version `0x0002` of §18, a padded chunk, a padding-only record, and three padding rejections |
 | `backup` | 16 | the public preamble, the record header, both inventory entries, the ordered commitment and its empty case, the sealed manifest and final commit, and eight rejections |
 | `operation` | 12 | signed operation, enrollment chain, checkpoint and epoch commitments, revocation, and six protocol rejections |
 

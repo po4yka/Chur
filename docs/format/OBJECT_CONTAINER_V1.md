@@ -1,6 +1,6 @@
 # Chur Object Container v1
 
-> **Status:** Proposed normative format; the public byte layout, v1 constants, commitment constructions, and sealed-record plaintext schemas in this document are frozen. Deterministic vectors remain outstanding.
+> **Status:** Proposed normative format; the public byte layout, v1 constants, commitment constructions, and sealed-record plaintext schemas in this document are frozen. Deterministic vectors remain outstanding. §18 adds `container_version` `0x0002`, which keeps every layout of this document and pads the chunk stream to a size bucket ([ADR-0066](../adr/0066-pad-object-containers-to-size-buckets.md)); every writer produces version `0x0002`, and a reader accepts both.
 
 `ChurObjectV1` stores one immutable encrypted stream, such as an original photo/video/audio file or an encrypted derived asset. The object key envelope is stored separately.
 
@@ -61,7 +61,7 @@ A v1 reader must reject the container unless:
 - `magic` matches all eight bytes;
 - `flags`, `reserved`, and `public_header_length` hold exactly their listed v1 values;
 - `manifest_record_length` is between 40 and 65536 inclusive;
-- `container_version`, `canonical_encoding_profile`, `suite_id`, and `chunk_record_profile` are supported values.
+- `container_version`, `canonical_encoding_profile`, `suite_id`, and `chunk_record_profile` are supported values. The supported `container_version` values are `0x0001` and the `0x0002` of §18.
 
 An unknown version, profile, or suite fails as `UNSUPPORTED_*`. A fixed field that holds any other value fails as `OBJECT_CORRUPT`; it is never ignored.
 
@@ -407,6 +407,8 @@ A transaction is dead when the check in §14.3 fails, when the user cancels the 
 
 The `(ObjectKey, nonce_prefix)` pair of a dead transaction is retired and is never donated to another object. A retry is a new transaction with a new `ObjectKey`, a fresh prefix from the CSPRNG, and index 0; reusing the object or stream identifier is possible only under a new stream revision, which §7 already requires to take a fresh prefix.
 
+A padded container of §18 adds padding chunks after the last object chunk. Each padding chunk is a chunk record under the same rules: its index is reserved and made durable by steps 1 and 2 before step 3 seals it. The journal does not record where the object ends, so a reserved record can hold padding. A resume under §14.3 continues only when a known source length shows that the reserved record holds object bytes alone, that is, when `(reserved_index + 1) * chunk_size` is not more than that length. Otherwise the transaction is dead under §14.4, so a resumed writer never counts padding as object bytes.
+
 ## 15. Corruption classification
 
 - malformed preamble/record → `OBJECT_CORRUPT`;
@@ -449,3 +451,48 @@ The `(ObjectKey, nonce_prefix)` pair of a dead transaction is retired and is nev
 - crash between the durable index reservation and the chunk record write, and resume;
 - crash between the chunk record write and the next index reservation, and resume;
 - both resumes assert that the first index encrypted is above the journaled reservation and that no `(nonce_prefix, chunk_index)` pair is produced twice, which is also what fails a writer that journals a chunk after writing it.
+
+## 18. Version 2: bucket padding
+
+[ADR-0066](../adr/0066-pad-object-containers-to-size-buckets.md) allocates `container_version` `0x0002`. A v2 container has the byte layout of §2 to §13 and the parser limits of §16. Only `container_version` in the preamble, and therefore in every chunk AAD of §9, differs. A v1 container hides nothing about its size: §12 makes the plaintext length a computation over the file length. A v2 container stores the object in a size bucket, so the file length gives the bucket and not the object size.
+
+### 18.1 Bucket rule
+
+For an object of `L` bytes, with `e` the smallest exponent such that `2^e >= L`:
+
+```text
+padded_length(0) = 0
+padded_length(L) = max(4096, 2^e)                          when 1 <= L <= 1048576
+padded_length(L) = ceil(L / 2^max(20, e - 5)) * 2^max(20, e - 5)  when L > 1048576
+```
+
+Below 1 MiB a bucket is a power of two of at least 4 KiB. From 1 MiB to 32 MiB a bucket is a whole number of MiB. Above 32 MiB each interval between two powers of two holds 16 buckets. The padding is therefore less than 1 MiB, or less than one sixteenth of the object. No bucket is larger than `2^e`, so an object within the 1 TiB bound of §16 is within it after padding.
+
+### 18.2 Stream
+
+The chunk stream is the object followed by `padded_length(L) - L` bytes of `0x00`. It is chunked by the canonical rule of §8 with the manifest `chunk_size`. A record can hold object bytes followed by padding, or padding only. Every record is sealed, framed, and committed exactly as in §8 to §10, so padding is authenticated like object bytes.
+
+### 18.3 Final commit
+
+`CanonicalFinalCommit` keeps its §11 layout and its 128 bytes:
+
+- `chunk_count` and `last_chunk_plaintext_length` describe the padded stream;
+- `total_plaintext_length` is the object length `L`, without padding.
+
+The §11 length check becomes: when `chunk_count` is 0, both lengths are 0; otherwise `total_plaintext_length` is at least 1 and `(chunk_count - 1) * chunk_size + last_chunk_plaintext_length` equals `padded_length(total_plaintext_length)`. A disagreement is `OBJECT_CORRUPT`. A stream that is one byte short of its bucket, one byte past it, or one record short or long therefore fails, and §11 still forbids bytes after the final commit.
+
+### 18.4 Reading
+
+A reader:
+
+- takes the object size only from `total_plaintext_length` of the authenticated final commit, never from the file length or from the chunk headers, whose sum is the stored stream length;
+- refuses a range that ends after `total_plaintext_length`, as in §12;
+- checks that every byte after `total_plaintext_length` in each record it decrypts is `0x00`, and fails with `OBJECT_CORRUPT` otherwise;
+- checks every padding byte when it verifies the whole container, so `CompleteVerifiedObject` covers the padding;
+- never returns a padding byte as object plaintext.
+
+The catalog `plaintext_size`, backup inventories, sync transfers, and every size shown to a user carry `total_plaintext_length`. A `ciphertext_size` or a container length is the length of the stored file, which includes the padding.
+
+### 18.5 Version binding
+
+Every chunk AAD binds `container_version`. A v2 container relabelled as v1, or a v1 container relabelled as v2, fails at the first chunk AEAD, even when its object fills its bucket and the §11 and §18.3 length checks agree.

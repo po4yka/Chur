@@ -7,8 +7,9 @@
 //! - accepted v1 bytes are never reinterpreted without a new version;
 //! - a writer emits only the current approved version.
 //!
-//! v1 is the only version of every format, so this harness cannot migrate
-//! anything. What it can do, and what it does, is prove that each domain's
+//! Apart from the bucket-padded object container of ADR-0066, which a reader
+//! takes beside v1 rather than migrating to, v1 is the only version of every
+//! format, so this harness cannot migrate anything. What it can do, and what it does, is prove that each domain's
 //! reader refuses a version it does not know, and refuses it as an unsupported
 //! artifact rather than as a damaged one. That distinction is the whole of the
 //! migration contract today: a future reader finds `UNSUPPORTED_VERSION` and
@@ -43,10 +44,11 @@ fn nonce(byte: u8) -> Nonce {
     Nonce::new([byte; 24])
 }
 
-/// Raises the `u16` at `offset` to 2 and asserts the reader fails closed.
+/// Raises the `u16` at `offset` to 3, a value no namespace allocates, so the
+/// reader must fail closed. Container version 2 is allocated by ADR-0066.
 fn bumped_u16(bytes: &[u8], offset: usize) -> Vec<u8> {
     let mut out = bytes.to_vec();
-    out[offset..offset + 2].copy_from_slice(&2u16.to_be_bytes());
+    out[offset..offset + 2].copy_from_slice(&3u16.to_be_bytes());
     out
 }
 

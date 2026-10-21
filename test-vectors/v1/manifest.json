@@ -1,10 +1,10 @@
 {
   "manifest_version": 1,
-  "spec_commit": "59551d548768d4cb53efdd4143642ff97ea3d8f8",
+  "spec_commit": "83539817623855a0b0e50876878eb13e9d6c1e6e",
   "generator": {
     "name": "chur-cli",
     "version": "0.1.0",
-    "commit": "59551d548768d4cb53efdd4143642ff97ea3d8f8",
+    "commit": "83539817623855a0b0e50876878eb13e9d6c1e6e",
     "toolchain": "1.99.1-aarch64-apple-darwin"
   },
   "vectors": [
@@ -1260,6 +1260,131 @@
       "expected": {
         "ordered_chunk_commitment": "cc19f3a543c2c332a044d45b19ca89e67e35cf4c0159439d198d2ae10608ccae"
       }
+    },
+    {
+      "vector_id": "object-v2-non-zero-padding-byte",
+      "spec": "docs/format/OBJECT_CONTAINER_V1.md",
+      "spec_section": "18",
+      "purpose": "A padding byte other than zero is refused even though its record authenticates.",
+      "outcome": "reject",
+      "inputs": {
+        "container": {
+          "file": "negative/object-v2-non-zero-padding-byte.container.bin"
+        },
+        "object_id": "33333333333333333333333333333333",
+        "object_key": "7777777777777777777777777777777777777777777777777777777777777777",
+        "stream_id": "34343434343434343434343434343434",
+        "stream_kind": 1,
+        "stream_revision": 1
+      },
+      "error_code": "OBJECT_CORRUPT",
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "object-v2-one-padded-chunk",
+      "spec": "docs/format/OBJECT_CONTAINER_V1.md",
+      "spec_section": "18",
+      "purpose": "A 1000-byte object stored in the 4096-byte bucket: one record whose zero padding follows the object.",
+      "outcome": "accept",
+      "inputs": {
+        "chunk_size": 65536,
+        "commit_nonce": "373737373737373737373737373737373737373737373737",
+        "container_version": 2,
+        "manifest_nonce": "363636363636363636363636363636363636363636363636",
+        "nonce_prefix": "35353535353535353535353535353535",
+        "object_id": "33333333333333333333333333333333",
+        "object_key": "7777777777777777777777777777777777777777777777777777777777777777",
+        "plaintext_length": 1000,
+        "plaintext_pattern": "byte i equals i modulo 251",
+        "stream_id": "34343434343434343434343434343434",
+        "stream_kind": 1,
+        "stream_revision": 1
+      },
+      "expected": {
+        "container": {
+          "file": "object-containers/object-v2-one-padded-chunk.bin"
+        },
+        "container_length": 4461,
+        "manifest_record_length": 125
+      },
+      "decoded": {
+        "chunk_count": 1,
+        "stored_length": 4096,
+        "total_plaintext_length": 1000
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "object-v2-padding-only-record",
+      "spec": "docs/format/OBJECT_CONTAINER_V1.md",
+      "spec_section": "18",
+      "purpose": "One byte past the chunk size: the 131072-byte bucket fills a padded first chunk and a padding-only second record.",
+      "outcome": "accept",
+      "inputs": {
+        "chunk_size": 65536,
+        "commit_nonce": "373737373737373737373737373737373737373737373737",
+        "container_version": 2,
+        "manifest_nonce": "363636363636363636363636363636363636363636363636",
+        "nonce_prefix": "35353535353535353535353535353535",
+        "object_id": "33333333333333333333333333333333",
+        "object_key": "7777777777777777777777777777777777777777777777777777777777777777",
+        "plaintext_length": 65537,
+        "plaintext_pattern": "byte i equals i modulo 251",
+        "stream_id": "34343434343434343434343434343434",
+        "stream_kind": 1,
+        "stream_revision": 1
+      },
+      "expected": {
+        "container": {
+          "file": "object-containers/object-v2-padding-only-record.bin"
+        },
+        "container_length": 131473,
+        "manifest_record_length": 125
+      },
+      "decoded": {
+        "chunk_count": 2,
+        "stored_length": 131072,
+        "total_plaintext_length": 65537
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "object-v2-padding-past-bucket",
+      "spec": "docs/format/OBJECT_CONTAINER_V1.md",
+      "spec_section": "18",
+      "purpose": "A stream that carries one byte past the bucket of its object length is refused.",
+      "outcome": "reject",
+      "inputs": {
+        "container": {
+          "file": "negative/object-v2-padding-past-bucket.container.bin"
+        },
+        "object_id": "33333333333333333333333333333333",
+        "object_key": "7777777777777777777777777777777777777777777777777777777777777777",
+        "stream_id": "34343434343434343434343434343434",
+        "stream_kind": 1,
+        "stream_revision": 1
+      },
+      "error_code": "OBJECT_CORRUPT",
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "object-v2-padding-short-of-bucket",
+      "spec": "docs/format/OBJECT_CONTAINER_V1.md",
+      "spec_section": "18",
+      "purpose": "A stream that stops one byte before the bucket of its object length is refused.",
+      "outcome": "reject",
+      "inputs": {
+        "container": {
+          "file": "negative/object-v2-padding-short-of-bucket.container.bin"
+        },
+        "object_id": "33333333333333333333333333333333",
+        "object_key": "7777777777777777777777777777777777777777777777777777777777777777",
+        "stream_id": "34343434343434343434343434343434",
+        "stream_kind": 1,
+        "stream_revision": 1
+      },
+      "error_code": "OBJECT_CORRUPT",
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
     },
     {
       "vector_id": "operation-v1-checkpoint",

@@ -147,7 +147,8 @@ Chur does not claim to prevent:
 - plaintext observation after unlock by a compromised OS, kernel, root/jailbreak tooling, debugger, runtime instrumentation, or memory inspection;
 - malicious accessibility services, keyboards, clipboard managers, or screen-capture malware from observing user input or displayed content;
 - photography of the screen by an external camera;
-- traffic analysis, object-count leakage, ciphertext-size leakage, or access-pattern leakage without optional padding and batching;
+- traffic analysis, object-count leakage, or access-pattern leakage without optional batching;
+- ciphertext-size leakage beyond the size bucket: a container of version `0x0002` stores each object in a size bucket ([`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §18, [ADR-0066](adr/0066-pad-object-containers-to-size-buckets.md)), so its file length discloses the bucket, the chunk size, and an empty object, but not the exact object size; a v1 container written before that version discloses its exact size;
 - physical secure overwrite on flash storage with wear levelling, copy-on-write, snapshots, or cloud backups;
 - retention of plaintext or keys by an authorized sharing recipient;
 - rollback to an old user-controlled backup unless the user compares trusted generations or device log heads;
@@ -1849,6 +1850,8 @@ Oblivious RAM, traffic-mixing networks, and cryptographically hidden volumes are
 ## 58. Padding policy
 
 Padding is optional because it costs storage, bandwidth, battery, and complexity.
+
+Object bucket padding is enabled for every new object container. `container_version` `0x0002` pads the chunk stream with zero bytes to the bucket of [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §18.1: a power of two of at least 4 KiB up to 1 MiB, a whole number of MiB up to 32 MiB, and 16 buckets per power-of-two interval above that. The cost is less than 1 MiB or less than one sixteenth of the object. The version is bound into every chunk AAD, the padding is inside the chunk AEAD and the ordered commitment, the true length is inside the authenticated final commit, and a reader refuses a padding byte other than zero and a stream that is not exactly the bucket. [ADR-0066](adr/0066-pad-object-containers-to-size-buckets.md) records the decision and its cost. Record padding and network batch padding remain unimplemented.
 
 Potential profiles:
 

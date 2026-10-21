@@ -334,7 +334,7 @@ pub fn create_with_params(
             catalog_generation,
             catalog_header_commitment: header_commitment,
         },
-        object_store: ObjectStoreDescriptor::v1(object_store_id),
+        object_store: ObjectStoreDescriptor::current(object_store_id),
         key_slots: vec![slot],
         migration: None,
     };
@@ -1603,6 +1603,30 @@ impl Session {
         let mut candidate = self.descriptor.clone();
         candidate.descriptor_generation = next_descriptor_generation(&self.descriptor)?;
         candidate.catalog.catalog_generation = generation;
+        self.commit_descriptor(candidate, sync_directory)
+    }
+
+    /// Raises the container-version ceiling of the object store, ADR-0066.
+    ///
+    /// `VAULT_DESCRIPTOR_V1.md` §6 has the descriptor name the highest
+    /// container version its store holds, so a build that cannot read a v2
+    /// container refuses the vault as a whole rather than one object at a
+    /// time. A writer calls this before the first byte of a container of
+    /// `version`; a store whose ceiling already admits it is left alone, so
+    /// the rewrite happens once per vault.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ChurStatus::VaultLocked`] once the session is locked, and the
+    /// descriptor-installation errors otherwise.
+    pub fn admit_container_version(&mut self, version: u16) -> Result<()> {
+        if self.descriptor.object_store.container_version_ceiling >= version {
+            return Ok(());
+        }
+        self.root_secret()?;
+        let mut candidate = self.descriptor.clone();
+        candidate.descriptor_generation = next_descriptor_generation(&self.descriptor)?;
+        candidate.object_store.container_version_ceiling = version;
         self.commit_descriptor(candidate, sync_directory)
     }
 
@@ -3197,6 +3221,41 @@ mod tests {
         assert_eq!(session.descriptor.descriptor_generation, 1);
         session.add_recovery_slot().expect("recovery");
         assert_eq!(session.descriptor.descriptor_generation, 2);
+    }
+
+    #[test]
+    fn a_v1_store_raises_its_container_ceiling_once_and_keeps_it() {
+        let root_dir = scratch();
+        let mut session = make(&root_dir);
+        assert_eq!(session.descriptor.object_store.container_version_ceiling, 2);
+
+        // A vault created before ADR-0066 records a ceiling of 1.
+        let mut old = session.descriptor.clone();
+        old.descriptor_generation += 1;
+        old.object_store.container_version_ceiling = 1;
+        session
+            .commit_descriptor(old, sync_directory)
+            .expect("record a v1 ceiling");
+        let generation = session.descriptor.descriptor_generation;
+
+        session.admit_container_version(1).expect("v1 is admitted");
+        assert_eq!(session.descriptor.descriptor_generation, generation);
+        session
+            .admit_container_version(2)
+            .expect("raise the ceiling");
+        assert_eq!(session.descriptor.object_store.container_version_ceiling, 2);
+        assert_eq!(session.descriptor.descriptor_generation, generation + 1);
+        session
+            .admit_container_version(2)
+            .expect("already admitted");
+        assert_eq!(session.descriptor.descriptor_generation, generation + 1);
+        drop(session);
+
+        let reopened = unlock_with_password(&root_dir, PASSWORD, 2).expect("unlock");
+        assert_eq!(
+            reopened.descriptor.object_store.container_version_ceiling,
+            2
+        );
     }
 
     #[test]

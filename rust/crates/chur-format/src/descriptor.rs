@@ -28,9 +28,9 @@ use crate::constants::{
     CATALOG_FORMAT_VERSION_V7, CATALOG_FORMAT_VERSION_V8, CATALOG_FORMAT_VERSION_V9,
     CATALOG_FORMAT_VERSION_V10, CATALOG_FORMAT_VERSION_V11, CATALOG_FORMAT_VERSION_V12,
     CATALOG_FORMAT_VERSION_V13, CATALOG_FORMAT_VERSION_V14, CATALOG_FORMAT_VERSION_V15,
-    CONTAINER_VERSION_V1, CRYPTO_POLICY_V1, DESCRIPTOR_VERSION_V1, ENCODING_PROFILE_V1, FLAGS_V1,
-    MAGIC_VAULT, NAMING_PROFILE_V1, OBJECT_STORE_FORMAT_VERSION_V1, SLOT_VERSION_V1, SUITE_V1,
-    SlotType, VaultState,
+    CONTAINER_VERSION_V1, CONTAINER_VERSION_V2, CRYPTO_POLICY_V1, DESCRIPTOR_VERSION_V1,
+    ENCODING_PROFILE_V1, FLAGS_V1, MAGIC_VAULT, NAMING_PROFILE_V1, OBJECT_STORE_FORMAT_VERSION_V1,
+    SLOT_VERSION_V1, SUITE_V1, SlotType, VaultState,
 };
 use crate::slot::{SlotBinding, WRAP_SUITE_ANDROID_KEYSTORE, WRAP_SUITE_RUST};
 
@@ -144,6 +144,17 @@ impl ObjectStoreDescriptor {
         }
     }
 
+    /// A new store, whose writers produce the bucket-padded v2 containers of
+    /// ADR-0066.
+    #[must_use]
+    pub const fn current(opaque_root_path_id: Id) -> Self {
+        Self {
+            opaque_root_path_id,
+            container_version_floor: CONTAINER_VERSION_V1,
+            container_version_ceiling: CONTAINER_VERSION_V2,
+        }
+    }
+
     fn write(&self, writer: &mut Writer) {
         writer
             .u16(OBJECT_STORE_FORMAT_VERSION_V1)
@@ -174,7 +185,8 @@ impl ObjectStoreDescriptor {
         );
         ensure!(
             container_version_floor == CONTAINER_VERSION_V1
-                && container_version_ceiling == CONTAINER_VERSION_V1,
+                && (container_version_ceiling == CONTAINER_VERSION_V1
+                    || container_version_ceiling == CONTAINER_VERSION_V2),
             UnsupportedVersion,
             "container version range is not supported"
         );

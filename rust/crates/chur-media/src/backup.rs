@@ -34,7 +34,7 @@ use chur_format::backup::{
     RECORD_HEADER_LEN, RecordHeader, RecordType, SlotInventoryEntry, StreamInventoryEntry,
     framing_of, manifest_key,
 };
-use chur_format::constants::{ObjectState, SlotType, VaultState};
+use chur_format::constants::{CONTAINER_VERSION_V1, ObjectState, SlotType, VaultState};
 use chur_format::container::{PublicPreamble as ContainerPreamble, StreamIdentity, StreamReader};
 use chur_format::descriptor::VaultDescriptor;
 use chur_sync_protocol::identity::DeviceIdentityEnvelope;
@@ -711,6 +711,7 @@ fn restore_inner(
     // is read in package order and folded into the commitment the commit sealed.
     let mut committer = InventoryCommitter::new();
     let mut entries = Vec::with_capacity(slots.len());
+    let mut highest_version = CONTAINER_VERSION_V1;
     for slot in slots
         .iter()
         .filter(|s| s.record_type == RecordType::Container)
@@ -724,10 +725,19 @@ fn restore_inner(
         // describes it, not only that an entry is present — a package whose
         // ciphertext was altered would otherwise install and fail at the first
         // read, after the vault existed.
-        verify_container(source, slot, &entry, progress)?;
+        let version = verify_container(source, slot, &entry, progress)?;
+        highest_version = highest_version.max(version);
         committer.add_stream(&entry)?;
-        entries.push((entry, slot.offset));
+        entries.push((entry, slot.offset, version));
     }
+    // ADR-0066: the descriptor names the highest container version its store
+    // holds, so a restored store keeps the source's range, and the range must
+    // cover every container the package carries.
+    ensure!(
+        highest_version <= descriptor.object_store.container_version_ceiling,
+        VaultCorrupt,
+        "a container in the package is newer than its descriptor admits"
+    );
     for entry in slot_entries(&descriptor) {
         committer.add_slot(&entry)?;
     }
@@ -757,7 +767,10 @@ fn restore_inner(
             opaque_catalog_path_id: catalog_path_id,
             ..descriptor.catalog
         },
-        object_store: chur_format::descriptor::ObjectStoreDescriptor::v1(store_id),
+        object_store: chur_format::descriptor::ObjectStoreDescriptor {
+            opaque_root_path_id: store_id,
+            ..descriptor.object_store
+        },
         ..descriptor.clone()
     };
     // The claim keeps the orphan sweep of another runtime on this root off the
@@ -889,7 +902,7 @@ fn restore_inner(
             if progress.cancelled() {
                 return Err(progress::cancelled("the restore was cancelled"));
             }
-            let Some((entry, offset)) = entries.get(index) else {
+            let Some((entry, offset, version)) = entries.get(index) else {
                 bail!(
                     VaultCorrupt,
                     "the restored catalog names more streams than the package carries"
@@ -899,7 +912,8 @@ fn restore_inner(
                 entry.object_id == *object_id
                     && entry.stream_id == stream.stream_id
                     && entry.stream_revision == stream.stream_revision
-                    && entry.ordered_chunk_commitment == stream.final_commitment,
+                    && entry.ordered_chunk_commitment == stream.final_commitment
+                    && *version == stream.container_version,
                 VaultCorrupt,
                 "a container entry does not describe the stream the catalog holds"
             );
@@ -1132,7 +1146,8 @@ fn read_container_entry(
     Ok(entry)
 }
 
-/// Recomputes one container's two commitments from the package's own bytes.
+/// Recomputes one container's two commitments from the package's own bytes,
+/// and returns the container version of its preamble.
 ///
 /// Neither computation needs a key. §5 of `OBJECT_CONTAINER_V1.md` takes the
 /// manifest commitment over the manifest record's nonce and ciphertext, and §10
@@ -1148,7 +1163,7 @@ fn verify_container(
     slot: &RecordSlot,
     entry: &StreamInventoryEntry,
     progress: &impl Progress,
-) -> Result<()> {
+) -> Result<u16> {
     let content =
         slot.offset + RECORD_HEADER_LEN as u64 + chur_format::backup::STREAM_ENTRY_LEN as u64;
     let mut preamble = vec![0u8; ContainerPreamble::LEN];
@@ -1198,7 +1213,7 @@ fn verify_container(
         VaultCorrupt,
         "a container's chunks do not match the inventory entry that describes them"
     );
-    Ok(())
+    Ok(head.container_version().value())
 }
 
 /// Reads exactly `buffer.len()` bytes at `offset`.
