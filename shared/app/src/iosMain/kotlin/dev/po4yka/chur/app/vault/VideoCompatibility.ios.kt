@@ -155,7 +155,16 @@ class IosVideoCompatibilityEncoder : VideoCompatibilityEncoder {
                     }
                     if (advanced) progressed = TimeSource.Monotonic.markNow() else delay(5)
                 }
-                if (nativeReader.status != AVAssetReaderStatusCompleted) compatibilityFailure("incomplete decode")
+                if (nativeReader.status != AVAssetReaderStatusCompleted) {
+                    val error = nativeReader.error
+                    val domain = when (error?.domain) {
+                        AVFoundationErrorDomain -> "AVFoundation"
+                        NSOSStatusErrorDomain -> "OSStatus"
+                        null -> "none"
+                        else -> "other"
+                    }
+                    compatibilityFailure("incomplete decode reader=${nativeReader.status} writer=${nativeWriter.status} native=$domain/${error?.code ?: 0}")
+                }
                 nativeWriter.endSessionAtSourceTime(asset.duration)
                 val finished = MutableStateFlow(false)
                 progressed = TimeSource.Monotonic.markNow()

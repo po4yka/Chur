@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest
+
 // The FFI boundary as Kotlin sees it.
 //
 // `docs/interop/FFI_CONTRACT.md` §1 has the KMP side reach one stable C ABI
@@ -156,4 +158,11 @@ appleTriples.keys.forEach { name ->
             .withPropertyName("churHeader")
             .withPathSensitivity(PathSensitivity.RELATIVE)
     }
+}
+
+// Use the same selected, booted simulator as the other native test suites.
+tasks.withType<KotlinNativeSimulatorTest>().configureEach {
+    standalone.set(false)
+    val selected = providers.environmentVariable("CHUR_IOS_TEST_DEVICE")
+    if (selected.isPresent) device.set(selected)
 }
