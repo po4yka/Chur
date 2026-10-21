@@ -1184,7 +1184,7 @@ pub fn accept_rotation_operation(
                     Nonce::random()?,
                 )?
             };
-            log.accept_with(db, &operation, membership, |transaction| {
+            let outcome = log.accept_with(db, &operation, membership, |transaction| {
                 if pending {
                     transaction
                         .execute(
@@ -1213,7 +1213,19 @@ pub fn accept_rotation_operation(
                     root,
                 )?;
                 Ok(())
-            })
+            })?;
+            // The rewrap deleted the old envelopes, but their former pages stay
+            // in the WAL until a TRUNCATE checkpoint. The completed walk runs
+            // one. A blocked checkpoint does not undo the committed rewrap, and
+            // every unlock repeats the checkpoint, so its failure is not
+            // reported here.
+            if outcome == ApplyOutcome::Applied
+                && !pending
+                && sync_rotation::is_completed(db.connection(), payload.collection_id())?
+            {
+                let _ = db.checkpoint();
+            }
+            Ok(outcome)
         }
         _ => Err(Error::new(
             ChurStatus::InvalidInput,

@@ -176,6 +176,14 @@ class ChurController(
     private var currentQuery = ObjectQuery()
     private var queryRevision = 0L
     private val _slots = MutableStateFlow<List<SlotSummary>>(emptyList())
+    private val _reencryptionNotice = MutableStateFlow<String?>(null)
+
+    /**
+     * A neutral line for Settings when some objects cannot be re-encrypted
+     * after a revocation, ADR-0069, and `null` otherwise.
+     */
+    val reencryptionNotice: StateFlow<String?> = _reencryptionNotice.asStateFlow()
+    private var reencryption: Job? = null
     private val _devicePairing = MutableStateFlow(dev.po4yka.chur.app.vault.DevicePairingUiState())
     private val _pairingApproval = MutableStateFlow<ByteArray?>(null)
     private val _notice = MutableStateFlow<Notice?>(null)
@@ -1023,6 +1031,10 @@ class ChurController(
     }
 
     private fun concealPrivateSession() {
+        // Rust cancels the operation as the session locks; the poller ends here.
+        reencryption?.cancel()
+        reencryption = null
+        _reencryptionNotice.value = null
         lockEpoch += 1
         entryRequestToken += 1
         phraseRequested = false
@@ -2873,6 +2885,43 @@ class ChurController(
         }
     }
 
+    /**
+     * Runs one re-encryption pass in the background after unlock, ADR-0069.
+     *
+     * It starts only after the vault opened, never inside the unlock, and it
+     * does nothing in an identity with no completed rotation that it owns.
+     * Polling does not count as activity, so the pass never keeps the vault
+     * unlocked, and a lock cancels it; the next unlock resumes it.
+     */
+    private fun startReencryption(epoch: Long) {
+        reencryption?.cancel()
+        reencryption = scope.launch {
+            try {
+                val counts = withContext(Dispatchers.Default) { repository.reencryptionCounts() }
+                if (counts.pending > 0) {
+                    val operation = withContext(Dispatchers.Default) { repository.beginReencryption() }
+                    try {
+                        while (epoch == lockEpoch) {
+                            val progress = withContext(Dispatchers.Default) {
+                                repository.poll(operation, noteActivity = false)
+                            }
+                            if (progress.terminal) break
+                            delay(REENCRYPTION_POLL_MS)
+                        }
+                    } finally {
+                        closeOperation(operation)
+                    }
+                }
+                if (epoch != lockEpoch) return@launch
+                val after = withContext(Dispatchers.Default) { repository.reencryptionCounts() }
+                _reencryptionNotice.value = if (after.failed > 0) REENCRYPTION_FAILED_COPY else null
+            } catch (_: ChurFailure) {
+                // A lock or a closed session ends the pass. The candidates are
+                // catalog state, so the next unlock resumes it.
+            }
+        }
+    }
+
     private suspend fun closeOperation(operation: Long) {
         withContext(NonCancellable + Dispatchers.Default) {
             try {
@@ -3122,6 +3171,7 @@ class ChurController(
         val initialPage = withContext(Dispatchers.Default) { repository.page(ObjectQuery()) }
         if (epoch != lockEpoch || (repository.state.value as? VaultState.Unlocked)?.generation != generation) return
         if (queryRevision == initialQueryRevision) _page.value = initialPage
+        startReencryption(epoch)
         sync?.let { engine ->
             guarded(clearMessage = false, context = sessionSync) {
                 withContext(Dispatchers.Default) { engine.refresh() }
@@ -3346,6 +3396,16 @@ class ChurController(
 
         /** Fast enough to feel immediate, slow enough not to spin a core. */
         const val POLL_INTERVAL_MS = 50L
+
+        /** A background pass reports nothing on screen, so it polls slowly. */
+        const val REENCRYPTION_POLL_MS = 500L
+
+        /**
+         * The Settings line when objects cannot be re-encrypted after a
+         * revocation, ADR-0069. It names no identity and no member.
+         */
+        const val REENCRYPTION_FAILED_COPY =
+            "Some items could not be protected with new keys. A former member may still open copies they already have."
 
         /** A count of library items for a notice: "1 item", "3 items". */
         fun items(count: Int): String = if (count == 1) "1 item" else "$count items"

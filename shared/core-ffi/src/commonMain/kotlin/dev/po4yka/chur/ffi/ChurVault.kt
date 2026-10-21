@@ -1593,6 +1593,22 @@ object ChurVault {
             ChurNative.integrityScanBegin(session, objectId, out)
         }
 
+    /**
+     * Starts one re-encryption pass after a revocation, ADR-0069. The caller
+     * polls and cancels it like any operation; a lock cancels it.
+     */
+    fun beginReencryption(session: Long): Long =
+        handleOf("reencryption begin") { out ->
+            ChurNative.reencryptionBegin(session, out)
+        }
+
+    /** The objects still to re-encrypt and the objects that cannot be re-encrypted now. */
+    fun reencryptionCounts(session: Long): ReencryptionCounts {
+        val counts = LongArray(2)
+        ChurFailure.check(ChurNative.reencryptionCounts(session, counts), "reencryption counts")
+        return ReencryptionCounts(pending = counts[0], failed = counts[1])
+    }
+
     /** One progress snapshot, §10. */
     fun poll(operation: Long): OperationProgress {
         val counts = LongArray(2)
@@ -1924,4 +1940,12 @@ data class ImportRequest(
     val captureTimeMs: Long? = null,
     val originalFilename: String? = null,
     val requestedObjectId: ByteArray? = null,
+)
+
+/** Re-encryption state after a revocation, ADR-0069. */
+data class ReencryptionCounts(
+    /** Objects still under a key that a removed member may hold. */
+    val pending: Long,
+    /** Objects that cannot be re-encrypted now. */
+    val failed: Long,
 )

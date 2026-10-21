@@ -305,6 +305,16 @@ internal expect object ChurNative {
         outScan: LongArray,
     ): Int
 
+    fun reencryptionBegin(
+        session: Long,
+        outOperation: LongArray,
+    ): Int
+
+    fun reencryptionCounts(
+        session: Long,
+        outCounts: LongArray,
+    ): Int
+
     fun operationPoll(
         operation: Long,
         outCounts: LongArray,

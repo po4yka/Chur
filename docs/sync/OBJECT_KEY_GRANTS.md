@@ -62,7 +62,7 @@ Container activation verifies the complete container with the pending key. In on
 
 ## 4. Permanent deletion
 
-Deletion destroys all active and superseded local object envelopes, the object's pending envelope and its disposable private request key. `secure_delete=ON` overwrites deleted cells. The object remains `DELETING` until a verified WAL truncation removes the old frames. Only then can it become `TOMBSTONED` and enter physical garbage collection.
+Deletion destroys all active local object envelopes, and any superseded envelope that an earlier version kept, the object's pending envelope and its disposable private request key. `secure_delete=ON` overwrites deleted cells. The object remains `DELETING` until a verified WAL truncation removes the old frames. Only then can it become `TOMBSTONED` and enter physical garbage collection.
 
 A local tombstone referenced by an own-vault or shared signed log survives physical garbage collection. It prevents a replayed commit from creating another key request, including after restart or a backup made after deletion. A source must not send unsolicited keys to unbound prekeys: that would make a deleted key reachable again through a later request. Requests bind the exact object instead.
 

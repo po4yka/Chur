@@ -150,6 +150,8 @@ internal fun gateSummary(result: GateResult): String =
             when (result.reason) {
                 GateResult.Reason.MAJOR_VERSION ->
                     "This version of Chur cannot use the installed native library. Update the application."
+                GateResult.Reason.MINOR_VERSION ->
+                    "The installed native library is older than this version of Chur. Reinstall the application."
                 GateResult.Reason.EMPTY_FORMAT_RANGE ->
                     "The native library reports no readable format version. Update the application."
                 GateResult.Reason.BUILD_FLAVOR ->

@@ -203,22 +203,31 @@ pub fn project_rewrap(
         .envelope(&object_id)
         .ok_or_else(|| Error::new(ChurStatus::InternalFailure, "rewrap has no envelope"))?
         .encode();
-    let changed = transaction
-        .execute(
-            "UPDATE object_key_envelopes SET status = ?1
-              WHERE object_id = ?2 AND status = ?3",
+    // The old envelope wraps the object key under an epoch the removed member
+    // holds. It is deleted, not kept as a superseded row, in the transaction
+    // that commits its replacement; `secure_delete` overwrites the cell, and
+    // the caller truncates the WAL when the rotation completes.
+    let active: i64 = transaction
+        .query_row(
+            "SELECT count(*) FROM object_key_envelopes WHERE object_id = ?1 AND status = ?2",
             params![
-                i64::from(ENVELOPE_STATUS_SUPERSEDED),
                 object_id.as_bytes().as_slice(),
-                i64::from(ENVELOPE_STATUS_ACTIVE),
+                i64::from(ENVELOPE_STATUS_ACTIVE)
             ],
+            |row| row.get(0),
         )
-        .map_err(|error| map_sqlite(error, "old object envelopes could not be superseded"))?;
+        .map_err(|error| map_sqlite(error, "old object envelopes could not be counted"))?;
     ensure!(
-        changed != 0,
+        active != 0,
         CatalogCorrupt,
         "an active object has no active key envelope"
     );
+    transaction
+        .execute(
+            "DELETE FROM object_key_envelopes WHERE object_id = ?1",
+            [object_id.as_bytes().as_slice()],
+        )
+        .map_err(|error| map_sqlite(error, "old object envelopes could not be destroyed"))?;
     insert_envelope_row(
         transaction,
         &object_id,
@@ -239,8 +248,111 @@ pub fn project_rewrap(
             CatalogCorrupt,
             "the active rotation row is absent"
         );
+        // A catalog written before superseded envelopes were deleted can still
+        // hold them. None of them is read, so the completed walk removes them.
+        transaction
+            .execute(
+                "DELETE FROM object_key_envelopes
+                  WHERE status = ?1
+                    AND object_id IN (SELECT object_id FROM objects WHERE collection_id = ?2)",
+                params![
+                    i64::from(ENVELOPE_STATUS_SUPERSEDED),
+                    collection_id.as_bytes().as_slice()
+                ],
+            )
+            .map_err(|error| {
+                map_sqlite(error, "superseded object envelopes could not be destroyed")
+            })?;
     }
     Ok(outcome)
+}
+
+/// Whether the latest rotation of one collection has completed.
+pub fn is_completed(connection: &Connection, collection_id: &Id) -> Result<bool> {
+    let completed: Option<i64> = connection
+        .query_row(
+            "SELECT completed FROM sync_rotations WHERE collection_id = ?1",
+            [collection_id.as_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| map_sqlite(error, "the collection rotation could not be read"))?;
+    Ok(completed == Some(1))
+}
+
+/// The objects whose key a member removed by a completed rotation may hold.
+///
+/// A rewrap advances the envelope generation and keeps the object key, so an
+/// envelope above generation 1 names a key that predates a rotation. A
+/// trashed object is not rewrapped, so its envelope stays under an earlier
+/// epoch. Only the device that owns the rotation re-encrypts, so two devices
+/// never replace the same object. Received shared collections are not listed:
+/// their source vault re-encrypts them. ADR-0069 records the policy.
+///
+/// The smallest objects come first, so a large object that needs a whole
+/// session does not hold back the rest.
+pub fn reencryption_candidates(db: &CatalogDb, root: &Key) -> Result<Vec<Id>> {
+    reencryption_query(db, root, &[ObjectState::Active, ObjectState::Trashed])
+}
+
+/// The number of objects still to re-encrypt, and of objects that cannot be
+/// re-encrypted because their original does not authenticate.
+pub fn reencryption_counts(db: &CatalogDb, root: &Key) -> Result<(u64, u64)> {
+    let pending = reencryption_candidates(db, root)?.len();
+    let corrupt = reencryption_query(db, root, &[ObjectState::Corrupt])?.len();
+    let count = |value: usize| {
+        u64::try_from(value)
+            .map_err(|_| Error::new(ChurStatus::InternalFailure, "the count is too large"))
+    };
+    Ok((count(pending)?, count(corrupt)?))
+}
+
+fn reencryption_query(db: &CatalogDb, root: &Key, states: &[ObjectState]) -> Result<Vec<Id>> {
+    let Some(membership) = crate::sync_membership::load(db)? else {
+        return Ok(Vec::new());
+    };
+    let Some((device_id, _)) = crate::sync_keys::local_identity(db, root, &membership)? else {
+        return Ok(Vec::new());
+    };
+    let mut statement = db
+        .connection()
+        .prepare(
+            "SELECT o.object_id, o.state
+               FROM objects o
+               JOIN collections c ON c.collection_id = o.collection_id
+               JOIN sync_rotations r ON r.collection_id = o.collection_id
+               JOIN sync_object_envelope_epochs p ON p.object_id = o.object_id
+              WHERE c.policy_type = ?1
+                AND r.completed = 1
+                AND r.owner_device_id = ?2
+                AND (p.envelope_generation > 1 OR p.collection_epoch < c.current_epoch)
+              ORDER BY o.plaintext_size, o.object_id",
+        )
+        .map_err(|error| map_sqlite(error, "re-encryption candidates could not be prepared"))?;
+    let rows = statement
+        .query_map(
+            params![
+                i64::from(crate::model::COLLECTION_POLICY_VAULT_DEFAULT),
+                device_id.as_bytes().as_slice(),
+            ],
+            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .map_err(|error| map_sqlite(error, "re-encryption candidates could not be read"))?;
+    let mut ids = Vec::new();
+    for row in rows {
+        let (bytes, state) =
+            row.map_err(|error| map_sqlite(error, "a re-encryption candidate could not be read"))?;
+        if states
+            .iter()
+            .any(|wanted| i64::from(wanted.value()) == state)
+        {
+            ids.push(crate::row::id(
+                &bytes,
+                "a re-encryption candidate id is malformed",
+            )?);
+        }
+    }
+    Ok(ids)
 }
 
 fn load_connection(
@@ -591,6 +703,33 @@ mod tests {
         )
         .expect("reopen");
         assert_eq!(rotation.next_missing_object(), Some(&id(10)));
+        let envelopes = |db: &CatalogDb, sql: &str| -> i64 {
+            db.connection()
+                .query_row(sql, [], |row| row.get(0))
+                .expect("envelope count")
+        };
+        // The rewrap deleted the old-epoch envelope instead of keeping it.
+        assert_eq!(
+            envelopes(
+                &fixture.db,
+                "SELECT count(*) FROM object_key_envelopes
+                  WHERE object_id = x'1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e'"
+            ),
+            1
+        );
+        // A superseded row left by an earlier version goes when the walk completes.
+        fixture
+            .db
+            .transaction(|transaction| {
+                transaction
+                    .execute(
+                        "INSERT INTO object_key_envelopes VALUES (?1, 9, 2, x'00')",
+                        [id(30).as_bytes().as_slice()],
+                    )
+                    .map_err(|error| map_sqlite(error, "legacy row"))?;
+                Ok(())
+            })
+            .expect("legacy superseded row");
 
         for object in [10, 20] {
             let old = rotation.envelope(&id(object)).expect("old").clone();
@@ -623,6 +762,18 @@ mod tests {
             .expect("reload");
         }
         assert!(rotation.is_complete());
+        assert_eq!(
+            envelopes(&fixture.db, "SELECT count(*) FROM object_key_envelopes"),
+            3
+        );
+        assert_eq!(
+            envelopes(
+                &fixture.db,
+                "SELECT count(*) FROM object_key_envelopes WHERE status <> 1 OR generation <> 2"
+            ),
+            0
+        );
+        assert!(is_completed(fixture.db.connection(), &id(10)).expect("completed"));
         let completed: i64 = fixture
             .db
             .connection()

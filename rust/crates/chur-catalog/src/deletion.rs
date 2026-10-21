@@ -70,7 +70,13 @@ impl Pending {
 /// Step 1: the object stops being listable.
 pub fn begin(db: &mut CatalogDb, object_id: &Id) -> Result<()> {
     let object_id = *object_id;
-    db.transaction(|transaction| {
+    db.transaction(|transaction| begin_in(transaction, &object_id))
+}
+
+/// Step 1 inside a caller's transaction.
+pub(crate) fn begin_in(transaction: &Transaction<'_>, object_id: &Id) -> Result<()> {
+    let object_id = *object_id;
+    {
         let changed = transaction
             .execute(
                 "UPDATE objects SET state = ?2 WHERE object_id = ?1 AND state IN (?3, ?4, ?5)",
@@ -97,7 +103,7 @@ pub fn begin(db: &mut CatalogDb, object_id: &Id) -> Result<()> {
         // The object is no longer listable, so it is no longer searchable.
         unindex_search(transaction, &object_id)?;
         bump_generation(transaction)
-    })
+    }
 }
 
 /// Step 2: the erasure moment.

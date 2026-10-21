@@ -17,7 +17,7 @@ import kotlin.test.assertTrue
 class AbiGateTest {
     private fun handshake(
         major: UInt = 7u,
-        minor: UInt = 0u,
+        minor: UInt = REQUIRED_ABI_MINOR,
         capabilities: ULong = 0u,
         objectMin: UInt = 1u,
         objectMax: UInt = 1u,
@@ -44,8 +44,18 @@ class AbiGateTest {
     }
 
     @Test
-    fun a_minor_difference_is_not_a_refusal() {
+    fun a_newer_minor_is_not_a_refusal() {
         assertIs<GateResult.Compatible>(gate(handshake(minor = 9u), releaseApplication = true))
+    }
+
+    @Test
+    fun an_older_minor_is_refused_before_a_missing_function_is_called() {
+        for (minor in 0u until REQUIRED_ABI_MINOR) {
+            val result = gate(handshake(minor = minor), releaseApplication = true)
+            assertIs<GateResult.Incompatible>(result)
+            assertEquals(ChurStatus.ABI_INCOMPATIBLE, result.status)
+            assertEquals(GateResult.Reason.MINOR_VERSION, result.reason)
+        }
     }
 
     @Test

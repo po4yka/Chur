@@ -34,6 +34,9 @@ pub enum OperationKind {
     Backup = 4,
     /// A backup package being restored, §8.
     Restore = 5,
+    /// Objects re-encrypted after a revocation, ADR-0069. `processed` and
+    /// `total` count objects.
+    Reencryption = 6,
 }
 
 /// The stage an operation reports, a bounded non-private number.

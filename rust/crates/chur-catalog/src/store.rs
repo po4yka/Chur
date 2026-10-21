@@ -10,7 +10,7 @@
 //! second writer, because §8.1 of `docs/interop/FFI_CONTRACT.md` serializes
 //! catalog writes behind one mutex per session.
 
-use chur_core::{Id, Result, bail, ensure, limits::catalog as limits};
+use chur_core::{Id, Result, bail, ensure, err, limits::catalog as limits};
 use chur_format::{
     constants::{IntegritySummary, ObjectState, StreamKind},
     envelope::ObjectKeyEnvelope,
@@ -269,6 +269,187 @@ pub fn collection(db: &CatalogDb, collection_id: &Id) -> Result<Collection> {
 /// before this runs, so a crash leaves a container with no row, which §14.1 of
 /// the catalog specification sweeps.
 pub fn activate_object(db: &mut CatalogDb, activation: &ObjectActivation) -> Result<()> {
+    check_activation(activation)?;
+    db.transaction(|transaction| activate_in(transaction, activation))
+}
+
+/// Activates a re-encrypted copy and retires the object it replaces, in one
+/// transaction.
+///
+/// `docs/adr/0069-re-encrypt-objects-after-revocation.md`: the copy has a fresh
+/// object key and object identifier. It takes the album memberships and tags
+/// of the retired object, its display assets, metadata revisions, import
+/// time, extracted text, and Trash state, and the retired object enters step 1
+/// of the §14.1 deletion in the same commit. A crash therefore leaves either the old object
+/// alone or the new object with a deletion that the unlock sweep rolls
+/// forward, never two listable copies.
+pub fn activate_replacement(
+    db: &mut CatalogDb,
+    activation: &ObjectActivation,
+    assets: &[(DerivedAsset, Stream)],
+    retired: &Id,
+    now_ms: u64,
+) -> Result<()> {
+    check_activation(activation)?;
+    ensure!(
+        assets
+            .iter()
+            .all(|(asset, _)| asset.object_id == activation.object.object_id),
+        InvalidInput,
+        "a display asset names another object"
+    );
+    let retired = *retired;
+    let replacement = activation.object.object_id;
+    ensure!(
+        retired != replacement,
+        InvalidInput,
+        "an object cannot replace itself"
+    );
+    crate::own_sync::mark_albums_dirty(db);
+    db.transaction(|transaction| {
+        let (collection, state, import_time, active_revision): (Vec<u8>, i64, i64, i64) =
+            transaction
+                .query_row(
+                    "SELECT collection_id, state, import_time_ms, active_metadata_revision
+                       FROM objects WHERE object_id = ?1 AND state IN (?2, ?3)",
+                    params![
+                        retired.as_bytes().as_slice(),
+                        i64::from(ObjectState::Active.value()),
+                        i64::from(ObjectState::Trashed.value())
+                    ],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .optional()
+                .map_err(|error| map_sqlite(error, "the replaced object could not be read"))?
+                .ok_or_else(|| err!(NotFound, "the replaced object is not active or trashed"))?;
+        ensure!(
+            collection.as_slice() == activation.object.collection_id.as_bytes().as_slice(),
+            InvalidInput,
+            "a replacement belongs to the collection of the object it replaces"
+        );
+        activate_in(transaction, activation)?;
+        for (asset, stream) in assets {
+            put_derived_asset_in(transaction, asset, stream)?;
+        }
+        let albums = {
+            let mut statement = transaction
+                .prepare(
+                    "SELECT album_id FROM album_memberships WHERE object_id = ?1 ORDER BY album_id",
+                )
+                .map_err(|error| map_sqlite(error, "album memberships could not be prepared"))?;
+            let rows = statement
+                .query_map([retired.as_bytes().as_slice()], |row| {
+                    row.get::<_, Vec<u8>>(0)
+                })
+                .map_err(|error| map_sqlite(error, "album memberships could not be read"))?;
+            let mut albums = Vec::new();
+            for row in rows {
+                let bytes = row
+                    .map_err(|error| map_sqlite(error, "an album membership could not be read"))?;
+                albums.push(crate::row::id(&bytes, "an album id is malformed")?);
+            }
+            albums
+        };
+        for album in &albums {
+            set_album_membership_in(transaction, album, &replacement, true, now_ms)?;
+        }
+        transaction
+            .execute(
+                "INSERT INTO object_tags (tag_id, object_id, capture_time_ms)
+                 SELECT t.tag_id, ?2, o.capture_time_ms
+                   FROM object_tags t JOIN objects o ON o.object_id = ?2
+                  WHERE t.object_id = ?1
+                 ON CONFLICT(tag_id, object_id) DO NOTHING",
+                params![
+                    retired.as_bytes().as_slice(),
+                    replacement.as_bytes().as_slice()
+                ],
+            )
+            .map_err(|error| map_sqlite(error, "the tags could not be copied"))?;
+        // Every metadata revision, the import time, the extracted text, and
+        // the resume position carry over; none is sealed under the object key.
+        let new_id = replacement.as_bytes().as_slice();
+        let old_id = retired.as_bytes().as_slice();
+        for (statement, context) in [
+            (
+                "DELETE FROM metadata_revisions WHERE object_id = ?2",
+                "the first metadata revision could not be replaced",
+            ),
+            (
+                "INSERT INTO metadata_revisions
+                     (object_id, revision, active, record, original_filename, caption,
+                      content_type, capture_time_ms, width, height, duration_ms)
+                 SELECT ?2, revision, active, record, original_filename, caption,
+                        content_type, capture_time_ms, width, height, duration_ms
+                   FROM metadata_revisions WHERE object_id = ?1",
+                "the metadata revisions could not be copied",
+            ),
+            (
+                "INSERT INTO content_index
+                     (object_id, primary_stream_id, engine_version, status, body)
+                 SELECT ?2, (SELECT primary_stream_id FROM objects WHERE object_id = ?2),
+                        engine_version, status, body
+                   FROM content_index WHERE object_id = ?1",
+                "the extracted text could not be copied",
+            ),
+            (
+                // A resume position binds the object generation and the
+                // original's revision; the copy is generation 1 with a first
+                // original, and a stale position is not carried.
+                "INSERT INTO playback_positions
+                     (object_id, object_generation, source_content_revision,
+                      position_ms, duration_ms)
+                 SELECT ?2, 1, 1, p.position_ms, p.duration_ms
+                   FROM playback_positions p
+                   JOIN objects o ON o.object_id = p.object_id
+                   JOIN object_streams s ON s.stream_id = o.primary_stream_id
+                  WHERE p.object_id = ?1
+                    AND p.object_generation = o.object_generation
+                    AND p.source_content_revision = s.stream_revision
+                    AND p.duration_ms = o.duration_ms",
+                "the resume position could not be copied",
+            ),
+        ] {
+            transaction
+                .execute(statement, params![old_id, new_id])
+                .map_err(|error| map_sqlite(error, context))?;
+        }
+        transaction
+            .execute(
+                "UPDATE objects SET import_time_ms = ?2, active_metadata_revision = ?3
+                  WHERE object_id = ?1",
+                params![new_id, import_time, active_revision],
+            )
+            .map_err(|error| map_sqlite(error, "the import time could not be kept"))?;
+        if state == i64::from(ObjectState::Trashed.value()) {
+            // A trashed object stays in Trash with its own deadline.
+            transaction
+                .execute(
+                    "INSERT INTO trash_entries (object_id, deleted_ms, expires_ms)
+                     SELECT ?2, deleted_ms, expires_ms FROM trash_entries WHERE object_id = ?1",
+                    params![old_id, new_id],
+                )
+                .map_err(|error| map_sqlite(error, "the trash entry could not be copied"))?;
+            transaction
+                .execute(
+                    "UPDATE objects SET state = ?2 WHERE object_id = ?1",
+                    params![new_id, i64::from(ObjectState::Trashed.value())],
+                )
+                .map_err(|error| map_sqlite(error, "the copy could not enter Trash"))?;
+            transaction
+                .execute(
+                    "DELETE FROM object_search WHERE rowid = ?1",
+                    [row_key(&replacement)],
+                )
+                .map_err(|error| map_sqlite(error, "the search row could not be removed"))?;
+        } else {
+            reindex_search(transaction, &replacement)?;
+        }
+        crate::deletion::begin_in(transaction, &retired)
+    })
+}
+
+fn check_activation(activation: &ObjectActivation) -> Result<()> {
     activation.object.check()?;
     activation.stream.check()?;
     activation.metadata.check()?;
@@ -293,8 +474,11 @@ pub fn activate_object(db: &mut CatalogDb, activation: &ObjectActivation) -> Res
         InvalidInput,
         "the first metadata revision is the active one"
     );
+    Ok(())
+}
 
-    db.transaction(|transaction| {
+fn activate_in(transaction: &Transaction<'_>, activation: &ObjectActivation) -> Result<()> {
+    {
         let objects = count(transaction, "SELECT count(*) FROM objects")?;
         ensure!(
             objects < limits::OBJECTS_MAX,
@@ -338,7 +522,7 @@ pub fn activate_object(db: &mut CatalogDb, activation: &ObjectActivation) -> Res
             &activation.object.object_id,
         )?;
         bump_generation(transaction)
-    })
+    }
 }
 
 fn insert_object_row(transaction: &Transaction<'_>, object: &Object) -> Result<()> {
@@ -637,8 +821,27 @@ pub fn put_derived_asset(db: &mut CatalogDb, asset: &DerivedAsset, stream: &Stre
         InvalidInput,
         "the asset and its stream name different subjects"
     );
-    let thumbnail = asset.kind == StreamKind::ThumbnailSmall;
     db.transaction(|transaction| {
+        put_derived_asset_in(transaction, asset, stream)?;
+        bump_generation(transaction)
+    })
+}
+
+/// Inserts one derived asset and its stream inside a caller's transaction.
+fn put_derived_asset_in(
+    transaction: &Transaction<'_>,
+    asset: &DerivedAsset,
+    stream: &Stream,
+) -> Result<()> {
+    asset.check()?;
+    stream.check()?;
+    ensure!(
+        asset.stream_id == stream.stream_id && asset.object_id == stream.object_id,
+        InvalidInput,
+        "the asset and its stream name different subjects"
+    );
+    let thumbnail = asset.kind == StreamKind::ThumbnailSmall;
+    {
         insert_stream_row(transaction, stream)?;
         transaction
             .execute(
@@ -668,8 +871,8 @@ pub fn put_derived_asset(db: &mut CatalogDb, asset: &DerivedAsset, stream: &Stre
                 )
                 .map_err(|error| map_sqlite(error, "the thumbnail flag could not be set"))?;
         }
-        bump_generation(transaction)
-    })
+        Ok(())
+    }
 }
 
 /// Sets or clears the favourite flag, §9.

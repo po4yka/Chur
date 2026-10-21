@@ -54,6 +54,9 @@ public sealed interface GateResult {
         /** The major version is not the one this application was built against. */
         MAJOR_VERSION,
 
+        /** The minor version is older than the one whose functions this application calls. */
+        MINOR_VERSION,
+
         /** A format range is empty, so the library reads no version at all. */
         EMPTY_FORMAT_RANGE,
 
@@ -64,6 +67,15 @@ public sealed interface GateResult {
 
 /** The major ABI version this application was built against. */
 public const val EXPECTED_ABI_MAJOR: UInt = 7u
+
+/**
+ * The oldest minor ABI version whose functions this application calls.
+ *
+ * `FFI_CONTRACT.md` §2 makes a minor version additive, so a newer minor is
+ * accepted and an older one is refused here, before a missing symbol is
+ * reached. 7.3 adds re-encryption after a revocation.
+ */
+public const val REQUIRED_ABI_MINOR: UInt = 3u
 
 /** Build-flavor bit: a release build. */
 public const val FLAVOR_RELEASE: UInt = 1u
@@ -77,7 +89,7 @@ public const val FLAVOR_TEST_HOOKS: UInt = 4u
 /**
  * Decides whether a library may be called.
  *
- * The three refusals are the ones §2 and [ADR-0037] name. A panicking library
+ * The refusals are the ones §2 and [ADR-0037] name. A panicking library
  * returns a major version of 0 and an inverted format range, so this function
  * refuses it without needing to know that a panic happened.
  *
@@ -90,6 +102,9 @@ public const val FLAVOR_TEST_HOOKS: UInt = 4u
 public fun gate(handshake: NativeHandshake, releaseApplication: Boolean): GateResult {
     if (handshake.abiVersionMajor != EXPECTED_ABI_MAJOR) {
         return refuse(GateResult.Reason.MAJOR_VERSION)
+    }
+    if (handshake.abiVersionMinor < REQUIRED_ABI_MINOR) {
+        return refuse(GateResult.Reason.MINOR_VERSION)
     }
     if (handshake.objectFormatMin > handshake.objectFormatMax ||
         handshake.keySlotFormatMin > handshake.keySlotFormatMax

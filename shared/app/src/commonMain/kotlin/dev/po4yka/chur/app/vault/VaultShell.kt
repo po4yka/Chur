@@ -158,6 +158,8 @@ data class VaultUiState(
     val contentIndex: dev.po4yka.chur.app.ContentIndexState = dev.po4yka.chur.app.ContentIndexState(available = false),
     /** The key slots, for settings. */
     val slots: List<SlotSummary> = emptyList(),
+    /** The re-encryption line for settings, ADR-0069, or `null`. */
+    val reencryptionNotice: String? = null,
     /** The album whose contents the library is showing, if any. */
     val openAlbum: AlbumSummary? = null,
     /** Active library scope, if narrower than all media. */
@@ -1064,6 +1066,11 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions, onNavigatio
             bottom = ChurSpacing.gutter + LocalVaultBottomInset.current),
         verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
     ) {
+        state.reencryptionNotice?.let { line ->
+            item(key = "reencryption") {
+                Text(line, style = MaterialTheme.typography.bodyMedium, color = colors.inkMuted)
+            }
+        }
         item {
             Text("Access", style = MaterialTheme.typography.titleMedium)
         }

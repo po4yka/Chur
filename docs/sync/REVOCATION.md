@@ -40,9 +40,10 @@ Forward-looking procedure:
 4. rewrap every active object key of the collection to the new epoch, per §3.1;
 5. use new epoch for future objects/operations;
 6. retire old key from active sessions after the rewrap of §3.1 completes;
-7. retain enough historical context to verify old operations.
+7. retain enough historical context to verify old operations;
+8. re-encrypt every rewrapped object under a fresh object key, per §3.2.
 
-Media bytes do not need re-encryption unless object key itself is suspected compromised.
+A rewrap keeps the object key. A removed member that opened an object before the revocation can open every container of that object until §3.2 replaces it.
 
 ### 3.1 Rewrap ownership, resumption, and completion
 
@@ -53,7 +54,22 @@ Rewrap is eager, and the device that signed the membership change owns it. Lazy 
 - rewrap is idempotent per object. An envelope already at the target epoch is skipped, so a resumed, retried, or duplicated pass converges to the same result;
 - the revocation is presented to the user as complete only when the walk reaches the end. Until then the interface states that rotation is in progress and that objects not yet rewrapped remain readable by the removed member;
 - if the owning device has not finished within 24 hours of the accepted membership change according to this device's local accepted-at time, any other authorized device continues the same next-missing loop. The peer supplies no trusted timestamp. Two devices running concurrently are safe because a target-epoch envelope is verified and skipped per object;
-- an envelope that cannot be rewrapped, because its object key is unavailable to the rewrapping device, is reported to the user and never silently skipped.
+- an envelope that cannot be rewrapped, because its object key is unavailable to the rewrapping device, is reported to the user and never silently skipped;
+- the transaction that commits a rewrapped envelope deletes every earlier envelope of the object. It does not keep a superseded row. The transaction that completes the walk deletes any superseded row that an earlier version left in the collection, and the device then truncates the WAL. Each unlock repeats the truncation.
+
+### 3.2 Re-encryption after a completed rotation
+
+[ADR-0069](../adr/0069-re-encrypt-objects-after-revocation.md) records this policy and its cost.
+
+- re-encryption is automatic. It starts after the walk of §3.1 completes and needs no user request;
+- only the device that owns the rotation re-encrypts, and only objects of its own collection. A recipient of a shared collection does not re-encrypt; its source vault does. Two devices therefore never replace the same object;
+- a candidate is an active or trashed object whose envelope is above generation 1, or under an earlier epoch. A rewrap advances the generation and an import starts at 1, and a trashed object is not rewrapped, so either shows a key that predates a rotation;
+- each object is replaced by a new object with a fresh object key and a fresh `object_id`. The original is written again through the import writer, so the journal of [ADR-0012](../adr/0012-import-journal-durability-ordering.md) and the padding of [ADR-0066](../adr/0066-pad-object-containers-to-size-buckets.md) apply. The copy keeps every metadata revision, the import time, the favourite flag, the album memberships, the tags, the extracted text, the video resume position, the Trash state and deadline, and the display assets;
+- the copy and its display assets activate in the catalog transaction that starts the deletion of the old object. The deletion then publishes a signed purge of the old identifier, destroys the old envelope, truncates the WAL, and unlinks the old containers. A crash at any point leaves either the old object or the complete copy with a deletion that the next unlock rolls forward;
+- the work is an operation that the host starts after unlock, in the foreground, and that a lock cancels. It never runs inside an unlock, and it holds the session for one chunk or one catalog step at a time. The candidates come from catalog state, so there is no cursor to resume. The smallest objects come first; a cancelled copy restarts under new key material;
+- an object that fails does not block the others. An original that does not authenticate is marked corrupt. Any other failure is retried after a backoff. While any object cannot be re-encrypted, Settings shows one neutral line;
+- the copy is under the current epoch only, so the removed member receives no new object and no new revision under a key it held. Only originals travel between devices, and an original does not change after import; display assets stay on the device that made them;
+- until the pass reaches an object, that object stays under its rewrapped key, and the interface must not state that the removed member has lost access to it.
 
 Throughput and completion targets are in [`../assurance/PERFORMANCE_BUDGETS.md`](../assurance/PERFORMANCE_BUDGETS.md) §3.
 
@@ -66,7 +82,7 @@ A revoked party may retain:
 - exported plaintext;
 - screenshots or backups.
 
-Chur must not claim retroactive deletion. Revocation protects new epochs/content and peer-mediated future access.
+Chur must not claim retroactive deletion. Revocation protects new epochs/content and peer-mediated future access. After §3.2 replaces an object, a key that the revoked party kept opens no stored copy of it on the source device, but it still opens the ciphertext that party copied before.
 
 ## 5. Permission downgrade
 
@@ -123,6 +139,8 @@ Avoid “all copies deleted” or “access instantly erased everywhere.”
 
 - revoked device operations before/after revocation point;
 - epoch rotation and rewrap completion;
+- no superseded envelope after a completed rewrap;
+- re-encryption after a rotation: old object keys open no stored container, every original and its carried data reads back, peers receive the purge of each old identifier, a failing object does not block the others, and a cancellation or a kill at every step resumes;
 - stale grant rejection;
 - permission downgrade without key rotation;
 - offline device return/fork;

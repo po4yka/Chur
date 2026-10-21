@@ -17,7 +17,7 @@ use chur_catalog::model::{DerivedAsset, Stream};
 use chur_catalog::store;
 use chur_catalog::vault::Session;
 use chur_core::{Id, Result, ensure, limits::media as media_bounds};
-use chur_crypto::{Nonce, random};
+use chur_crypto::{Key, Nonce, random};
 use chur_format::constants::{MediaClass, ObjectState, SUITE_V1, StreamKind};
 use chur_format::container::{
     CanonicalManifest, ContainerVersion, ContainerWriter, MediaProperties, StreamIdentity,
@@ -79,6 +79,135 @@ pub fn put(
     bytes: &Zeroizing<Vec<u8>>,
     now_ms: u64,
 ) -> Result<Id> {
+    check_asset(kind, width, height, bytes)?;
+    let object = store::object(session.catalog_ref()?, object_id)?;
+    ensure!(
+        object.state == ObjectState::Active,
+        NotFound,
+        "the object is not listable"
+    );
+    check_video_asset(kind, object.media_kind, width, height, bytes)?;
+    let source_content_revision = object.object_generation.try_into().map_err(|_| {
+        chur_core::err!(
+            ResourceLimitExceeded,
+            "the object generation exceeds a content revision"
+        )
+    })?;
+    let object_key = keys::object_key(session, object_id)?;
+
+    let existing = store::streams(session.catalog_ref()?, object_id)?;
+    let stream_revision = existing
+        .iter()
+        .filter(|stream| stream.stream_kind == kind)
+        .map(|stream| stream.stream_revision)
+        .max()
+        .map_or(1, |current| current + 1);
+    let sealed = seal(
+        session,
+        object_id,
+        &object_key,
+        source_content_revision,
+        stream_revision,
+        kind,
+        width,
+        height,
+        object.duration_ms,
+        bytes,
+        now_ms,
+    )?;
+    store::put_derived_asset(session.catalog()?, &sealed.asset, &sealed.stream)?;
+    journal::close(session.catalog()?, &sealed.transaction_id)?;
+    Ok(sealed.stream.stream_id)
+}
+
+/// A derived asset whose container is written, committed, and verified, and
+/// whose catalog rows are not yet inserted.
+pub struct SealedAsset {
+    pub(crate) asset: DerivedAsset,
+    pub(crate) stream: Stream,
+    pub(crate) transaction_id: Id,
+}
+
+impl SealedAsset {
+    /// The journal record of the asset, so a caller can abandon it alone.
+    #[must_use]
+    pub const fn transaction_id(&self) -> Id {
+        self.transaction_id
+    }
+}
+
+/// Writes one display asset for an import that is not yet activated,
+/// ADR-0069.
+///
+/// The asset is under the import's fresh object key, and its rows are
+/// inserted by the activation of the import, in the same transaction.
+pub fn seal_for_import(
+    session: &mut Session,
+    import: &crate::import::Import,
+    kind: StreamKind,
+    width: u32,
+    height: u32,
+    bytes: &Zeroizing<Vec<u8>>,
+    now_ms: u64,
+) -> Result<SealedAsset> {
+    check_asset(kind, width, height, bytes)?;
+    let media = import.media();
+    check_video_asset(kind, media.media_class, width, height, bytes)?;
+    seal(
+        session,
+        &import.object_id(),
+        import.object_key(),
+        1,
+        1,
+        kind,
+        width,
+        height,
+        media.duration_ms,
+        bytes,
+        now_ms,
+    )
+}
+
+/// The bounds of the two video display assets, which depend on the object.
+fn check_video_asset(
+    kind: StreamKind,
+    media_class: MediaClass,
+    width: u32,
+    height: u32,
+    bytes: &[u8],
+) -> Result<()> {
+    if kind == StreamKind::CompatibleVideo {
+        ensure!(
+            media_class == MediaClass::Video,
+            InvalidInput,
+            "a viewing copy requires a video original"
+        );
+        ensure!(
+            width > 0
+                && height > 0
+                && width.max(height) <= 1280
+                && width.min(height) <= 720
+                && bytes.len() <= 32 * 1024 * 1024,
+            ResourceLimitExceeded,
+            "the viewing copy exceeds its dimensions or byte bound"
+        );
+    }
+    if kind == StreamKind::VideoStoryboard {
+        ensure!(
+            media_class == MediaClass::Video,
+            InvalidInput,
+            "a timeline requires a video original"
+        );
+        ensure!(
+            width == 640 && height == 270 && bytes.len() <= 2 * 1024 * 1024,
+            ResourceLimitExceeded,
+            "the timeline exceeds its fixed atlas bounds"
+        );
+    }
+    Ok(())
+}
+
+fn check_asset(kind: StreamKind, width: u32, height: u32, bytes: &[u8]) -> Result<()> {
     ensure!(
         kind != StreamKind::Original,
         InvalidInput,
@@ -103,57 +232,26 @@ pub fn put(
         // find that out is before it is sealed into a container.
         Waveform::decode(bytes)?;
     }
+    Ok(())
+}
 
-    let object = store::object(session.catalog_ref()?, object_id)?;
-    ensure!(
-        object.state == ObjectState::Active,
-        NotFound,
-        "the object is not listable"
-    );
-    if kind == StreamKind::CompatibleVideo {
-        ensure!(
-            object.media_kind == MediaClass::Video,
-            InvalidInput,
-            "a viewing copy requires a video original"
-        );
-        ensure!(
-            width > 0
-                && height > 0
-                && width.max(height) <= 1280
-                && width.min(height) <= 720
-                && bytes.len() <= 32 * 1024 * 1024,
-            ResourceLimitExceeded,
-            "the viewing copy exceeds its dimensions or byte bound"
-        );
-    }
-    if kind == StreamKind::VideoStoryboard {
-        ensure!(
-            object.media_kind == MediaClass::Video,
-            InvalidInput,
-            "a timeline requires a video original"
-        );
-        ensure!(
-            width == 640 && height == 270 && bytes.len() <= 2 * 1024 * 1024,
-            ResourceLimitExceeded,
-            "the timeline exceeds its fixed atlas bounds"
-        );
-    }
-    let source_content_revision = object.object_generation.try_into().map_err(|_| {
-        chur_core::err!(
-            ResourceLimitExceeded,
-            "the object generation exceeds a content revision"
-        )
-    })?;
-    let object_key = keys::object_key(session, object_id)?;
-
-    let existing = store::streams(session.catalog_ref()?, object_id)?;
-    let stream_revision = existing
-        .iter()
-        .filter(|stream| stream.stream_kind == kind)
-        .map(|stream| stream.stream_revision)
-        .max()
-        .map_or(1, |current| current + 1);
-
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the stream identity, its key, and the asset fields are all inputs"
+)]
+fn seal(
+    session: &mut Session,
+    object_id: &Id,
+    object_key: &Key,
+    source_content_revision: u32,
+    stream_revision: u32,
+    kind: StreamKind,
+    width: u32,
+    height: u32,
+    duration_ms: u64,
+    bytes: &Zeroizing<Vec<u8>>,
+    now_ms: u64,
+) -> Result<SealedAsset> {
     let stream_id = random::id()?;
     let identity = StreamIdentity {
         object_id: *object_id,
@@ -165,7 +263,7 @@ pub fn put(
     // image, as is embedded audio artwork. Waveforms and future records carry
     // no pixels.
     let properties = if kind == StreamKind::CompatibleVideo {
-        MediaProperties::new(MediaClass::Video, width, height, object.duration_ms)?
+        MediaProperties::new(MediaClass::Video, width, height, duration_ms)?
     } else if width == 0 && height == 0 {
         MediaProperties::opaque()
     } else {
@@ -205,51 +303,68 @@ pub fn put(
             opened_ms: now_ms,
         },
     )?;
-    session.admit_container_version(ContainerVersion::CURRENT.value())?;
-    let store_id = session.object_store_id();
-    let mut temporary = TemporaryContainer::open(session.root_dir(), &store_id, &temp_path_id)?;
-    temporary.truncate_to(0)?;
-    let mut writer = ContainerWriter::start(temporary, &object_key, manifest, Nonce::random()?)?;
-    writer.sink_mut().sync()?;
-    journal::mark_manifest_durable(session.catalog()?, &transaction_id)?;
-    let chunk = usize::try_from(DEFAULT_CHUNK_SIZE)
-        .map_err(|_| chur_core::err!(InternalFailure, "the chunk size exceeds a usize"))?;
-    for piece in bytes.chunks(chunk) {
-        journal::reserve_chunk(session.catalog()?, &transaction_id, writer.chunk_count())?;
-        writer.write_chunk(piece)?;
+    // A failure after the journal record opened kills this record alone, so
+    // a caller that shares the session loses no other live transaction.
+    let written = (|| {
+        session.admit_container_version(ContainerVersion::CURRENT.value())?;
+        let store_id = session.object_store_id();
+        let mut temporary = TemporaryContainer::open(session.root_dir(), &store_id, &temp_path_id)?;
+        temporary.truncate_to(0)?;
+        let mut writer = ContainerWriter::start(temporary, object_key, manifest, Nonce::random()?)?;
         writer.sink_mut().sync()?;
-    }
-    // ADR-0066: each padding chunk takes a reserved index like an object chunk.
-    while writer.padding_pending() {
-        journal::reserve_chunk(session.catalog()?, &transaction_id, writer.chunk_count())?;
-        writer.write_padding_chunk()?;
-        writer.sink_mut().sync()?;
-    }
-    journal::mark_committing(session.catalog()?, &transaction_id)?;
-    let plaintext_size = writer.total_plaintext_length();
-    let container_version = writer.version().value();
-    let mut container = writer.finish(Nonce::random()?, 1)?;
-    container.sync()?;
-    let ciphertext_size = container.length()?;
-    container.commit(session.root_dir(), &store_id, &container_path_id)?;
+        journal::mark_manifest_durable(session.catalog()?, &transaction_id)?;
+        let chunk = usize::try_from(DEFAULT_CHUNK_SIZE)
+            .map_err(|_| chur_core::err!(InternalFailure, "the chunk size exceeds a usize"))?;
+        for piece in bytes.chunks(chunk) {
+            journal::reserve_chunk(session.catalog()?, &transaction_id, writer.chunk_count())?;
+            writer.write_chunk(piece)?;
+            writer.sink_mut().sync()?;
+        }
+        // ADR-0066: each padding chunk takes a reserved index like an object chunk.
+        while writer.padding_pending() {
+            journal::reserve_chunk(session.catalog()?, &transaction_id, writer.chunk_count())?;
+            writer.write_padding_chunk()?;
+            writer.sink_mut().sync()?;
+        }
+        journal::mark_committing(session.catalog()?, &transaction_id)?;
+        let plaintext_size = writer.total_plaintext_length();
+        let container_version = writer.version().value();
+        let mut container = writer.finish(Nonce::random()?, 1)?;
+        container.sync()?;
+        let ciphertext_size = container.length()?;
+        container.commit(session.root_dir(), &store_id, &container_path_id)?;
 
-    // Verify from the committed file rather than from the writer's accounting,
-    // exactly as an import does.
-    let file = ContainerFile::open(session.root_dir(), &store_id, &container_path_id)?;
-    let mut reader = StreamReader::open(file, &object_key, &identity)?;
-    let verified = reader.verify_complete()?;
-    ensure!(
-        verified == plaintext_size,
-        ObjectCorrupt,
-        "the written derivative does not authenticate to the bytes that were fed"
-    );
-    let commitment = *reader.read_final_commit()?.ordered_chunk_commitment();
+        // Verify from the committed file rather than from the writer's accounting,
+        // exactly as an import does.
+        let file = ContainerFile::open(session.root_dir(), &store_id, &container_path_id)?;
+        let mut reader = StreamReader::open(file, object_key, &identity)?;
+        let verified = reader.verify_complete()?;
+        ensure!(
+            verified == plaintext_size,
+            ObjectCorrupt,
+            "the written derivative does not authenticate to the bytes that were fed"
+        );
+        let commitment = *reader.read_final_commit()?.ordered_chunk_commitment();
+        drop(reader);
+
+        Ok((
+            commitment,
+            plaintext_size,
+            container_version,
+            ciphertext_size,
+        ))
+    })();
+    let (commitment, plaintext_size, container_version, ciphertext_size) = match written {
+        Ok(written) => written,
+        Err(error) => {
+            let _ = crate::import::reconcile_one(session, &transaction_id);
+            return Err(error);
+        }
+    };
     let chunk_size = DEFAULT_CHUNK_SIZE;
-    drop(reader);
 
-    store::put_derived_asset(
-        session.catalog()?,
-        &DerivedAsset {
+    Ok(SealedAsset {
+        asset: DerivedAsset {
             object_id: *object_id,
             kind,
             source_content_revision,
@@ -263,7 +378,7 @@ pub fn put(
             },
             stream_id,
         },
-        &Stream {
+        stream: Stream {
             stream_id,
             object_id: *object_id,
             stream_kind: kind,
@@ -278,9 +393,8 @@ pub fn put(
             complete_verified_ms: Some(now_ms),
             final_commitment: commitment,
         },
-    )?;
-    journal::close(session.catalog()?, &transaction_id)?;
-    Ok(stream_id)
+        transaction_id,
+    })
 }
 
 /// Reads one derived asset whole.

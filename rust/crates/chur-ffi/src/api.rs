@@ -1115,7 +1115,9 @@ pub unsafe extern "C" fn chur_object_reader_close(reader: Handle) -> Status {
 // Workers
 // ---------------------------------------------------------------------------
 
-fn session_of(entry: &std::sync::Arc<Entry>) -> Result<&std::sync::Mutex<vault::Session>> {
+pub(crate) fn session_of(
+    entry: &std::sync::Arc<Entry>,
+) -> Result<&std::sync::Mutex<vault::Session>> {
     match entry.as_ref() {
         Entry::Session { session, .. } => Ok(session),
         _ => Err(Error::new(

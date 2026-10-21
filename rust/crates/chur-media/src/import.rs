@@ -350,6 +350,16 @@ impl Import {
         self.object_id
     }
 
+    /// The canonical media facts of the import.
+    pub(crate) const fn media(&self) -> CanonicalMedia {
+        self.media
+    }
+
+    /// The fresh object key, for a display asset sealed before activation.
+    pub(crate) const fn object_key(&self) -> &Key {
+        &self.object_key
+    }
+
     /// The transaction, so a caller can ask [`resume_offset`] about it.
     #[must_use]
     pub const fn transaction_id(&self) -> Id {
@@ -426,6 +436,17 @@ impl Import {
 
     /// Commits a copied original while observing cancellation during complete verification.
     pub fn commit_with_display_checked(
+        self,
+        session: &mut Session,
+        content_type: &str,
+        now_ms: u64,
+        display: CopiedDisplay,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Id> {
+        self.commit_inner(session, content_type, now_ms, display, cancelled)
+    }
+
+    fn commit_inner(
         mut self,
         session: &mut Session,
         content_type: &str,
@@ -433,13 +454,33 @@ impl Import {
         display: CopiedDisplay,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Id> {
+        if let Err(error) = self.check_content(content_type) {
+            self.abandon(session)?;
+            return Err(error);
+        }
+        ensure!(
+            self.writer.chunk_count() > 0 || self.media.media_class == MediaClass::Opaque,
+            InvalidInput,
+            "a media object carries at least one chunk"
+        );
+        while self.pad_step(session)? {}
+        self.mark_committing(session)?;
+        let sealed = self.seal(cancelled)?;
+        ensure!(!cancelled(), Cancelled, "the copied original was cancelled");
+        sealed.activate(session, content_type, now_ms, display, None)
+    }
+
+    /// Refuses a Live Photo that its content type does not describe, and a
+    /// Live Photo content type whose bundle does not validate.
+    ///
+    /// The caller abandons the import on an error.
+    pub fn check_content(&self, content_type: &str) -> Result<()> {
         if content_type != crate::live_photo::MIME
             && self
                 .live_photo
                 .as_ref()
                 .is_some_and(crate::live_photo::Validator::has_bundle_magic)
         {
-            self.abandon(session)?;
             bail!(
                 InvalidInput,
                 "a Live Photo image needs the Live Photo MIME type"
@@ -447,32 +488,46 @@ impl Import {
         }
         if content_type == crate::live_photo::MIME
             && let Some(validator) = &self.live_photo
-            && let Err(error) = validator.finish()
         {
-            self.abandon(session)?;
-            return Err(error);
+            validator.finish()?;
         }
-        let CopiedDisplay {
-            caption,
-            favorite,
-            capture_time,
-        } = display;
-        ensure!(
-            self.writer.chunk_count() > 0 || self.media.media_class == MediaClass::Opaque,
-            InvalidInput,
-            "a media object carries at least one chunk"
-        );
-        // ADR-0066: the padding chunks after the object are records like any
-        // other, so each index is reserved and made durable before it is
-        // sealed, exactly as `write` does for an object chunk.
-        while self.writer.padding_pending() {
-            let index = self.writer.chunk_count();
-            journal::reserve_chunk(session.catalog()?, &self.transaction_id, index)?;
-            self.writer.write_padding_chunk()?;
-            self.writer.sink_mut().sync()?;
-        }
-        journal::mark_committing(session.catalog()?, &self.transaction_id)?;
+        Ok(())
+    }
 
+    /// Writes one padding chunk of ADR-0066, and returns whether it wrote one.
+    ///
+    /// Each index is reserved and made durable before it is sealed, exactly
+    /// as [`Import::write`] does for an object chunk.
+    pub fn pad_step(&mut self, session: &mut Session) -> Result<bool> {
+        if !self.writer.padding_pending() {
+            return Ok(false);
+        }
+        let index = self.writer.chunk_count();
+        journal::reserve_chunk(session.catalog()?, &self.transaction_id, index)?;
+        self.writer.write_padding_chunk()?;
+        self.writer.sink_mut().sync()?;
+        Ok(true)
+    }
+
+    /// Records that the stream is complete and the commit begins.
+    pub fn mark_committing(&mut self, session: &mut Session) -> Result<()> {
+        ensure!(
+            !self.writer.padding_pending(),
+            InvalidInput,
+            "the padding of the stream is not complete"
+        );
+        journal::mark_committing(session.catalog()?, &self.transaction_id)
+    }
+
+    /// Writes the final commit and verifies the container, with no session.
+    ///
+    /// The order is §14's: fsync, then structurally verify and compare the
+    /// ordered commitment. The verification reads back what was written
+    /// rather than trusting the writer's own accounting, which is what
+    /// catches a storage layer that acknowledged a write it did not perform.
+    /// It needs no catalog, so a caller that shares the session can release
+    /// it while a large container is verified.
+    pub fn seal(self, cancelled: &dyn Fn() -> bool) -> Result<SealedImport> {
         let total_plaintext = self.writer.total_plaintext_length();
         let container_version = self.writer.version().value();
         let mut container = self.writer.finish(Nonce::random()?, 1)?;
@@ -496,78 +551,25 @@ impl Import {
         );
         let final_commit = reader.read_final_commit()?;
         drop(reader);
-
-        ensure!(!cancelled(), Cancelled, "the copied original was cancelled");
-        let store_id = session.object_store_id();
-        view.container
-            .commit(session.root_dir(), &store_id, &self.container_path_id)?;
-
-        let capture = self.source.capture_time_ms;
-        store::activate_object(
-            session.catalog()?,
-            &ObjectActivation {
-                object: Object {
-                    object_id: self.object_id,
-                    object_generation: 1,
-                    collection_id: self.collection_id,
-                    primary_stream_id: self.stream_id,
-                    media_kind: self.media.media_class,
-                    capture_time_ms: capture_time
-                        .map(|v| v.0)
-                        .unwrap_or(capture.unwrap_or(now_ms)),
-                    import_time_ms: now_ms,
-                    capture_time_substituted: capture_time
-                        .map(|v| v.1)
-                        .unwrap_or(capture.is_none()),
-                    plaintext_size: total_plaintext,
-                    width: self.media.width,
-                    height: self.media.height,
-                    duration_ms: self.media.duration_ms,
-                    favorite,
-                    state: ObjectState::Active,
-                    // The container was just authenticated end to end, which is
-                    // exactly what COMPLETE_VERIFIED means in §5.1. Recording
-                    // UNVERIFIED here would ask the user to verify work that
-                    // just ran.
-                    integrity_summary: IntegritySummary::CompleteVerified,
-                    thumbnail_ready: false,
-                    active_metadata_revision: 1,
-                },
-                stream: Stream {
-                    stream_id: self.stream_id,
-                    object_id: self.object_id,
-                    stream_kind: StreamKind::Original,
-                    stream_revision: 1,
-                    source_content_revision: 0,
-                    container_path_id: self.container_path_id,
-                    container_version,
-                    suite_id: SUITE_V1,
-                    ciphertext_size,
-                    plaintext_size: total_plaintext,
-                    chunk_size: self.chunk_size,
-                    complete_verified_ms: Some(now_ms),
-                    final_commitment: *final_commit.ordered_chunk_commitment(),
-                },
-                envelope: self.envelope,
-                envelope_generation: self.envelope_generation,
-                metadata: MetadataRevision {
-                    object_id: self.object_id,
-                    revision: 1,
-                    active: true,
-                    record: Vec::new(),
-                    original_filename: self.source.original_filename,
-                    caption,
-                    content_type: content_type.to_owned(),
-                    capture_time_ms: capture,
-                    width: self.media.width,
-                    height: self.media.height,
-                    duration_ms: self.media.duration_ms,
-                },
-            },
-        )?;
-        journal::close(session.catalog()?, &self.transaction_id)?;
+        // One identifier names the temporary and the committed container.
         let _ = self.temp_path_id;
-        Ok(self.object_id)
+        Ok(SealedImport {
+            transaction_id: self.transaction_id,
+            object_id: self.object_id,
+            stream_id: self.stream_id,
+            collection_id: self.collection_id,
+            envelope: self.envelope,
+            envelope_generation: self.envelope_generation,
+            container: view.container,
+            container_path_id: self.container_path_id,
+            chunk_size: self.chunk_size,
+            source: self.source,
+            media: self.media,
+            total_plaintext,
+            container_version,
+            ciphertext_size,
+            final_commitment: *final_commit.ordered_chunk_commitment(),
+        })
     }
 
     /// Abandons the import, §14.4.
@@ -583,6 +585,138 @@ impl Import {
         let container = self.writer.into_sink();
         container.discard()?;
         journal::close(session.catalog()?, &self.transaction_id)
+    }
+}
+
+/// An import whose container is written, sealed, and verified, and whose
+/// catalog activation has not run.
+pub struct SealedImport {
+    transaction_id: Id,
+    object_id: Id,
+    stream_id: Id,
+    collection_id: Id,
+    envelope: Vec<u8>,
+    envelope_generation: u64,
+    container: TemporaryContainer,
+    container_path_id: Id,
+    chunk_size: u32,
+    source: SourceCapability,
+    media: CanonicalMedia,
+    total_plaintext: u64,
+    container_version: u16,
+    ciphertext_size: u64,
+    final_commitment: [u8; 32],
+}
+
+impl SealedImport {
+    /// The transaction, so a caller can reconcile it after a failure.
+    #[must_use]
+    pub const fn transaction_id(&self) -> Id {
+        self.transaction_id
+    }
+
+    /// Renames the container into the committed namespace and activates the
+    /// object, §14.
+    ///
+    /// With `retired`, the activation also inserts the display assets sealed
+    /// for the copy and starts the deletion of the object the copy replaces,
+    /// in one catalog transaction, ADR-0069.
+    pub fn activate(
+        self,
+        session: &mut Session,
+        content_type: &str,
+        now_ms: u64,
+        display: CopiedDisplay,
+        retired: Option<(Id, Vec<crate::derived::SealedAsset>)>,
+    ) -> Result<Id> {
+        let CopiedDisplay {
+            caption,
+            favorite,
+            capture_time,
+        } = display;
+        let store_id = session.object_store_id();
+        self.container
+            .commit(session.root_dir(), &store_id, &self.container_path_id)?;
+
+        let capture = self.source.capture_time_ms;
+        let activation = ObjectActivation {
+            object: Object {
+                object_id: self.object_id,
+                object_generation: 1,
+                collection_id: self.collection_id,
+                primary_stream_id: self.stream_id,
+                media_kind: self.media.media_class,
+                capture_time_ms: capture_time
+                    .map(|v| v.0)
+                    .unwrap_or(capture.unwrap_or(now_ms)),
+                import_time_ms: now_ms,
+                capture_time_substituted: capture_time.map(|v| v.1).unwrap_or(capture.is_none()),
+                plaintext_size: self.total_plaintext,
+                width: self.media.width,
+                height: self.media.height,
+                duration_ms: self.media.duration_ms,
+                favorite,
+                state: ObjectState::Active,
+                // The container was just authenticated end to end, which is
+                // exactly what COMPLETE_VERIFIED means in §5.1. Recording
+                // UNVERIFIED here would ask the user to verify work that
+                // just ran.
+                integrity_summary: IntegritySummary::CompleteVerified,
+                thumbnail_ready: false,
+                active_metadata_revision: 1,
+            },
+            stream: Stream {
+                stream_id: self.stream_id,
+                object_id: self.object_id,
+                stream_kind: StreamKind::Original,
+                stream_revision: 1,
+                source_content_revision: 0,
+                container_path_id: self.container_path_id,
+                container_version: self.container_version,
+                suite_id: SUITE_V1,
+                ciphertext_size: self.ciphertext_size,
+                plaintext_size: self.total_plaintext,
+                chunk_size: self.chunk_size,
+                complete_verified_ms: Some(now_ms),
+                final_commitment: self.final_commitment,
+            },
+            envelope: self.envelope,
+            envelope_generation: self.envelope_generation,
+            metadata: MetadataRevision {
+                object_id: self.object_id,
+                revision: 1,
+                active: true,
+                record: Vec::new(),
+                original_filename: self.source.original_filename,
+                caption,
+                content_type: content_type.to_owned(),
+                capture_time_ms: capture,
+                width: self.media.width,
+                height: self.media.height,
+                duration_ms: self.media.duration_ms,
+            },
+        };
+        match retired {
+            Some((retired, assets)) => {
+                let rows: Vec<_> = assets
+                    .iter()
+                    .map(|sealed| (sealed.asset, sealed.stream.clone()))
+                    .collect();
+                store::activate_replacement(
+                    session.catalog()?,
+                    &activation,
+                    &rows,
+                    &retired,
+                    now_ms,
+                )?;
+                for sealed in &assets {
+                    journal::close(session.catalog()?, &sealed.transaction_id)?;
+                }
+            }
+            None => store::activate_object(session.catalog()?, &activation)?,
+        }
+        journal::close(session.catalog()?, &self.transaction_id)?;
+        Ok(self.object_id)
     }
 }
 

@@ -898,7 +898,7 @@ On membership change or compromise:
 5. distribute only the new epoch to current members;
 6. record the change in the signed operation log when sync exists.
 
-Rewrapping object keys does not require re-encrypting media containers.
+A rewrap deletes the earlier envelopes of the object in the transaction that commits the new one, and the completed rotation truncates the WAL. A rewrap keeps the object key, so after a completed rotation the owning device re-encrypts each rewrapped or trashed object under a fresh object key in a background operation that starts after unlock, per [`sync/REVOCATION.md`](sync/REVOCATION.md) §3.2 and [ADR-0069](adr/0069-re-encrypt-objects-after-revocation.md).
 
 Revocation cannot remove plaintext or keys already copied by a former authorized recipient.
 
@@ -1791,9 +1791,10 @@ On member/device removal:
 3. rewrap object keys for current members eagerly, per [`sync/REVOCATION.md`](sync/REVOCATION.md) §3.1;
 4. encrypt future metadata and operations under the new epoch;
 5. record the membership change in the signed operation log;
-6. optionally re-encrypt especially sensitive object content if the policy demands forward secrecy from cached old object keys.
+6. delete the superseded object envelopes and truncate the WAL when the rewrap completes;
+7. re-encrypt every rewrapped or trashed object under a fresh object key, automatically, in a cancellable background operation that starts after unlock, per [`sync/REVOCATION.md`](sync/REVOCATION.md) §3.2 and [ADR-0069](adr/0069-re-encrypt-objects-after-revocation.md).
 
-A former member who already obtained an object key may retain access to that object's ciphertext. Rewrapping alone does not revoke keys already copied.
+A former member who already obtained an object key keeps access only to ciphertext of that object that it copied before the re-encryption. Neither the rewrap nor the re-encryption revokes keys, ciphertext, or plaintext already copied.
 
 ---
 

@@ -246,7 +246,7 @@ class ChurVaultHostTest {
     fun the_handshake_matches_the_frozen_abi() {
         val handshake = ChurVault.handshake()
         assertEquals(7, handshake.major)
-        assertEquals(2, handshake.minor, "encrypted playback positions use ABI 7.2")
+        assertEquals(3, handshake.minor, "re-encryption after revocation uses ABI 7.3")
         assertEquals(1, handshake.objectFormatMin)
         assertEquals(2, handshake.objectFormatMax)
         assertTrue(handshake.capabilities and 0b0000_0010L != 0L, "the reader is declared")
@@ -272,6 +272,23 @@ class ChurVaultHostTest {
         )
         assertTrue(ChurVault.statusIsKnown(ChurStatus.AUTHENTICATION_FAILED.value))
         assertFalse(ChurVault.statusIsKnown(42))
+    }
+
+    @Test
+    fun a_vault_with_no_revocation_has_nothing_to_reencrypt() {
+        val runtime = openRuntime()
+        val session = createVault(runtime)
+        assertEquals(ReencryptionCounts(pending = 0, failed = 0), ChurVault.reencryptionCounts(session))
+        val operation = ChurVault.beginReencryption(session)
+        var progress = ChurVault.poll(operation)
+        while (!progress.terminal) {
+            Thread.sleep(10)
+            progress = ChurVault.poll(operation)
+        }
+        assertEquals(0, progress.status)
+        assertEquals(0L, progress.total)
+        ChurVault.closeOperation(operation)
+        ChurVault.closeSession(session)
     }
 
     @Test

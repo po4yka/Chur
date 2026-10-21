@@ -560,6 +560,7 @@ private fun VaultRoute(controller: ChurController) {
     val albums by controller.albums.collectAsState()
     val tags by controller.tags.collectAsState()
     val slots by controller.slots.collectAsState()
+    val reencryptionNotice by controller.reencryptionNotice.collectAsState()
     val notice by controller.notice.collectAsState()
     val operation by controller.activeOperation.collectAsState()
     val vaultState by controller.vaultState.collectAsState()
@@ -1267,6 +1268,7 @@ private fun VaultRoute(controller: ChurController) {
                 searchContext = renderedSearchScope,
                 contentIndex = contentIndex,
                 slots = slots,
+                reencryptionNotice = reencryptionNotice,
                 openAlbum = openAlbum,
                 libraryScopeTitle = if (recentlyAdded) "Recently added" else if (trashOpen) "Trash" else if (quarantineOpen) "Quarantine" else openTag?.name ?: if (favoritesOnly) "Favorites" else null,
                 trashOpen = trashOpen,

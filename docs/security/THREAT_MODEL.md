@@ -138,7 +138,7 @@ Attempts to compromise dependencies, build scripts, CI actions, signing, generat
 | T-014 | stale media reader survives lock | session generation, in-place zeroization, cancellation | compromised process can bypass application logic |
 | T-015 | peer replays old valid data | signed operation chains, local accepted heads | peer omission across devices is difficult to prove |
 | T-016 | recipient impersonation | verified identity keys, signed grants, human verification | user may verify wrong identity |
-| T-017 | revoked recipient retains access | collection epoch rotation and rewrap | old ciphertext/plaintext already obtained remains available |
+| T-017 | revoked recipient retains access | collection epoch rotation and rewrap, deletion of superseded envelopes, automatic re-encryption under fresh object keys (ADR-0069) | ciphertext, keys, and plaintext already obtained remain available; objects stay under the rewrapped key until the background re-encryption reaches them |
 | T-018 | malicious codec input | isolated Android decoder process with Binder range reads and no app storage, system media service sandboxes, minimal parsing, bounded resources | platform codec vulnerabilities; app-UID platform media and OCR children |
 | T-019 | dependency compromise | pinning, review, SBOM, reproducible release evidence | ecosystem compromise can still occur |
 | T-020 | backup omits objects | authenticated backup manifest and completeness check | stale but authentic backup remains possible without trusted checkpoint |

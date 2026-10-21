@@ -233,6 +233,7 @@ typedef int32_t chur_status_t;
 #define CHUR_OPERATION_INTEGRITY_SCAN 3
 #define CHUR_OPERATION_BACKUP 4
 #define CHUR_OPERATION_RESTORE 5
+#define CHUR_OPERATION_REENCRYPTION 6
 
 #define CHUR_STAGE_STARTING 1
 #define CHUR_STAGE_RUNNING 2
@@ -554,6 +555,13 @@ chur_status_t chur_operation_poll(chur_handle_t operation,
                                   ChurProgressV1 *out_progress);
 chur_status_t chur_operation_cancel(chur_handle_t operation);
 chur_status_t chur_operation_close(chur_handle_t operation);
+
+/* Re-encryption after a revocation, FFI_CONTRACT.md section 6.32, ABI 7.3. */
+chur_status_t chur_reencryption_begin(chur_handle_t session,
+                                      chur_handle_t *out_operation);
+chur_status_t chur_reencryption_counts(chur_handle_t session,
+                                       uint64_t *out_pending,
+                                       uint64_t *out_failed);
 
 /* -------------------------------------------------------------------------
  * Object reader

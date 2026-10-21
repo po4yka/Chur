@@ -785,6 +785,20 @@ class VaultRepository(
     suspend fun beginExport(objectId: ByteArray, destinationFd: Int): Long =
         withSession { ChurVault.beginExport(it, objectId, destinationFd) }
 
+    /**
+     * Starts one re-encryption pass after a revocation, ADR-0069. It runs
+     * only while the vault is open, and a lock cancels it.
+     */
+    suspend fun beginReencryption(): Long = withQuietSession { ChurVault.beginReencryption(it) }
+
+    /**
+     * The objects still to re-encrypt and the objects that cannot be
+     * re-encrypted now. Like the pass itself, the call is background work
+     * and does not count as activity for the auto-lock.
+     */
+    suspend fun reencryptionCounts(): dev.po4yka.chur.ffi.ReencryptionCounts =
+        withQuietSession { ChurVault.reencryptionCounts(it) }
+
     /** Starts an integrity scan; a null identifier scans every object. */
     suspend fun beginIntegrityScan(objectId: ByteArray?): Long =
         withSession { ChurVault.beginIntegrityScan(it, objectId) }
@@ -1170,6 +1184,13 @@ class VaultRepository(
         val result = body(session)
         touch()
         result
+    }
+    /** [withSession] for background work, which never resets the idle timer. */
+    private suspend inline fun <T> withQuietSession(body: (Long) -> T): T = mutex.withLock {
+        if (session == 0L || _state.value !is VaultState.Unlocked) {
+            throw ChurFailure(ChurStatus.VAULT_LOCKED, "no session is open")
+        }
+        body(session)
     }
     private suspend inline fun <T> withGenerationSession(expectedGeneration: Long, body: (Long) -> T): T = mutex.withLock {
         if (session == 0L || generation != expectedGeneration || _state.value !is VaultState.Unlocked) {

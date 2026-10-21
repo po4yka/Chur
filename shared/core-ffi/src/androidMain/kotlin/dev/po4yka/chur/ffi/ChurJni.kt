@@ -330,6 +330,16 @@ internal object ChurJni {
         outScan: LongArray,
     ): Int
 
+    external fun reencryptionBegin(
+        session: Long,
+        outOperation: LongArray,
+    ): Int
+
+    external fun reencryptionCounts(
+        session: Long,
+        outCounts: LongArray,
+    ): Int
+
     external fun operationPoll(
         operation: Long,
         outCounts: LongArray,

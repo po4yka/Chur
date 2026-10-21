@@ -322,6 +322,9 @@ fn every_declared_function_is_exported() {
         "chur_operation_poll",
         "chur_operation_cancel",
         "chur_operation_close",
+        // §6.32, re-encryption after a revocation, ABI 7.2.
+        "chur_reencryption_begin",
+        "chur_reencryption_counts",
         "chur_object_reader_open",
         "chur_object_reader_size",
         "chur_object_reader_content_info",
@@ -448,7 +451,7 @@ fn every_declared_function_is_exported() {
 
     // Calling each one proves the list above is not a stale copy.
     assert_eq!(chur_ffi::chur_abi_version_major(), 7);
-    assert_eq!(chur_ffi::chur_abi_version_minor(), 2);
+    assert_eq!(chur_ffi::chur_abi_version_minor(), 3);
     assert_eq!(
         chur_ffi::chur_capabilities(),
         chur_ffi::CHUR_CAP_DECOY_VAULT

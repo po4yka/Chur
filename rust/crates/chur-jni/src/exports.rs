@@ -1315,6 +1315,57 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_integrityScanBegin<'loca
     })
 }
 
+/// Starts one re-encryption pass after a revocation, ADR-0069.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_reencryptionBegin<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    out_operation: JLongArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let mut handle = 0u64;
+        // SAFETY: `handle` is a live local.
+        let status = unsafe {
+            chur_ffi::reencrypt::chur_reencryption_begin(handle_of(session), &mut handle)
+        };
+        finish_handle(env, status, &out_operation, handle)
+    })
+}
+
+/// Reads the pending and failed re-encryption counts into `out_counts[0..2]`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_reencryptionCounts<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    out_counts: JLongArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let (mut pending, mut failed) = (0u64, 0u64);
+        // SAFETY: both targets are live locals.
+        let status = unsafe {
+            chur_ffi::reencrypt::chur_reencryption_counts(
+                handle_of(session),
+                &mut pending,
+                &mut failed,
+            )
+        };
+        if status != 0 {
+            return status;
+        }
+        let values = [
+            i64::try_from(pending).unwrap_or(i64::MAX),
+            i64::try_from(failed).unwrap_or(i64::MAX),
+        ];
+        if crate::convert::write_longs(env, &out_counts, &values, 0) {
+            0
+        } else {
+            INTERNAL_FAILURE
+        }
+    })
+}
+
 /// Copies an operation's progress snapshot.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_operationPoll<'local>(

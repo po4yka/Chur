@@ -51,6 +51,8 @@ import dev.po4yka.chur.native.chur_export_begin
 import dev.po4yka.chur.native.chur_handle_tVar
 import dev.po4yka.chur.native.chur_import_begin
 import dev.po4yka.chur.native.chur_integrity_scan_begin
+import dev.po4yka.chur.native.chur_reencryption_begin
+import dev.po4yka.chur.native.chur_reencryption_counts
 import dev.po4yka.chur.native.chur_key_slot_format_max
 import dev.po4yka.chur.native.chur_key_slot_format_min
 import dev.po4yka.chur.native.chur_object_delete
@@ -820,6 +822,31 @@ internal actual object ChurNative {
             handleCall(outScan) { out ->
                 chur_integrity_scan_begin(session.toULong(), request.ptr, out)
             }
+        }
+
+    actual fun reencryptionBegin(
+        session: Long,
+        outOperation: LongArray,
+    ): Int =
+        memScoped {
+            handleCall(outOperation) { out ->
+                chur_reencryption_begin(session.toULong(), out)
+            }
+        }
+
+    actual fun reencryptionCounts(
+        session: Long,
+        outCounts: LongArray,
+    ): Int =
+        memScoped {
+            val pending = alloc<ULongVar>()
+            val failed = alloc<ULongVar>()
+            val status = chur_reencryption_counts(session.toULong(), pending.ptr, failed.ptr)
+            if (status == 0) {
+                outCounts[0] = pending.value.toLong()
+                outCounts[1] = failed.value.toLong()
+            }
+            status
         }
 
     actual fun operationPoll(

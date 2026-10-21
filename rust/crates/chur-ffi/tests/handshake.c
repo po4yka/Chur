@@ -52,8 +52,8 @@ int main(void) {
           "neither format range is the empty panic fallback");
 
     check(chur_abi_version_major() == 7, "major ABI version is 7");
-    check(chur_abi_version_minor() == 2,
-          "minor ABI version is 2, including encrypted playback positions");
+    check(chur_abi_version_minor() == 3,
+          "minor ABI version is 3, including re-encryption after a revocation");
 
     check(chur_object_format_min() <= chur_object_format_max(),
           "object format range is ordered");
@@ -170,6 +170,8 @@ int main(void) {
             (const void *)&chur_operation_poll,
             (const void *)&chur_operation_cancel,
             (const void *)&chur_operation_close,
+            (const void *)&chur_reencryption_begin,
+            (const void *)&chur_reencryption_counts,
             (const void *)&chur_object_reader_open,
             (const void *)&chur_object_reader_size,
             (const void *)&chur_object_reader_content_info,

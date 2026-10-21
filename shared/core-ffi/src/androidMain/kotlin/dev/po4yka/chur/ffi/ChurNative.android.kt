@@ -346,6 +346,16 @@ internal actual object ChurNative {
         outScan: LongArray,
     ): Int = ChurJni.integrityScanBegin(session, objectId, outScan)
 
+    actual fun reencryptionBegin(
+        session: Long,
+        outOperation: LongArray,
+    ): Int = ChurJni.reencryptionBegin(session, outOperation)
+
+    actual fun reencryptionCounts(
+        session: Long,
+        outCounts: LongArray,
+    ): Int = ChurJni.reencryptionCounts(session, outCounts)
+
     actual fun operationPoll(
         operation: Long,
         outCounts: LongArray,
