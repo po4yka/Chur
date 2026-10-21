@@ -437,6 +437,19 @@ jobs:
       # application's; linking here proves the framework and the static library
       # agree on every symbol cinterop generated a binding for.
       - run: ./gradlew --no-daemon --no-parallel --max-workers=1 linkDebugFrameworkIosSimulatorArm64
+      # The checksum-pinned Filament iOS SDK is large; restore it instead of
+      # downloading it on every run. The key follows the version and SHA-256
+      # that prepare-filament.sh pins, and the script rechecks the marker.
+      - id: filament-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/iosApp/SpiritRenderer/.vendor/filament
+          key: filament-ios-${{ hashFiles('apps/iosApp/SpiritRenderer/prepare-filament.sh') }}
+      # A failed restore only warns and can leave a partial SDK, which the
+      # prepare script refuses to overwrite. Start clean unless it was a hit.
+      - name: discard a partial Filament restore
+        if: steps.filament-cache.outputs.cache-hit != 'true'
+        run: rm -rf apps/iosApp/SpiritRenderer/.vendor/filament
       # Compile the actual UIKit/Metal host, not only its Kotlin framework.
       # The prebuild script stages checksum-pinned Filament archives for this SDK.
       - name: compile the iOS app and interactive spirit host
