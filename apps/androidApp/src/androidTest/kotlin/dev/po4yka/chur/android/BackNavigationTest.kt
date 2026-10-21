@@ -30,7 +30,6 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.semantics.Role
-import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
@@ -2524,7 +2523,7 @@ class BackNavigationTest {
         val file = File(context.cacheDir, "export-scratch/$name")
         file.parentFile?.mkdirs()
         file.outputStream().use(write)
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.exports", file)
+        val uri = leasedExportUri(context, file)
         val platform = AndroidMediaCodec(context.contentResolver)
         val outcome = runBlocking { controller.importMedia(MediaImporter(codec ?: platform)) { platform.open(uri) } }
         assertTrue("$name must import: $outcome", outcome is MediaImporter.Outcome.Imported)

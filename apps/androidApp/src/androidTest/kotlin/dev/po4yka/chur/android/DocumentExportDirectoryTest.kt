@@ -40,7 +40,7 @@ class DocumentExportDirectoryTest {
                 vault.start()
                 vault.create("live photo SAF test password".encodeToByteArray(), false)
                 val codec = dev.po4yka.chur.imports.AndroidMediaCodec(context)
-                val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.exports", source)
+                val uri = leasedExportUri(context, source)
                 val picked = requireNotNull(codec.open(uri))
                 val table = requireNotNull(picked.livePhoto)
                 val result = dev.po4yka.chur.app.MediaImporter(codec).import(vault, picked)

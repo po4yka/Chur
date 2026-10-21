@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.ComposeView
-import androidx.core.content.FileProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.po4yka.chur.app.MediaImporter
@@ -55,7 +54,7 @@ class AudioArtworkPlaybackTest {
             vault.start()
             vault.create("audio playback artwork test password".encodeToByteArray(), false)
             val codec = AndroidMediaCodec(context)
-            val picked = requireNotNull(codec.open(FileProvider.getUriForFile(context, "${context.packageName}.exports", source)))
+            val picked = requireNotNull(codec.open(leasedExportUri(context, source)))
             val outcome = MediaImporter(codec).import(vault, picked) as MediaImporter.Outcome.Imported
             val bytes = vault.readDerived(outcome.objectId, StreamKind.SCREEN_PREVIEW)
             val decoded = try { requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size)) } finally { bytes.fill(0) }

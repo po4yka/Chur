@@ -127,8 +127,10 @@ class MainActivity : FragmentActivity() {
 
     private fun receiveExternalIntent(incoming: Intent) {
         // Read only an allowlisted action; no extra, URI or saved intent can
-        // supply a private query, identity, or replay token.
-        val action = LauncherAction.fromExternalAction(incoming.action)
+        // supply a private query, identity, or replay token. The only extra read
+        // is the launcher token: an app other than the launcher cannot supply it,
+        // so it cannot force a lock or a private route.
+        val action = externalLauncherAction(this, incoming)
         intent = sanitizedLauncherIntent(this)
         if (!gateCompatible) return
         if (incoming.action == Intent.ACTION_SEND || incoming.action == Intent.ACTION_SEND_MULTIPLE) {

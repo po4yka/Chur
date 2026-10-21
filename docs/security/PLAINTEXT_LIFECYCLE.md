@@ -115,7 +115,7 @@ Some platform codecs, editors, share targets, or APIs require a file URL. Scratc
 - startup cleanup of abandoned entries;
 - no claim of physical overwrite on flash.
 
-A scratch journal records opaque cleanup state without private filenames.
+No scratch journal exists. The startup cleanup deletes the whole scratch directory, so it needs no record of which entries were abandoned.
 
 The caps are checked before the first plaintext byte is written. Exceeding any of them fails the operation with `RESOURCE_LIMIT_EXCEEDED`; nothing is truncated, and no existing entry is evicted to make room.
 

@@ -532,131 +532,22 @@ fn an_export_writes_the_original_bytes() {
 }
 
 #[test]
-fn a_scratch_entry_is_created_and_released() {
-    let (root, mut session) = new_vault();
-    let (object_id, expected) = import_photo(&mut session, 4_096, "a.jpg");
-    let entry = export::materialize(
-        &session,
-        &object_id,
-        StreamKind::Original,
-        &mut Uninterrupted,
-    )
-    .expect("scratch");
-    assert_eq!(std::fs::read(entry.path()).unwrap(), expected.as_slice());
+fn unlock_cleanup_clears_every_scratch_entry() {
+    let (root, session) = new_vault();
     let directory = root.scratch(&session.object_store_id());
-    assert_eq!(scratch_entries(&directory), 1);
-    entry.release().expect("release");
-    assert_eq!(scratch_entries(&directory), 0);
-}
-
-/// Counts scratch entries, which excludes the journal the lifecycle keeps.
-fn scratch_entries(directory: &std::path::Path) -> usize {
-    std::fs::read_dir(directory)
-        .unwrap()
-        .filter_map(std::result::Result::ok)
-        .filter(|entry| entry.file_name().to_string_lossy() != "scratch-journal")
-        .count()
-}
-
-#[test]
-fn a_materialization_journals_its_entry() {
-    let (root, mut session) = new_vault();
-    let (object_id, _) = import_photo(&mut session, 4_096, "a.jpg");
-    let entry = export::materialize(
-        &session,
-        &object_id,
-        StreamKind::Original,
-        &mut Uninterrupted,
-    )
-    .expect("scratch");
-    let directory = root.scratch(&session.object_store_id());
-    let entry_id = entry.entry_id().to_hex();
-    let journal = std::fs::read_to_string(directory.join("scratch-journal")).unwrap();
-    assert!(
-        journal.contains(&entry_id),
-        "the journal names the entry it was created for"
-    );
-    entry.release().expect("release");
-    let journal = std::fs::read_to_string(directory.join("scratch-journal"));
-    assert!(
-        journal.map_or(true, |text| !text.contains(&entry_id)),
-        "the released entry is no longer in the journal"
-    );
-}
-
-#[test]
-fn an_entry_expires_after_its_hold_bound() {
-    let (root, mut session) = new_vault();
-    let (object_id, _) = import_photo(&mut session, 4_096, "a.jpg");
-    let entry = export::materialize(
-        &session,
-        &object_id,
-        StreamKind::Original,
-        &mut Uninterrupted,
-    )
-    .expect("scratch");
-    let directory = root.scratch(&session.object_store_id());
-    let journal = std::fs::read_to_string(directory.join("scratch-journal")).unwrap();
-    let (_, created_at_ms) = journal.trim_end().rsplit_once(' ').unwrap();
-    let created_at_ms: u64 = created_at_ms.parse().unwrap();
-    // Inside the hold bound the sweep keeps the entry and its row.
-    export::sweep_expired(&directory, created_at_ms).expect("sweep");
-    assert!(entry.path().exists());
-    // At the bound it deletes the entry and drops the row.
-    let removed = export::sweep_expired(
-        &directory,
-        created_at_ms + chur_core::limits::scratch::HOLD_MS_MAX,
-    )
-    .expect("sweep");
-    assert_eq!(removed, 1);
-    assert!(!entry.path().exists());
-    let journal = std::fs::read_to_string(directory.join("scratch-journal")).unwrap();
-    assert!(!journal.contains(&entry.entry_id().to_hex()));
-}
-
-#[test]
-fn the_scratch_entry_cap_is_enforced_before_the_first_byte() {
-    let (_root, mut session) = new_vault();
-    let (object_id, _) = import_photo(&mut session, 1_024, "a.jpg");
-    let mut held = Vec::new();
-    for _ in 0..4 {
-        held.push(
-            export::materialize(
-                &session,
-                &object_id,
-                StreamKind::Original,
-                &mut Uninterrupted,
-            )
-            .expect("scratch"),
-        );
-    }
-    assert_eq!(
-        rejection(export::materialize(
-            &session,
-            &object_id,
-            StreamKind::Original,
-            &mut Uninterrupted
-        )),
-        ChurStatus::ResourceLimitExceeded
-    );
-    for entry in held {
-        entry.release().expect("release");
-    }
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("abandoned"), b"plaintext").unwrap();
+    assert_eq!(export::clear_scratch(&session).expect("clear"), 1);
+    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
 }
 
 #[test]
 fn lock_clears_every_scratch_entry() {
     let (root, mut session) = new_vault();
-    let (object_id, _) = import_photo(&mut session, 1_024, "a.jpg");
-    let _entry = export::materialize(
-        &session,
-        &object_id,
-        StreamKind::Original,
-        &mut Uninterrupted,
-    )
-    .expect("scratch");
-    session.lock().expect("lock");
     let directory = root.scratch(&session.object_store_id());
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("held"), b"plaintext").unwrap();
+    session.lock().expect("lock");
     assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
 }
 

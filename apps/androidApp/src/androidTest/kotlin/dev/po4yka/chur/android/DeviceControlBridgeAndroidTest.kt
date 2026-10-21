@@ -2,6 +2,9 @@ package dev.po4yka.chur.android
 
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
+import android.net.LocalSocket
+import android.net.LocalSocketAddress
 import android.os.ParcelFileDescriptor
 import android.util.Base64
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -18,7 +21,6 @@ import dev.po4yka.chur.vault.VaultState
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
-import java.net.Socket
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -162,9 +164,9 @@ class DeviceControlBridgeAndroidTest {
         original.stop()
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val short = DeviceControlBridge(context, controller, idleTimeoutMs = 2_000,
-            handshakeTimeoutMs = 350, frameTimeoutMs = 5_000)
+            handshakeTimeoutMs = 350, frameTimeoutMs = 5_000, acceptPeer = ::thisApp)
         try {
-            Socket("127.0.0.1", short.start().port).use { socket ->
+            connect(short.start()).use { socket ->
                 socket.soTimeout = 2_000
                 val output = DataOutputStream(socket.getOutputStream())
                 val started = android.os.SystemClock.elapsedRealtime()
@@ -172,12 +174,12 @@ class DeviceControlBridgeAndroidTest {
                 delay(250)
                 output.writeByte(' '.code); output.flush()
                 try { assertEquals(-1, socket.getInputStream().read()) }
-                catch (_: java.net.SocketException) { /* An unread partial frame may close with TCP reset. */ }
+                catch (_: java.io.IOException) { /* An unread partial frame may close with a reset. */ }
                 assertTrue(android.os.SystemClock.elapsedRealtime() - started < 1_000)
             }
         } finally { short.stop() }
         val idle = DeviceControlBridge(context, controller, idleTimeoutMs = 300,
-            handshakeTimeoutMs = 5_000, frameTimeoutMs = 5_000)
+            handshakeTimeoutMs = 5_000, frameTimeoutMs = 5_000, acceptPeer = ::thisApp)
         try {
             Client(idle.start()).use { client ->
                 withTimeout(2_000) { idle.pairing.first { it == null } }
@@ -189,11 +191,37 @@ class DeviceControlBridgeAndroidTest {
         } finally { idle.stop() }
     }
 
+    @Test fun onlyAdbMayConnect() = fixture { controller, original, _ ->
+        original.stop()
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        assertTrue(isAdbPeer(Process.SHELL_UID))
+        assertTrue(isAdbPeer(Process.ROOT_UID))
+        assertFalse(isAdbPeer(Process.myUid()))
+        // The default peer check: this app's UID is not an ADB UID.
+        val bridge = DeviceControlBridge(context, controller)
+        try {
+            val pairing = bridge.start()
+            assertTrue(pairing.link.matches(Regex("chur://device-control/v3\\?socket=chur-dc-[0-9a-f]{16}#[0-9a-f]{32}")))
+            connect(pairing).use { socket ->
+                socket.soTimeout = 5_000
+                val output = DataOutputStream(socket.outputStream)
+                val hello = JSONObject().put("op", "pair").put("version", 2).put("code", pairing.code)
+                    .toString().toByteArray()
+                // The bridge closes the socket before it reads, so the write can fail too.
+                try {
+                    output.writeInt(hello.size); output.write(hello); output.flush()
+                    assertEquals(-1, socket.inputStream.read())
+                } catch (_: java.io.IOException) { }
+            }
+            assertFalse(bridge.connected.value)
+        } finally { bridge.stop() }
+    }
+
     private fun fixture(block: suspend (ChurController, DeviceControlBridge, File) -> Unit) = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val root = File(context.cacheDir, "device-control-test-${System.nanoTime()}").apply { mkdirs() }
         val controller = ChurController(File(root, "vault").path, NoPrivacyCover, NoExports, clock = { System.currentTimeMillis() })
-        val bridge = DeviceControlBridge(context, controller)
+        val bridge = DeviceControlBridge(context, controller, acceptPeer = ::thisApp)
         try {
             controller.start()
             withContext(Dispatchers.Main) { controller.create("Synthetic device bridge password", offerRecovery = false) }
@@ -220,7 +248,7 @@ class DeviceControlBridgeAndroidTest {
     }
 
     private class Client(pairing: DeviceControlBridge.Pairing) : AutoCloseable {
-        private val socket = Socket("127.0.0.1", pairing.port).apply { soTimeout = 15_000 }
+        private val socket = connect(pairing).apply { soTimeout = 15_000 }
         private val input = DataInputStream(socket.getInputStream())
         private val output = DataOutputStream(socket.getOutputStream())
         init {
@@ -268,3 +296,8 @@ class DeviceControlBridgeAndroidTest {
     private fun id() = UUID.randomUUID().toString().replace("-", "")
     private fun String.hexBytes() = ByteArray(length / 2) { substring(it * 2, it * 2 + 2).toInt(16).toByte() }
 }
+
+private fun thisApp(uid: Int): Boolean = uid == Process.myUid()
+
+private fun connect(pairing: DeviceControlBridge.Pairing): LocalSocket =
+    LocalSocket().apply { connect(LocalSocketAddress(pairing.socket)) }

@@ -1,7 +1,11 @@
 package dev.po4yka.chur.app
 
 import android.app.Activity
+import android.os.Build
+import android.view.View
 import android.view.WindowManager
+import android.view.autofill.AutofillManager
+import android.view.contentcapture.ContentCaptureManager
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 
@@ -24,6 +28,11 @@ import androidx.lifecycle.LifecycleOwner
  * held the first activity would set the flag on a destroyed window and keep
  * every destroyed activity alive. No activity means no window to cover, and
  * the next one sets the flag from the session state as it starts.
+ *
+ * `FLAG_SECURE` does not stop an autofill or content-capture service from reading
+ * the view tree, and `ANDROID.md` §20.3 forbids both on private surfaces. The same
+ * switch therefore excludes the whole window from autofill and content capture,
+ * and cancels an autofill session that is already open.
  */
 class AndroidPrivacyCover(private val activity: () -> Activity?) : PrivacyCover {
     override fun setEnabled(enabled: Boolean) {
@@ -38,9 +47,31 @@ class AndroidPrivacyCover(private val activity: () -> Activity?) : PrivacyCover 
                     WindowManager.LayoutParams.FLAG_SECURE,
                     WindowManager.LayoutParams.FLAG_SECURE,
                 )
+                exclude(current, true)
             } else {
                 current.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                exclude(current, false)
             }
+        }
+    }
+
+    private fun exclude(activity: Activity, private: Boolean) {
+        val decor = activity.window.decorView
+        decor.importantForAutofill = if (private) {
+            View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+        } else {
+            View.IMPORTANT_FOR_AUTOFILL_AUTO
+        }
+        if (private) activity.getSystemService(AutofillManager::class.java)?.cancel()
+        if (Build.VERSION.SDK_INT >= 30) {
+            decor.importantForContentCapture = if (private) {
+                View.IMPORTANT_FOR_CONTENT_CAPTURE_NO_EXCLUDE_DESCENDANTS
+            } else {
+                View.IMPORTANT_FOR_CONTENT_CAPTURE_AUTO
+            }
+        } else {
+            // API 29 has no per-view switch; turn capture off for the activity instead.
+            activity.getSystemService(ContentCaptureManager::class.java)?.setContentCaptureEnabled(!private)
         }
     }
 }

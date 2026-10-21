@@ -118,8 +118,8 @@ classes='dev.po4yka.chur.android.PrivateNotesPresentationTest,dev.po4yka.chur.an
 timeout 600 "$adb" -s "$serial" shell am instrument -w -r -e class "$classes" \
     "$application.test/androidx.test.runner.AndroidJUnitRunner" 2>&1 | tr -d '\r' | tee "$results/instrumentation.txt"
 # `adb shell am instrument` can exit zero even when JUnit fails or runs nothing.
-# Require all 22 selected cases, and refuse failures, ignored cases and assumptions.
-grep -Eq '^OK \(22 tests\)$' "$results/instrumentation.txt"
+# Require all 23 selected cases, and refuse failures, ignored cases and assumptions.
+grep -Eq '^OK \(23 tests\)$' "$results/instrumentation.txt"
 grep -Eq '^INSTRUMENTATION_CODE: -1$' "$results/instrumentation.txt"
 if grep -Eq 'INSTRUMENTATION_(FAILED|ABORTED)|INSTRUMENTATION_STATUS_CODE: -[0-9]+|FAILURES!!!|shortMsg=' "$results/instrumentation.txt"; then
     echo "Instrumentation failed, skipped a selected test, or aborted" >&2

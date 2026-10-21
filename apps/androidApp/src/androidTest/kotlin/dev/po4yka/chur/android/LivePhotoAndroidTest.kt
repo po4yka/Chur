@@ -8,7 +8,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.compose.ui.platform.ComposeView
-import androidx.core.content.FileProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.po4yka.chur.app.MediaImporter
@@ -198,7 +197,7 @@ class LivePhotoAndroidTest {
         ?.let { it.javaClass.getMethod("getPlayer").invoke(it) }
     private fun View.views(): List<View> = listOf(this) + if (this is ViewGroup)
         (0 until childCount).flatMap { getChildAt(it).views() } else emptyList()
-    private fun uri(file: File) = FileProvider.getUriForFile(context, "${context.packageName}.exports", file)
+    private fun uri(file: File) = leasedExportUri(context, file)
     private suspend fun withVault(block: suspend (VaultRepository, File, File) -> Unit) {
         val root = File(context.cacheDir, "live-photo-native-${System.nanoTime()}").apply { mkdirs() }
         val source = File(context.cacheDir, "export-scratch/live-photo-${System.nanoTime()}/native.churlive")

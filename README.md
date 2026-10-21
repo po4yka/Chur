@@ -954,50 +954,46 @@ Use the system Photo Picker and file providers. Transfer open descriptors or see
 
 ### Control from a connected computer
 
-Unlock the vault on Android, open **Settings → Control from computer**, and keep that dialog visible. With USB debugging authorized and `adb` installed on the computer, tap **Copy session link** and transfer the link privately to your computer. It contains the session code; do not put it in a command argument, shell history, or a public message. Paste it at the hidden prompt:
+Unlock the vault on Android, open **Settings → Control from computer**, and keep that dialog visible. With USB debugging authorized and `adb` installed on the computer, read the session link on the protected screen and type it at the hidden prompt. Chur does not copy it to the clipboard. It contains the session code; do not put it in a command argument, shell history, or a public message:
 
 ```sh
 python3 scripts/chur-device.py --session-stdin list --details
 ```
 
-You can also pipe the link from a trusted clipboard tool (for example, after copying it to the macOS clipboard):
+You can also pass the socket name from the link (the part after `socket=`) with `--socket`. The command then prompts for the code (the part after `#`); `--code-stdin` is available for a private input pipe. Tap **Stop** or close the dialog to revoke the session.
+
+The session listens on an abstract UNIX socket with a random name, not on a TCP port. Chur serves only a connection from the ADB shell user, which `adb forward` uses, or from root under `adb root`, so another app on the phone cannot connect even if it learns the link.
 
 ```sh
-pbpaste | python3 scripts/chur-device.py --session-stdin list --details
-```
-
-You can still enter the displayed port and code manually. The command prompts for the code; `--code-stdin` is available for a private input pipe. Tap **Stop** or close the dialog to revoke the session.
-
-```sh
-python3 scripts/chur-device.py --port PORT list --details
-python3 scripts/chur-device.py --port PORT import photo.jpg video.mp4
-python3 scripts/chur-device.py --port PORT export OBJECT_ID ./original.jpg
-python3 scripts/chur-device.py --port PORT albums
-python3 scripts/chur-device.py --port PORT album-create "Trip"
-python3 scripts/chur-device.py --port PORT album-add ALBUM_ID OBJECT_ID
-python3 scripts/chur-device.py --port PORT album-rename ALBUM_ID "New name"
-python3 scripts/chur-device.py --port PORT album-move ALBUM_ID --parent PARENT_ID --before SIBLING_ID
-python3 scripts/chur-device.py --port PORT album-reorder ALBUM_ID OBJECT_ID --before OTHER_OBJECT_ID
-python3 scripts/chur-device.py --port PORT import --album ALBUM_ID photo.jpg
-python3 scripts/chur-device.py --port PORT batch tag-add --target TAG_ID --scope search --terms "beach"
-python3 scripts/chur-device.py --port PORT batch tag-add --target TAG_ID --scope search --terms "beach" --apply
+python3 scripts/chur-device.py --socket SOCKET list --details
+python3 scripts/chur-device.py --socket SOCKET import photo.jpg video.mp4
+python3 scripts/chur-device.py --socket SOCKET export OBJECT_ID ./original.jpg
+python3 scripts/chur-device.py --socket SOCKET albums
+python3 scripts/chur-device.py --socket SOCKET album-create "Trip"
+python3 scripts/chur-device.py --socket SOCKET album-add ALBUM_ID OBJECT_ID
+python3 scripts/chur-device.py --socket SOCKET album-rename ALBUM_ID "New name"
+python3 scripts/chur-device.py --socket SOCKET album-move ALBUM_ID --parent PARENT_ID --before SIBLING_ID
+python3 scripts/chur-device.py --socket SOCKET album-reorder ALBUM_ID OBJECT_ID --before OTHER_OBJECT_ID
+python3 scripts/chur-device.py --socket SOCKET import --album ALBUM_ID photo.jpg
+python3 scripts/chur-device.py --socket SOCKET batch tag-add --target TAG_ID --scope search --terms "beach"
+python3 scripts/chur-device.py --socket SOCKET batch tag-add --target TAG_ID --scope search --terms "beach" --apply
 ```
 
 Directories are imported recursively as album trees, including empty directories. The root directory becomes a child album of `--album` when supplied. Symlinks and overlapping source selections are refused before changes. Sources remain on the computer. A private, durable checkpoint stores the selected vault, source SHA-256 hashes, and random object/album identities before requests. Repeating the same import resumes that selection and resolves a lost commit response without creating duplicate objects or albums. Use `--transfer-state` to select the checkpoint; the default is under `~/.local/state/chur-device/`. Keep this file private: it contains local paths and vault identifiers, but no pairing code. Source changes require a new transfer; changes detected during streaming are reported as an uncertain result with the object ID for inspection.
 
 ```sh
-python3 scripts/chur-device.py --port PORT import ./Trip --transfer-state ./trip-transfer.json
-python3 scripts/chur-device.py --port PORT export-album ALBUM_ID ./trip-export
-python3 scripts/chur-device.py --port PORT list --all --details
-python3 scripts/chur-device.py --port PORT trash OBJECT_ID
-python3 scripts/chur-device.py --port PORT list --scope trash --all
-python3 scripts/chur-device.py --port PORT restore OBJECT_ID
-python3 scripts/chur-device.py --port PORT delete OBJECT_ID --yes
-python3 scripts/chur-device.py --port PORT tag-rename TAG_ID "New tag"
-python3 scripts/chur-device.py --port PORT tag-delete TAG_ID --yes
-python3 scripts/chur-device.py --port PORT note-import ./note.txt --title "Travel notes"
-python3 scripts/chur-device.py --port PORT notes --terms "travel"
-python3 scripts/chur-device.py --port PORT note-export NOTE_ID ./note-copy.txt
+python3 scripts/chur-device.py --socket SOCKET import ./Trip --transfer-state ./trip-transfer.json
+python3 scripts/chur-device.py --socket SOCKET export-album ALBUM_ID ./trip-export
+python3 scripts/chur-device.py --socket SOCKET list --all --details
+python3 scripts/chur-device.py --socket SOCKET trash OBJECT_ID
+python3 scripts/chur-device.py --socket SOCKET list --scope trash --all
+python3 scripts/chur-device.py --socket SOCKET restore OBJECT_ID
+python3 scripts/chur-device.py --socket SOCKET delete OBJECT_ID --yes
+python3 scripts/chur-device.py --socket SOCKET tag-rename TAG_ID "New tag"
+python3 scripts/chur-device.py --socket SOCKET tag-delete TAG_ID --yes
+python3 scripts/chur-device.py --socket SOCKET note-import ./note.txt --title "Travel notes"
+python3 scripts/chur-device.py --socket SOCKET notes --terms "travel"
+python3 scripts/chur-device.py --socket SOCKET note-export NOTE_ID ./note-copy.txt
 ```
 
 `export-album` creates a new destination containing the album subtree and its authenticated originals, retaining empty albums. Untrusted names are made safe and suffixed with stable IDs to avoid collisions; ordinary filename extensions are retained. Existing files and directories are not overwritten. The command also supports favorites, full album organization, recoverable trash, explicit permanent deletion, quarantine listing and damaged-file removal, tag management, and revision-checked private-note editing, pinning, trash, restoration and deletion; see `--help`. Notes transfer bounded UTF-8 body chunks rather than one oversized JSON frame. Album/tag lists and detail tags use pages bounded by actual encoded size; changed snapshots return `CURSOR_STALE` instead of silently skipping rows.

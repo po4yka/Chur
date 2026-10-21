@@ -24,7 +24,6 @@ import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
-import androidx.core.content.FileProvider
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
@@ -347,7 +346,7 @@ class HevcMain10AndroidTest {
     private fun report(message: String) {
         instrumentation.sendStatus(0, Bundle().apply { putString("stream", "$message\n") })
     }
-    private fun uri(file: File) = FileProvider.getUriForFile(context, "${context.packageName}.exports", file)
+    private fun uri(file: File) = leasedExportUri(context, file)
     private fun fixture(directory: File, name: String) = File(directory, "$name.mp4").also { file ->
         instrumentation.context.assets.open("hevc-main10/$name.mp4").use { input ->
             file.outputStream().use { input.copyTo(it) }

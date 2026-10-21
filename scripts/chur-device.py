@@ -20,14 +20,15 @@ import time
 import uuid
 
 MAX_FRAME = 262_144
-SESSION_LINK = re.compile(r"chur://device-control/v2\?port=([0-9]{1,5})#([0-9a-f]{32})")
+SOCKET_NAME = re.compile(r"chur-dc-[0-9a-f]{16}")
+SESSION_LINK = re.compile(r"chur://device-control/v3\?socket=(chur-dc-[0-9a-f]{16})#([0-9a-f]{32})")
 
 
 def parse_session_link(link):
     match = SESSION_LINK.fullmatch(link)
-    if match is None or not 1 <= int(match[1]) <= 65535:
+    if match is None:
         raise ValueError("invalid Chur session link")
-    return int(match[1]), match[2]
+    return match[1], match[2]
 
 
 def frame_send(connection, message):
@@ -573,7 +574,7 @@ def run_note(connection, args):
 def parser():
     cli = argparse.ArgumentParser(description=__doc__)
     session = cli.add_mutually_exclusive_group(required=True)
-    session.add_argument("--port", type=int, help="device port shown in Chur settings")
+    session.add_argument("--socket", help="device socket name shown in Chur settings")
     session.add_argument("--session-stdin", action="store_true", help="read a copied session link from stdin")
     cli.add_argument("--serial", help="ADB device serial, required if several devices are attached")
     cli.add_argument("--code-stdin", action="store_true", help="read the one-session code from stdin")
@@ -703,11 +704,11 @@ def main():
             raise ValueError("--code-stdin cannot be used with --session-stdin")
         link = (getpass.getpass("Paste Chur session link: ") if sys.stdin.isatty()
                 else sys.stdin.readline().rstrip("\r\n"))
-        port, code = parse_session_link(link)
+        socket_name, code = parse_session_link(link)
     else:
-        port = args.port
-        if not 1 <= port <= 65535:
-            raise ValueError("invalid device port")
+        socket_name = args.socket
+        if SOCKET_NAME.fullmatch(socket_name) is None:
+            raise ValueError("invalid device socket name")
         code = sys.stdin.readline().strip() if args.code_stdin else getpass.getpass("Code shown in Chur: ").strip()
         if len(code) != 32 or any(char not in "0123456789abcdef" for char in code):
             raise ValueError("invalid pairing code")
@@ -716,7 +717,7 @@ def main():
         reserved.bind(("127.0.0.1", 0))
         local_port = reserved.getsockname()[1]
     try:
-        subprocess.run(adb + ["forward", "--no-rebind", f"tcp:{local_port}", f"tcp:{port}"],
+        subprocess.run(adb + ["forward", "--no-rebind", f"tcp:{local_port}", f"localabstract:{socket_name}"],
                        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except subprocess.CalledProcessError:
         raise RuntimeError("ADB forwarding failed; check USB debugging, device authorization and --serial") from None

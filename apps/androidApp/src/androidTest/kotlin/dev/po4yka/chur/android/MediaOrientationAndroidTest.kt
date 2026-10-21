@@ -6,7 +6,6 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.media.ExifInterface
-import androidx.core.content.FileProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.po4yka.chur.ffi.StreamKind
@@ -49,7 +48,7 @@ class MediaOrientationAndroidTest {
                     saveAttributes()
                 }
                 val codec = AndroidMediaCodec(context.contentResolver)
-                val uri = FileProvider.getUriForFile(context, "${context.packageName}.exports", file)
+                val uri = leasedExportUri(context, file)
                 val media = requireNotNull(codec.open(uri))
                 try {
                     assertEquals("image/jpeg", media.contentTypeHint)

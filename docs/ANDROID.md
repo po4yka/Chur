@@ -548,6 +548,7 @@ Consequences:
 - `filesDir/vaults/`, including `incoming/` and `quarantine/`, never enters an archive, and neither does `filesDir/registry/`;
 - `noBackupFilesDir/` and `cacheDir/` are excluded by the platform as well, so the device slot and the scratch directory are excluded twice;
 - release MUST fail when either file names a path under `vaults/` or `registry/`, or declares `<include domain="root">` or `<include domain="external">`;
+- `scripts/check-backup-rules.py` checks `<cloud-backup>` and `<device-transfer>` each on its own, because a section that is absent or has no `<include>` backs up every file; it also fails on any `device_*` include, on a path that normalizes to the whole domain or uses `..`, on any unknown or namespaced element, and when the manifest does not name both rule files. With `--merged-manifest`, which CI runs after the debug build, it checks the merged manifest too, so a library or variant manifest cannot replace either attribute;
 - the exclusion MUST be proved by an actual backup and restore run, not by reading the XML.
 
 ---
@@ -644,7 +645,7 @@ A refusal of either request deletes nothing. API 29 has no delete request, so th
 
 ### 14.6 Desktop control of an open vault
 
-The Android host offers a user-started control session from the private Settings screen. It binds a random TCP port on `127.0.0.1` and shows a random 128-bit pairing code only on the protected screen. A desktop command uses `adb forward` to reach that port. ADB connectivity alone does not authorize a command: the app requires the code and an unlocked vault, and closes the channel when the activity pauses, the vault locks, or the user stops it. The code and port are never passed through an Android Intent, notification, public database, or log.
+The Android host offers a user-started control session from the private Settings screen. It listens on an abstract-namespace UNIX socket with a random name (`chur-dc-` and 16 hex digits), not on a TCP port, because any local app can connect to a loopback port. It shows the session link, with the socket name and a random 128-bit pairing code, only on the protected screen, and the user types it on the computer. A desktop command uses `adb forward tcp:<local> localabstract:<name>` to reach the socket. The app reads the peer UID from the kernel and closes every connection that does not come from the ADB shell UID or from root (UID 0, under `adb root`), before it reads a byte. Root already has full access to the device, so accepting it adds no reach. ADB connectivity alone does not authorize a command: the app requires the code and an unlocked vault, and closes the channel when the activity pauses, the vault locks, or the user stops it. The code and socket name are never passed through an Android Intent, notification, public database, or log. The app never puts the link on the clipboard: since API 29 an app that is not in front cannot read the clipboard, so a stop from the background, an idle expiry, or Lock and hide could not remove it.
 
 The version-2, length-bounded command channel lists objects (including Trash and quarantine), albums, and tags; manages album trees, manual order, tags, favorites and recoverable/permanent deletion through `VaultRepository`. It also manages private notes with revision checks and bounded UTF-8 body transfers. Album/tag/detail-tag pages are bounded by encoded size and bind cursors to the source snapshot. The desktop recursively maps directories to albums, exports album trees, and saves a vault-bound checkpoint with source hashes and caller-persisted random album/object IDs before transfer. Native import refuses existing, tombstoned or live-reserved IDs; matching committed imports can be located after a lost response. Existing album creation can be replayed only with matching metadata. A remote import exposes one host file through a private, non-exported provider backed by a seekable proxy descriptor. The provider requests bounded byte ranges over the paired channel, so no plaintext source file is staged on Android. The ordinary Android codec and Rust import transaction remain responsible for probing, derivatives, encryption, and commit. A failed or interrupted request is reported as a failure; a committed original is never rolled back merely because a later derivative failed. An export uses a leased reader to stream the authenticated original sequentially and returns a SHA-256 digest when complete; the desktop verifies that digest before publishing its temporary file.
 
@@ -790,6 +791,8 @@ commit or delete partial destination
 
 If integrity fails, Chur must close and remove or invalidate the partial destination where the provider permits it.
 
+A MediaStore export inserts its row with `IS_PENDING = 1` and clears it only at publish. MediaStore gives each pending row a `DATE_EXPIRES` of seven days and replaces a shorter value that the app writes at insert or update. When the process stops during the write, the partial row stays pending. At the next process start, `ExportDestinations` deletes every pending row that Chur owns in the Images, Video, and Downloads collections. If Chur does not start again, MediaStore deletes the row after the seven days. A SAF document has no such cleanup: the document grant ends with the process, so a partial SAF document stays where the user put it.
+
 Album export uses one native folder selection and writes the complete selected album tree through this same verified descriptor path. Output names do not overwrite existing files; incomplete documents are renamed only after successful export. Cancellation removes the current incomplete document where the provider permits it and retains completed copies. The folder URI is session-local and is not persisted. [`product/ALBUM_EXPORT.md`](product/ALBUM_EXPORT.md) owns the batch and partial-result contract.
 
 ### 18.2 Share-sheet scratch
@@ -806,6 +809,8 @@ When sharing requires a file:
 
 On return from a share activity, Android keeps each pending file and its read grant for at most 60 seconds so that a recipient can open the URI asynchronously. It then revokes the grant and unlinks the file. A reader that already opened a descriptor can finish reading. Each file also has a 30-minute maximum lifetime from publication while Chur is away; locking or cancellation removes it immediately. A return cleanup captures only the shares that existed at that return and cannot remove a later share. Android does not report when an arbitrary recipient finishes reading.
 
+The 30-minute limit uses the wall clock and the file modification time, because a main-looper timer stops in deep sleep. Each new share and each return from a share activity ends every share that is older than the limit. The `.exports` provider (`ExportScratchProvider`) serves a file only while the current process holds a live lease for it, and only before the limit. It refuses every other path with `FileNotFoundException`. The lease set exists only in memory. When the process stops while a share is pending, the system can start a new process for the recipient, but that process has no lease and serves nothing. The provider deletes `cache/export-scratch/` when it is created, before any activity starts.
+
 Before it opens a share scratch file, Android reserves the verified source plaintext length. Unpublished and published files together must fit the limits of `PLAINTEXT_LIFECYCLE.md` §5: at most four files, 4 GiB per file, and 8 GiB total. An unknown length or a reservation that exceeds a limit fails with `RESOURCE_LIMIT_EXCEEDED` before any plaintext is written. Discard, cancellation, and lease cleanup release the reservation. Direct Files and MediaStore exports and encrypted backup files do not use this scratch budget.
 
 The Android share sheet receives plaintext by user request. Chur cannot force a recipient application to protect or delete it.
@@ -813,6 +818,8 @@ The Android share sheet receives plaintext by user request. Chur cannot force a 
 ### 18.3 Clipboard
 
 Private filenames, captions, recovery material, keys, and media bytes MUST NOT be copied to the clipboard implicitly. Explicit copy actions require a separate UX and privacy review.
+
+A sync invitation and a device pairing request are not selectable text, because a selection copy cannot mark the clip as sensitive. Each has an explicit Copy button that writes a plain-text clip with `EXTRA_IS_SENSITIVE`, so the clipboard preview and keyboard clipboard history do not show the code. On iOS the same button writes a local-only pasteboard item that expires after two minutes.
 
 ---
 
@@ -911,6 +918,8 @@ The activity must display a neutral public/privacy surface before background sna
 - real/decoy indicators;
 - unlock failures.
 
+The exported `singleTask` activity sets `android:taskAffinity=""`. The default affinity is the package name, and another app can declare that affinity to place its own activity in Chur's task, above or below the vault (task hijacking, which API 29 and 30 do not block without a security patch).
+
 ### 20.3 External surfaces
 
 Private content MUST NOT be published to:
@@ -926,6 +935,10 @@ Private content MUST NOT be published to:
 - autofill or content-capture services;
 
 unless a future capability receives its own threat model and explicit opt-in.
+
+`FLAG_SECURE` does not stop an autofill or content-capture service from reading the view tree. Whenever the privacy cover sets `FLAG_SECURE`, it also sets `IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS` and, on API 30 and later, `IMPORTANT_FOR_CONTENT_CAPTURE_NO_EXCLUDE_DESCENDANTS` on the decor view, and cancels an open autofill session. On API 29 it turns content capture off for the activity. The public shell uses the default values again.
+
+A Compose dialog, sheet, or popup is a separate window, outside the activity decor view. `PrivateAlertDialog`, the private `PrivateDropdownMenu`, the note dialogs, and the incoming-share dialog therefore call `ExcludeWindowFromCapture` inside their own content, which sets the same two values on the root view of that window.
 
 ---
 

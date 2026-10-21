@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
+import dev.po4yka.chur.app.ExcludeWindowFromCapture
 import dev.po4yka.chur.app.theme.ChurSpacing
 
 /** Bound only around private routes: a public dialog never advertises a private action. */
@@ -82,6 +83,9 @@ fun PrivateAlertDialog(
         dismissButton = dismissButton,
         title = {
             Column(verticalArrangement = Arrangement.spacedBy(ChurSpacing.one)) {
+                // The dialog is its own window, outside the activity decor view
+                // that the privacy cover excludes.
+                ExcludeWindowFromCapture()
                 panic?.let { hide ->
                     TextButton(onClick = hide, modifier = Modifier.fillMaxWidth()) { Text("Lock and hide") }
                 }
@@ -116,6 +120,7 @@ fun PrivateDropdownMenu(
     // owned by DropdownMenu.
     DropdownMenu(expanded = expanded, onDismissRequest = onDismissRequest) {
         Column(Modifier.width(IntrinsicSize.Max).heightIn(max = maxHeight)) {
+            ExcludeWindowFromCapture()
             TextButton(onClick = panic, modifier = Modifier.fillMaxWidth()) { Text("Lock and hide") }
             Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()), content = content)
         }

@@ -65,7 +65,10 @@ class LauncherActionsTest {
             assertEquals(ComponentName(context, MainActivity::class.java), intent.component)
             assertEquals(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP, intent.flags)
             assertEquals(shortcut.id, LauncherAction.fromExternalAction(intent.action)?.shortcutId)
-            assertNull(intent.extras)
+            // The one extra is the install's launcher token; nothing private.
+            assertEquals(setOf(EXTRA_LAUNCHER_TOKEN), intent.extras?.keySet())
+            assertEquals(LauncherToken.get(context), intent.getStringExtra(EXTRA_LAUNCHER_TOKEN))
+            assertTrue(LauncherToken.matches(context, intent))
             assertNull(intent.data)
             assertNull(intent.clipData)
         }
@@ -82,6 +85,32 @@ class LauncherActionsTest {
         assertEquals(Intent.ACTION_MAIN, sanitized.action)
         assertNull(LauncherAction.fromExternalAction(sanitized.action))
         assertNull(sanitized.extras)
+    }
+
+    @Test
+    fun only_an_intent_with_the_launcher_token_carries_an_action() {
+        val context = instrumentation.targetContext
+        for (action in LauncherAction.entries) {
+            val published = launcherShortcutIntent(context, action)
+            assertEquals(action, externalLauncherAction(context, published))
+            // Another app can name the exported activity and the action, but not the token.
+            val forged = Intent(context, MainActivity::class.java).setAction(action.externalAction)
+            assertNull(externalLauncherAction(context, forged))
+            assertNull(externalLauncherAction(context, Intent(forged).putExtra(EXTRA_LAUNCHER_TOKEN, "0".repeat(32))))
+            assertNull(externalLauncherAction(context, Intent(forged).putExtra(EXTRA_LAUNCHER_TOKEN, 7)))
+        }
+        // The token survives a new process: it is read back from storage, not made again.
+        assertEquals(LauncherToken.get(context), java.io.File(context.noBackupFilesDir, "launcher-token").readText())
+        // A token that cannot be read matches nothing and does not throw.
+        val unreadable = object : android.content.ContextWrapper(context) {
+            override fun getApplicationContext(): android.content.Context = this
+            override fun getNoBackupFilesDir(): java.io.File = java.io.File("/proc/chur-missing-directory")
+        }
+        val published = launcherShortcutIntent(context, LauncherAction.LOCK_AND_HIDE)
+        LauncherToken.forget()
+        try {
+            assertNull(externalLauncherAction(unreadable, published))
+        } finally { LauncherToken.forget() }
     }
 
     @Test

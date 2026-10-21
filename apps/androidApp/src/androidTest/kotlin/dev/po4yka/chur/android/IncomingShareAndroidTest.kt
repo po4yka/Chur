@@ -62,6 +62,11 @@ class IncomingShareAndroidTest {
         val ownUri = Uri.parse("content://${context.packageName}.exports/anything")
         assertNull(incomingSharePayload(context,
             Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, ownUri)))
+        // A user prefix moves the authority, so the own-provider check must not see only the rest.
+        for (prefixed in listOf("content://0@${context.packageName}.exports/anything", "content://10@external.test/file")) {
+            assertNull(prefixed, incomingSharePayload(context,
+                Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, Uri.parse(prefixed))) { false })
+        }
     }
 
     @Test
