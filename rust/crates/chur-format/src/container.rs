@@ -1573,12 +1573,9 @@ impl<'a> ContainerReader<'a> {
             InvalidInput,
             "range extends past the authenticated object length"
         );
-        // The whole range is reserved first: a vector that grew while it was
-        // filled would release each smaller buffer, with plaintext in it,
-        // without a wipe.
+        let mut out = reserve_range(length)?;
         let capacity = usize::try_from(length)
             .map_err(|_| Error::new(ChurStatus::ResourceLimitExceeded, "range exceeds a usize"))?;
-        let mut out = Zeroizing::new(Vec::with_capacity(capacity));
         if length == 0 {
             return Ok(out);
         }
@@ -1597,10 +1594,35 @@ impl<'a> ContainerReader<'a> {
                 ObjectCorrupt,
                 "range slice is outside an authenticated chunk"
             );
+            // A chunk longer than the canonical chunking would overrun the
+            // reservation and regrow the buffer.
+            ensure!(
+                out.len() + (to - from) <= capacity,
+                ObjectCorrupt,
+                "an authenticated chunk is longer than its range"
+            );
             out.extend_from_slice(&plaintext[from..to]);
         }
         Ok(out)
     }
+}
+
+/// Reserves a range buffer before any plaintext enters it.
+///
+/// A vector that grew while it was filled would release each smaller buffer,
+/// with plaintext in it, without a wipe. A reservation the allocator refuses
+/// is a resource failure, not an abort.
+fn reserve_range(length: u64) -> Result<Zeroizing<Vec<u8>>> {
+    let capacity = usize::try_from(length)
+        .map_err(|_| Error::new(ChurStatus::ResourceLimitExceeded, "range exceeds a usize"))?;
+    let mut out = Zeroizing::new(Vec::new());
+    out.try_reserve_exact(capacity).map_err(|_| {
+        Error::new(
+            ChurStatus::ResourceLimitExceeded,
+            "the range buffer could not be reserved",
+        )
+    })?;
+    Ok(out)
 }
 
 fn byte_at(bytes: &[u8], offset: u64) -> Result<u8> {
@@ -2212,9 +2234,9 @@ impl<R: ReadAt> StreamReader<R> {
             InvalidInput,
             "the range is past the authenticated plaintext"
         );
+        let mut out = reserve_range(length)?;
         let capacity = usize::try_from(length)
             .map_err(|_| Error::new(ChurStatus::ResourceLimitExceeded, "range exceeds a usize"))?;
-        let mut out = Zeroizing::new(Vec::with_capacity(capacity));
         let chunk_size = u64::from(self.manifest.chunk_size());
         let mut position = offset;
         while out.len() < capacity {
@@ -2611,6 +2633,12 @@ mod tests {
             // a smaller plaintext buffer without a wipe.
             assert_eq!(read.capacity(), to - from, "range {offset}+{length}");
         }
+    }
+
+    #[test]
+    fn a_range_the_allocator_refuses_is_a_resource_failure() {
+        let error = reserve_range(u64::MAX).unwrap_err();
+        assert_eq!(error.status(), ChurStatus::ResourceLimitExceeded);
     }
 
     #[test]
