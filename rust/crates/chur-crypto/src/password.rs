@@ -11,7 +11,7 @@
 //! retry with reduced parameters, because one password must derive one key on
 //! every supported device.
 
-use argon2::{Algorithm, Argon2, ParamsBuilder, Version};
+use argon2::{Algorithm, Argon2, Block, ParamsBuilder, Version};
 use zeroize::Zeroizing;
 
 use chur_core::limits::password as bounds;
@@ -186,10 +186,21 @@ pub fn derive_kek(password: &[u8], salt: &[u8], params: Argon2Params) -> Result<
                 "Argon2id parameters were rejected by the primitive",
             )
         })?;
+    // The block array is the largest secret the process holds, and with p=1
+    // its final block determines the KEK. `hash_password_into` frees its own
+    // array without a wipe, so the array is owned here and wiped on drop.
+    let mut memory = Zeroizing::new(Vec::<Block>::new());
+    memory.try_reserve_exact(built.block_count()).map_err(|_| {
+        Error::new(
+            ChurStatus::KdfMemoryUnavailable,
+            "the device could not allocate the approved Argon2id memory",
+        )
+    })?;
+    memory.resize(built.block_count(), Block::new());
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, built);
     let mut derived = Key::zeroed();
     argon2
-        .hash_password_into(password, salt, derived.expose_mut())
+        .hash_password_into_with_memory(password, salt, derived.expose_mut(), memory.as_mut_slice())
         .map_err(|_| {
             Error::new(
                 ChurStatus::KdfMemoryUnavailable,
@@ -384,5 +395,26 @@ mod tests {
             base.expose(),
             derive_kek(&changed, &salt, cheap()).unwrap().expose()
         );
+    }
+
+    #[test]
+    fn the_caller_owned_memory_derives_the_key_the_primitive_derives() {
+        // The wiped block buffer must not change the KEK, or every existing
+        // password slot would stop opening.
+        let salt = [0x33u8; 16];
+        let params = cheap();
+        let built = ParamsBuilder::new()
+            .m_cost(params.memory_kib())
+            .t_cost(params.iterations())
+            .p_cost(params.parallelism())
+            .output_len(bounds::OUTPUT_LEN)
+            .build()
+            .unwrap();
+        let mut expected = [0u8; 32];
+        Argon2::new(Algorithm::Argon2id, Version::V0x13, built)
+            .hash_password_into(b"correct horse", &salt, &mut expected)
+            .unwrap();
+        let derived = derive_kek(b"correct horse", &salt, params).unwrap();
+        assert_eq!(derived.expose(), &expected);
     }
 }

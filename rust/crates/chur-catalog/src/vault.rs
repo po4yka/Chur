@@ -656,7 +656,7 @@ pub fn unlock_with_android_keystore(
             }
             Err(error) => return Err(error),
         };
-        let candidate = Key::new(*root_secret.expose());
+        let candidate = root_secret.duplicate();
         if let Ok(session) = finish_unlock(root_dir, &name, &bytes, candidate, now_ms, lock) {
             return Ok(session);
         }
@@ -1269,7 +1269,7 @@ impl Session {
         // platform, so the lock is checked before anything is drawn or
         // recorded: a locked session must neither release the root nor leave a
         // half-opened enrollment behind.
-        let root_secret = Key::new(*self.root_secret()?.expose());
+        let root_secret = self.root_secret()?.duplicate();
         let slot_id = random::id()?;
         let generation = self.next_slot_generation(SlotType::AndroidKeystore);
         let alias = random::array::<KEYSTORE_ALIAS_LEN>()?.to_vec();
