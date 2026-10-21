@@ -17,7 +17,7 @@ Only one batch can wait or run in the app at a time. A second incoming Android s
 
 ## Android
 
-Both single and multiple share actions accept all MIME types. Files must use readable `content://` grants from the source app. Chur streams those descriptors without a persistent plaintext copy. Unsupported media can be stored as files. Plain text and URLs use a bounded memory-backed descriptor.
+Both single and multiple share actions accept all MIME types. Files must use readable `content://` grants from the source app. Chur refuses a URI of one of its own providers, and a URI whose authority has a `userId@` prefix, because that prefix moves the authority that the own-provider check reads. Chur streams those descriptors without a persistent plaintext copy. Unsupported media can be stored as files. Plain text and URLs use a bounded memory-backed descriptor.
 
 A batch contains at most 100 items, including an optional text attachment. Text is limited to 1 MiB of UTF-8. An invalid URI or oversized batch is refused before import. A provider can revoke access or become unavailable; that item then fails without removing previously saved items. Pending sources exist only in process memory and are lost after process death. Share again if access expires.
 

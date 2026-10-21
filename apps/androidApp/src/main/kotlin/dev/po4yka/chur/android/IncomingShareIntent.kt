@@ -31,6 +31,9 @@ internal fun incomingSharePayload(
         val uris = linkedSetOf<Uri>()
         fun add(uri: Uri) {
             require(uri.scheme == "content" && !uri.authority.isNullOrBlank() && uri.toString().length <= 8192)
+            // A `userId@authority` URI resolves the provider of another user, but the
+            // resolver call below would check only the part after the `@`.
+            require('@' !in uri.encodedAuthority.orEmpty())
             require(!ownProvider(uri))
             uris += uri
             require(uris.size <= MAX_INCOMING_ITEMS)
