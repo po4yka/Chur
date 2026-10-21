@@ -1,14 +1,7 @@
 package dev.po4yka.chur.app.notes
 
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.ime
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalDensity
-import dev.po4yka.chur.app.spirit.SpiritOverlay
-import dev.po4yka.chur.app.spirit.shouldShowSpiritInNotes
-
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.FlowRow
@@ -20,6 +13,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
@@ -40,6 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,8 +46,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.po4yka.chur.app.spirit.SpiritOverlay
+import dev.po4yka.chur.app.spirit.shouldShowSpiritInNotes
 import dev.po4yka.chur.app.theme.BackGlyph
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.DestructiveButton
@@ -103,7 +103,10 @@ fun NotesScreen(
     var spiritControlsHeight by remember { mutableStateOf(0) }
     val spiritDensity = LocalDensity.current
     var spiritEnabled by remember { mutableStateOf(false) }
-    val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    // Read the IME inset through derived state: the inset animates every frame, but
+    // the screen only needs to recompose when the keyboard appears or disappears.
+    val ime = WindowInsets.ime
+    val keyboardVisible by remember(ime, spiritDensity) { derivedStateOf { ime.getBottom(spiritDensity) > 0 } }
     var packageBusy by remember { mutableStateOf(false) }
     var packageFailed by remember { mutableStateOf(false) }
     var importFailed by remember { mutableStateOf(false) }
@@ -153,90 +156,93 @@ fun NotesScreen(
         },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            FlowRow(Modifier.onSizeChanged { spiritControlsHeight = it.height }) {
-                TextButton(onClick = { spiritEnabled = !spiritEnabled }) {
-                    Text(if (spiritEnabled) "Hide Chur" else "Show Chur")
+            Column(modifier = Modifier.fillMaxSize()) {
+                FlowRow(Modifier.onSizeChanged { spiritControlsHeight = it.height }) {
+                    TextButton(onClick = { spiritEnabled = !spiritEnabled }) {
+                        Text(if (spiritEnabled) "Hide Chur" else "Show Chur")
+                    }
+                    TextButton(enabled = !packageBusy, onClick = { trash = !trash; if (trash) onRefreshTrash() }) {
+                        Text(if (trash) "Active notes" else "Trash")
+                    }
+                    TextButton(enabled = !packageBusy && !filters, onClick = { filters = true }) { Text("Folders and tags") }
                 }
-                TextButton(enabled = !packageBusy, onClick = { trash = !trash; if (trash) onRefreshTrash() }) {
-                    Text(if (trash) "Active notes" else "Trash")
+                NoteFilterSummary(folder, tag, !packageBusy && !filters) { folder = ""; tag = "" }
+                if (importFailed) Text("The Markdown file could not be imported. Use UTF-8 text up to 256 KiB.", color = colors.error)
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                    NoteBinaryImportAction("Import note package", NoteAttachments.MAX_PACKAGE_BYTES, enabled = !packageBusy,
+                        onImported = { _, bytes ->
+                            packageBusy = true
+                            scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                                try {
+                                    onImportPackage(bytes)
+                                    packageFailed = false
+                                } catch (cancelled: CancellationException) { throw cancelled
+                                } catch (_: Exception) { packageFailed = true
+                                } finally { bytes.fill(0); packageBusy = false }
+                            }
+                        }, onFailure = { packageFailed = true })
+                    if (packageBusy) Text("Importing…")
                 }
-                TextButton(enabled = !packageBusy && !filters, onClick = { filters = true }) { Text("Folders and tags") }
-            }
-            NoteFilterSummary(folder, tag, !packageBusy && !filters) { folder = ""; tag = "" }
-            if (importFailed) Text("The Markdown file could not be imported. Use UTF-8 text up to 256 KiB.", color = colors.error)
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-                NoteBinaryImportAction("Import note package", NoteAttachments.MAX_PACKAGE_BYTES, enabled = !packageBusy,
-                    onImported = { _, bytes ->
-                        packageBusy = true
-                        scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                            try {
-                                onImportPackage(bytes)
-                                packageFailed = false
-                            } catch (cancelled: CancellationException) { throw cancelled
-                            } catch (_: Exception) { packageFailed = true
-                            } finally { bytes.fill(0); packageBusy = false }
-                        }
-                    }, onFailure = { packageFailed = true })
-                if (packageBusy) Text("Importing…")
-            }
-            if (packageFailed) Text("The note operation failed. Your saved notes are unchanged; try again.", color = colors.error)
-            if (showFirstWriteDisclosure) {
-                FirstWriteDisclosure(onAcknowledge = onAcknowledgeDisclosure)
-            }
-            val source = if (trash) trashedNotes else notes
-            if (source.isEmpty() && !trash) {
-                EmptyNotes(hasQuery = false, onCreate = {
-                    onQueryChange("")
-                    onCreate()
-                })
-            } else {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = onQueryChange,
-                    singleLine = true,
-                    label = { Text("Search notes") },
-                    modifier = Modifier.fillMaxWidth().padding(ChurSpacing.gutter),
-                    colors = churOutlinedTextFieldColors(),
-                )
-                val visible = NoteOrganization.filter(Notes.search(source, query), folder.takeIf { it.isNotEmpty() }, tag.takeIf { it.isNotEmpty() })
-                if (visible.isEmpty()) {
-                    if (trash) Text("Trash is empty or no notes match these filters.", modifier = Modifier.padding(ChurSpacing.gutter))
-                    else EmptyNotes(hasQuery = true)
+                if (packageFailed) Text("The note operation failed. Your saved notes are unchanged; try again.", color = colors.error)
+                if (showFirstWriteDisclosure) {
+                    FirstWriteDisclosure(onAcknowledge = onAcknowledgeDisclosure)
+                }
+                val source = if (trash) trashedNotes else notes
+                if (source.isEmpty() && !trash) {
+                    EmptyNotes(hasQuery = false, onCreate = {
+                        onQueryChange("")
+                        onCreate()
+                    })
                 } else {
-                    LazyColumn(
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                            horizontal = ChurSpacing.gutter,
-                            vertical = ChurSpacing.two,
-                        ),
-                        verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
-                    ) {
-                        items(visible, key = { it.id }) { note ->
-                            if (!trash) NoteRow(note = note, onClick = { onOpen(note) })
-                            else Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(ChurSpacing.two)) {
-                                Text(note.displayTitle.ifBlank { "Untitled" })
-                                Text(note.preview, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                Row {
-                                    TextButton(enabled = !packageBusy, onClick = {
-                                        packageBusy = true
-                                        scope.launch { try { onRestore(note.id); packageFailed = false
-                                        } catch (cancelled: CancellationException) { throw cancelled
-                                        } catch (_: Exception) { packageFailed = true
-                                        } finally { packageBusy = false } }
-                                    }) { Text("Restore note") }
-                                    TextButton(enabled = !packageBusy, onClick = { pendingPurge = note }) { Text("Delete permanently") }
-                                }
-                            } }
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = onQueryChange,
+                        singleLine = true,
+                        label = { Text("Search notes") },
+                        modifier = Modifier.fillMaxWidth().padding(ChurSpacing.gutter),
+                        colors = churOutlinedTextFieldColors(),
+                    )
+                    val visible = NoteOrganization.filter(Notes.search(source, query), folder.takeIf { it.isNotEmpty() }, tag.takeIf { it.isNotEmpty() })
+                    if (visible.isEmpty()) {
+                        if (trash) Text("Trash is empty or no notes match these filters.", modifier = Modifier.padding(ChurSpacing.gutter))
+                        else EmptyNotes(hasQuery = true)
+                    } else {
+                        LazyColumn(
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                                horizontal = ChurSpacing.gutter,
+                                vertical = ChurSpacing.two,
+                            ),
+                            verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
+                        ) {
+                            items(visible, key = { it.id }) { note ->
+                                if (!trash) NoteRow(note = note, onClick = { onOpen(note) })
+                                else Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(ChurSpacing.two)) {
+                                    Text(note.displayTitle.ifBlank { "Untitled" })
+                                    Text(note.preview, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    Row {
+                                        TextButton(enabled = !packageBusy, onClick = {
+                                            packageBusy = true
+                                            scope.launch { try { onRestore(note.id); packageFailed = false
+                                            } catch (cancelled: CancellationException) { throw cancelled
+                                            } catch (_: Exception) { packageFailed = true
+                                            } finally { packageBusy = false } }
+                                        }) { Text("Restore note") }
+                                        TextButton(enabled = !packageBusy, onClick = { pendingPurge = note }) { Text("Delete permanently") }
+                                    }
+                                } }
+                            }
                         }
                     }
                 }
             }
-        }
-        if (shouldShowSpiritInNotes(spiritEnabled, query.isNotBlank(), keyboardVisible, trash,
-                filters || pendingPurge != null, packageBusy, showFirstWriteDisclosure)) {
-            // Top bar remains outside the hit region; reserve the bottom FAB strip.
-            SpiritOverlay(Modifier.fillMaxSize().padding(top = with(spiritDensity) { spiritControlsHeight.toDp() }, bottom = 88.dp), onDismiss = { spiritEnabled = false })
-        }
+            if (shouldShowSpiritInNotes(spiritEnabled, query.isNotBlank(), keyboardVisible, trash,
+                    filters || pendingPurge != null, packageBusy, showFirstWriteDisclosure)) {
+                // Top bar remains outside the hit region; reserve the bottom FAB strip.
+                SpiritOverlay(
+                    Modifier.fillMaxSize().padding(top = with(spiritDensity) { spiritControlsHeight.toDp() }, bottom = 88.dp),
+                    onDismiss = { spiritEnabled = false },
+                )
+            }
         }
     }
 }

@@ -7,7 +7,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,7 +38,8 @@ internal fun SpiritOverlay(modifier: Modifier = Modifier, onDismiss: () -> Unit 
     var hasRoom by remember { mutableStateOf(false) }
     var positioned by remember { mutableStateOf(false) }
     val coordinates = remember { arrayOfNulls<LayoutCoordinates>(1) }
-    SideEffect { if (model.render.reducedMotion != reduced) model = model.motion(reduced) }
+    // Update after composition, not inside it: a state write in SideEffect forces a second pass.
+    LaunchedEffect(reduced) { model = model.motion(reduced) }
     Box(modifier.onSizeChanged {
         hasRoom = it.width >= sizePx && it.height >= sizePx
         model = model.bounds(it.width.toFloat(), it.height.toFloat(), sizePx).up(cancelled = true)
