@@ -931,6 +931,10 @@ Private content MUST NOT be published to:
 
 unless a future capability receives its own threat model and explicit opt-in.
 
+`FLAG_SECURE` does not stop an autofill or content-capture service from reading the view tree. Whenever the privacy cover sets `FLAG_SECURE`, it also sets `IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS` and, on API 30 and later, `IMPORTANT_FOR_CONTENT_CAPTURE_NO_EXCLUDE_DESCENDANTS` on the decor view, and cancels an open autofill session. On API 29 it turns content capture off for the activity. The public shell uses the default values again.
+
+A Compose dialog, sheet, or popup is a separate window, outside the activity decor view. `PrivateAlertDialog`, the private `PrivateDropdownMenu`, the note dialogs, and the incoming-share dialog therefore call `ExcludeWindowFromCapture` inside their own content, which sets the same two values on the root view of that window.
+
 ---
 
 ## 21. Public shell and discreet presentation

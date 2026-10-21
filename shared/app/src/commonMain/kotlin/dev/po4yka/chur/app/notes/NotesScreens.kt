@@ -1,5 +1,6 @@
 package dev.po4yka.chur.app.notes
 
+import dev.po4yka.chur.app.ExcludeWindowFromCapture
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -116,14 +117,14 @@ fun NotesScreen(
     var tag by remember { mutableStateOf("") }
     var pendingPurge by remember { mutableStateOf<Note?>(null) }
     if (filters) AlertDialog(onDismissRequest = { filters = false },
-        title = { Text("Folders and tags") },
+        title = { ExcludeWindowFromCapture(); Text("Folders and tags") },
         text = { Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
             NoteFilterFields(folder, tag, !packageBusy, onApply = { f, t -> folder = f; tag = t; filters = false })
         } },
         confirmButton = { TextButton(onClick = { filters = false }) { Text("Close") } })
 
     pendingPurge?.let { note -> AlertDialog(onDismissRequest = { pendingPurge = null },
-        title = { Text("Delete this note permanently?") },
+        title = { ExcludeWindowFromCapture(); Text("Delete this note permanently?") },
         text = { Text("The note, its retained versions and all their files will be removed. You cannot undo this.") },
         confirmButton = { TextButton(enabled = !packageBusy, onClick = {
             packageBusy = true
@@ -436,7 +437,7 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
     if (exit.requested) {
         AlertDialog(
             onDismissRequest = exit::keepEditing,
-            title = { Text(if (writeFailed) "Save failed" else "Saving note") },
+            title = { ExcludeWindowFromCapture(); Text(if (writeFailed) "Save failed" else "Saving note") },
             text = { Text(if (writeFailed) "Your draft is still here. Retry saving before leaving, or discard unsaved changes."
                 else "The editor will close after this note has been saved.") },
             confirmButton = { TextButton(enabled = writeFailed, onClick = {
@@ -453,7 +454,7 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
     if (confirmingDelete) {
         AlertDialog(
             onDismissRequest = { confirmingDelete = false },
-            title = { Text("Move this note to Trash?") },
+            title = { ExcludeWindowFromCapture(); Text("Move this note to Trash?") },
             text = { Text("You can restore the note and its retained versions from Trash.") },
             confirmButton = {
                 DestructiveButton(enabled = !attachmentBusy, onClick = {
@@ -474,7 +475,7 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
     }
 
     history?.let { versions -> AlertDialog(onDismissRequest = { if (!attachmentBusy) history = null },
-        title = { Text("Version history") },
+        title = { ExcludeWindowFromCapture(); Text("Version history") },
         text = { LazyColumn(Modifier.height(360.dp)) {
             item { Text("Up to 20 previous versions and 64 MiB of historical files are retained. Restoring creates a new current version.") }
             if (versions.isEmpty()) item { Text("No previous versions yet.") }
@@ -493,7 +494,7 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
         } },
         confirmButton = { TextButton(enabled = !attachmentBusy, onClick = { history = null; selectedVersion = null }) { Text("Close") } }) }
     if (restoreConfirm) AlertDialog(onDismissRequest = { if (!attachmentBusy) restoreConfirm = false },
-        title = { Text("Restore this version?") },
+        title = { ExcludeWindowFromCapture(); Text("Restore this version?") },
         text = { Text("Its text, folder, tags and files become current. The current version is retained within history limits.") },
         confirmButton = { TextButton(enabled = !attachmentBusy, onClick = {
             val version = selectedVersion ?: return@TextButton
@@ -511,7 +512,7 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
 
     pendingRemoval?.let { id ->
         AlertDialog(onDismissRequest = { if (!attachmentBusy) pendingRemoval = null },
-            title = { Text("Remove this attachment?") },
+            title = { ExcludeWindowFromCapture(); Text("Remove this attachment?") },
             text = { Text("The file is removed from the current version. Earlier versions may retain it until history expires or the note is permanently deleted.") },
             confirmButton = { TextButton(enabled = !attachmentBusy, onClick = {
                 attachmentBusy = true

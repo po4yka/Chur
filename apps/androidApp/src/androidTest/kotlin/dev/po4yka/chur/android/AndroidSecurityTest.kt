@@ -7,6 +7,7 @@ import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyInfo
 import android.security.keystore.KeyProperties
+import android.view.View
 import android.view.WindowManager
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -191,6 +192,12 @@ class AndroidSecurityTest {
                 "the background window must block recents capture; state=${activity.lifecycle.currentState}",
                 activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0,
             )
+            // FLAG_SECURE does not stop autofill or content capture from reading the views.
+            val decor = activity.window.decorView
+            assertEquals(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS, decor.importantForAutofill)
+            if (Build.VERSION.SDK_INT >= 30) {
+                assertEquals(View.IMPORTANT_FOR_CONTENT_CAPTURE_NO_EXCLUDE_DESCENDANTS, decor.importantForContentCapture)
+            }
         } finally {
             activity.finish()
         }
