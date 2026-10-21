@@ -54,6 +54,8 @@ public data class VectorEntry(
     val decoded: Map<String, JsonElement> = emptyMap(),
     @SerialName("error_code") val errorCode: String? = null,
     val notes: String? = null,
+    /** The vector that replaces this one as the current rule (TEST_VECTORS.md §8). */
+    @SerialName("superseded_by") val supersededBy: String? = null,
 ) {
     /** The section 9 format word this vector was filed under. */
     public val formatWord: String

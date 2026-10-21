@@ -731,6 +731,25 @@ fn verify(dir: &Path) -> Result<(), String> {
         }
         return Err("the rebuilt vector set does not match the recorded one".to_owned());
     }
+    // A superseded vector keeps its bytes under §8 and names the vector that
+    // carries the current rule, which must exist and be current itself.
+    for entry in &on_disk.vectors {
+        if let Some(target) = &entry.superseded_by {
+            let current = on_disk
+                .vectors
+                .iter()
+                .find(|candidate| &candidate.vector_id == target);
+            match current {
+                Some(found) if found.superseded_by.is_none() => {}
+                _ => {
+                    return Err(format!(
+                        "{} is superseded by {target}, which is absent or superseded itself",
+                        entry.vector_id
+                    ));
+                }
+            }
+        }
+    }
     if render_manifest(&rebuilt)? != on_disk_text {
         return Err("manifest.json is not the rendering of its own entries".to_owned());
     }

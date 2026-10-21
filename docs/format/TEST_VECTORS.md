@@ -61,6 +61,7 @@ Each element of `vectors` is:
 | `decoded` | object | optional | expected semantic fields as JSON numbers, strings, and booleans |
 | `error_code` | string | when `outcome` is `reject` | one stable code from [`../ERROR_MODEL.md`](../ERROR_MODEL.md) |
 | `notes` | string | optional | explanatory text only |
+| `superseded_by` | string | optional | the `vector_id` that carries the current rule; set when a later format version contradicts a historical vector whose bytes §8 keeps |
 
 A byte value is a lowercase hexadecimal string matching `[0-9a-f]*`, of even length, with no `0x` prefix and no separator. The empty string is a zero-length byte value. Uppercase hexadecimal, base64, and JSON arrays of numbers are rejected by the loader, so one byte string has one representation.
 
@@ -144,7 +145,7 @@ Once a format/protocol version is accepted:
 
 - existing positive vector bytes never change;
 - correcting a mistaken spec requires new version/vector IDs;
-- negative vectors may expand but not silently change expected classification;
+- negative vectors may expand but not silently change expected classification; a negative vector that a later format version contradicts keeps its bytes and gains `superseded_by`, which names the new vector that states the current rule. `vectors verify` requires that vector to exist and to be current, and the `chur-cli` reader test `tests/reject_vectors.rs` runs every reject vector that is not superseded through its parser;
 - generator updates must reproduce historical vectors byte-for-byte;
 - release CI archives the vector-set digest, which `chur-cli vectors digest` computes: SHA-256 over every file under `test-vectors/v1`, in ascending order of the file's path relative to that directory, feeding for each file the relative path as UTF-8 with `/` separators and then the file bytes. The formula is fixed in the tool rather than in a shell pipeline, so the value does not depend on how a platform orders a directory listing or formats a checksum line.
 

@@ -39,6 +39,11 @@ pub const DESCRIPTOR_VERSION_V1: u16 = 0x0001;
 pub const ENVELOPE_FORMAT_VERSION_V1: u16 = 0x0001;
 /// §15.2: `backup_version` of `BackupPackageV1`.
 pub const BACKUP_VERSION_V1: u16 = 0x0001;
+/// §15.2: `backup_version` of the package with a portable catalog export and a
+/// record commitment, ADR-0068.
+pub const BACKUP_VERSION_V2: u16 = 0x0002;
+/// §15.2: `export_version` of `CatalogExportV1`, ADR-0068.
+pub const CATALOG_EXPORT_VERSION_V1: u16 = 0x0001;
 /// §15.2: `catalog_format_version` of the private catalog.
 pub const CATALOG_FORMAT_VERSION_V1: u16 = 0x0001;
 /// §15.2: private catalog v2 with durable encrypted-sync state.

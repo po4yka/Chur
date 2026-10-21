@@ -221,7 +221,9 @@
       "inputs": {
         "preamble": "4348555242414b31000200010001000000000020000000000000000000000006"
       },
-      "error_code": "UNSUPPORTED_VERSION"
+      "error_code": "UNSUPPORTED_VERSION",
+      "notes": "Superseded: ADR-0068 allocates backup_version 0x0002, which a current reader accepts.",
+      "superseded_by": "backup-v2-unsupported-version"
     },
     {
       "vector_id": "backup-v1-wrong-magic",
@@ -233,6 +235,178 @@
         "preamble": "4348555242414b32000100010001000000000020000000000000000000000006"
       },
       "error_code": "VAULT_CORRUPT"
+    },
+    {
+      "vector_id": "backup-v2-catalog-export-record",
+      "spec": "docs/format/BACKUP_FORMAT_V2.md",
+      "spec_section": "4",
+      "purpose": "The stream sealed as the only catalog export record, at record index 2, under the manifest key.",
+      "outcome": "accept",
+      "inputs": {
+        "backup_id": "22222222222222222222222222222222",
+        "chunk_index": 0,
+        "is_final": true,
+        "record_index": 2,
+        "record_nonce": "353535353535353535353535353535353535353535353535",
+        "root_secret": "6161616161616161616161616161616161616161616161616161616161616161",
+        "stream": "0001000f00000000000000030000000100000004746167730004000000067461675f6964000000046e616d650000000a637265617465645f6d73000000046e6f7465000000000000000104000000105151515151515151515151515151515103000000056265616368020000018bcfe5680001",
+        "vault_id": "11111111111111111111111111111111"
+      },
+      "expected": {
+        "aad": "43485552004241434b555000434154414c4f472d4558504f52542d4141440056310002000111111111111111111111111111111111222222222222222222222222222222220000000000000002030000000001",
+        "record": "3535353535353535353535353535353535353535353535350336dee3303cb47d6f830df0d47683996d5ea76fae850d97be5c4872abb532a534840f05714ca0386ecf438475480b3ebe4655b30c431da8f72c599e817973c2adab78d34ac7d01f35656820d04625ba639a228ac974ab6018e02934f0a896eecfdef2222fa04170f56b977398441b89d8391df58988e19e367fcfdde9cf9783e2fd3f"
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "backup-v2-catalog-export-reordered",
+      "spec": "docs/format/BACKUP_FORMAT_V2.md",
+      "spec_section": "4",
+      "purpose": "A catalog export record moved to another record and chunk index does not open there.",
+      "outcome": "reject",
+      "inputs": {
+        "backup_id": "22222222222222222222222222222222",
+        "chunk_index": 1,
+        "is_final": true,
+        "manifest_key": "6b3260500d15b44c8b10101073a82e0b423a818601f20e0929f7bb2f9a31f28c",
+        "record": "3535353535353535353535353535353535353535353535350336dee3303cb47d6f830df0d47683996d5ea76fae850d97be5c4872abb532a534840f05714ca0386ecf438475480b3ebe4655b30c431da8f72c599e817973c2adab78d34ac7d01f35656820d04625ba639a228ac974ab6018e02934f0a896eecfdef2222fa04170f56b977398441b89d8391df58988e19e367fcfdde9cf9783e2fd3f",
+        "record_index": 3,
+        "vault_id": "11111111111111111111111111111111"
+      },
+      "error_code": "VAULT_CORRUPT",
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "backup-v2-catalog-export-spliced-from-another-backup",
+      "spec": "docs/format/BACKUP_FORMAT_V2.md",
+      "spec_section": "4",
+      "purpose": "A catalog export record sealed for one backup does not open in another backup of the same vault.",
+      "outcome": "reject",
+      "inputs": {
+        "backup_id": "23232323232323232323232323232323",
+        "chunk_index": 0,
+        "is_final": true,
+        "manifest_key": "6b3260500d15b44c8b10101073a82e0b423a818601f20e0929f7bb2f9a31f28c",
+        "record": "3535353535353535353535353535353535353535353535350336dee3303cb47d6f830df0d47683996d5ea76fae850d97be5c4872abb532a534840f05714ca0386ecf438475480b3ebe4655b30c431da8f72c599e817973c2adab78d34ac7d01f35656820d04625ba639a228ac974ab6018e02934f0a896eecfdef2222fa04170f56b977398441b89d8391df58988e19e367fcfdde9cf9783e2fd3f",
+        "record_index": 2,
+        "vault_id": "11111111111111111111111111111111"
+      },
+      "error_code": "VAULT_CORRUPT",
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "backup-v2-catalog-export-stream",
+      "spec": "docs/format/BACKUP_FORMAT_V2.md",
+      "spec_section": "3",
+      "purpose": "A CatalogExportV1 stream of one table with one row holding a blob, a text, an integer, and a NULL.",
+      "outcome": "accept",
+      "inputs": {
+        "catalog_format_version": 15,
+        "catalog_generation": 3,
+        "columns": [
+          "tag_id",
+          "name",
+          "created_ms",
+          "note"
+        ],
+        "created_ms": 1700000000000,
+        "name": "beach",
+        "table_name": "tags",
+        "tag_id": "51515151515151515151515151515151"
+      },
+      "expected": {
+        "stream": "0001000f00000000000000030000000100000004746167730004000000067461675f6964000000046e616d650000000a637265617465645f6d73000000046e6f7465000000000000000104000000105151515151515151515151515151515103000000056265616368020000018bcfe5680001"
+      }
+    },
+    {
+      "vector_id": "backup-v2-catalog-export-truncated",
+      "spec": "docs/format/BACKUP_FORMAT_V2.md",
+      "spec_section": "3",
+      "purpose": "An export stream that ends inside its last value is refused rather than imported short.",
+      "outcome": "reject",
+      "inputs": {
+        "stream": "0001000f00000000000000030000000100000004746167730004000000067461675f6964000000046e616d650000000a637265617465645f6d73000000046e6f7465000000000000000104000000105151515151515151515151515151515103000000056265616368020000018bcfe56800"
+      },
+      "error_code": "VAULT_CORRUPT"
+    },
+    {
+      "vector_id": "backup-v2-descriptor-altered",
+      "spec": "docs/format/BACKUP_FORMAT_V2.md",
+      "spec_section": "5",
+      "purpose": "One changed descriptor byte changes the record commitment, so it no longer matches the value the final commit seals.",
+      "outcome": "reject",
+      "inputs": {
+        "catalog_export_record": "3535353535353535353535353535353535353535353535350336dee3303cb47d6f830df0d47683996d5ea76fae850d97be5c4872abb532a534840f05714ca0386ecf438475480b3ebe4655b30c431da8f72c599e817973c2adab78d34ac7d01f35656820d04625ba639a228ac974ab6018e02934f0a896eecfdef2222fa04170f56b977398441b89d8391df58988e19e367fcfdde9cf9783e2fd3f",
+        "descriptor_record": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5e",
+        "envelope_record": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+        "manifest_record": "363636363636363636363636363636363636363636363636d1c88766ca0d028d04a928ffb332269ad66876ece9e2721cd53f1faac4c3493e2248cae64e78936682301867ceaa7c8af456399769d7382d52c637d2c169ad3f64123623a612e69e4491178efd6864181dad7b39608c3de2c1034e0c9342f8a8a1ac0e62c16147791e1e6c64433d3ff45fa23287d1b26b468b03fc9596e096195bfef2c613",
+        "recomputed_record_commitment": "b1c1acad01551bb57bf29d446c9622b06aec6a3fa59af6853c770ece90fd46f6",
+        "sealed_record_commitment": "c2dfa17d8786b93ceb202ab7f24d3868c2961a4c765aa75d959fb57ad198a143"
+      },
+      "error_code": "VAULT_CORRUPT",
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "backup-v2-final-commit",
+      "spec": "docs/format/BACKUP_FORMAT_V2.md",
+      "spec_section": "6",
+      "purpose": "The version 2 final commit: the version 1 fields, the catalog export record count, and the record commitment.",
+      "outcome": "accept",
+      "inputs": {
+        "backup_id": "22222222222222222222222222222222",
+        "commit_nonce": "373737373737373737373737373737373737373737373737",
+        "root_secret": "6161616161616161616161616161616161616161616161616161616161616161",
+        "vault_id": "11111111111111111111111111111111"
+      },
+      "expected": {
+        "commit_plaintext": "22222222222222222222222222222222000000000000000700000001000000015a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a00000001c2dfa17d8786b93ceb202ab7f24d3868c2961a4c765aa75d959fb57ad198a143",
+        "commit_plaintext_length": 100,
+        "commit_record": "373737373737373737373737373737373737373737373737c54d6fe761ea4b64f5c2cd1b5641e425777971826047a0782394c830fa4ce8f651e28f25f91c13b910ff784b78f4ed0b28b12f0cfc5d32940ac006f3c74aa723491bc7fb6bc17101bf8998f7996c4890b4426219a7751128ed740ea5a0764cb2f584034ee500557c11fbe13fc502f252af76fdd8"
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "backup-v2-public-preamble",
+      "spec": "docs/format/BACKUP_FORMAT_V2.md",
+      "spec_section": "2",
+      "purpose": "The version 2 preamble differs from version 1 only in backup_version.",
+      "outcome": "accept",
+      "inputs": {
+        "backup_version": 2,
+        "record_count": 7
+      },
+      "expected": {
+        "preamble": "4348555242414b31000200010001000000000020000000000000000000000007"
+      }
+    },
+    {
+      "vector_id": "backup-v2-record-commitment",
+      "spec": "docs/format/BACKUP_FORMAT_V2.md",
+      "spec_section": "5",
+      "purpose": "The record commitment over the manifest, descriptor, catalog export, and envelope records at indexes 0, 1, 2, and 4.",
+      "outcome": "accept",
+      "inputs": {
+        "catalog_export_record": "3535353535353535353535353535353535353535353535350336dee3303cb47d6f830df0d47683996d5ea76fae850d97be5c4872abb532a534840f05714ca0386ecf438475480b3ebe4655b30c431da8f72c599e817973c2adab78d34ac7d01f35656820d04625ba639a228ac974ab6018e02934f0a896eecfdef2222fa04170f56b977398441b89d8391df58988e19e367fcfdde9cf9783e2fd3f",
+        "descriptor_record": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "domain_tag": "43485552004241434b5550005245434f52442d434f4d4d49544d454e54005631",
+        "envelope_record": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+        "manifest_record": "363636363636363636363636363636363636363636363636d1c88766ca0d028d04a928ffb332269ad66876ece9e2721cd53f1faac4c3493e2248cae64e78936682301867ceaa7c8af456399769d7382d52c637d2c169ad3f64123623a612e69e4491178efd6864181dad7b39608c3de2c1034e0c9342f8a8a1ac0e62c16147791e1e6c64433d3ff45fa23287d1b26b468b03fc9596e096195bfef2c613"
+      },
+      "expected": {
+        "record_commitment": "c2dfa17d8786b93ceb202ab7f24d3868c2961a4c765aa75d959fb57ad198a143"
+      },
+      "notes": "TEST-ONLY — NEVER USE FOR REAL VAULTS"
+    },
+    {
+      "vector_id": "backup-v2-unsupported-version",
+      "spec": "docs/format/BACKUP_FORMAT_V2.md",
+      "spec_section": "2",
+      "purpose": "Version 0x0003 is unallocated and fails as UNSUPPORTED_VERSION.",
+      "outcome": "reject",
+      "inputs": {
+        "preamble": "4348555242414b31000300010001000000000020000000000000000000000007"
+      },
+      "error_code": "UNSUPPORTED_VERSION"
     },
     {
       "vector_id": "canonical-encoding-v1-all-zero-identifier",

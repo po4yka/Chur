@@ -16,6 +16,7 @@
 //! negative tests.
 
 pub mod backup;
+pub mod catalog_export;
 pub mod codec;
 pub mod constants;
 pub mod container;

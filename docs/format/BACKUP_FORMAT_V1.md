@@ -18,7 +18,7 @@ The backup format packages a complete or incremental encrypted vault for user-co
 
 The code implements full native CHURBAK1 creation and restore. Selective archives and external-file encryption create a new independent vault and then use that same full-package path. Incremental backup and `age` outer wrapping remain proposed, not supported app features.
 
-The backup path checkpoints the catalog, then `chur-media::backup::CatalogSnapshot::create` copies the encrypted physical SQLCipher database for the `CatalogExport` record. This differs from the canonical catalog-export requirement in [catalog v1](CATALOG_SCHEMA_V1.md) §15 and [ADR-0038](../adr/0038-adopt-sqlcipher-as-the-v1-catalog-engine.md). The proposed package model below still names the required portable representation. Same-build round trips do not prove compatibility across SQLCipher builds or platforms. This documentation records the divergence; it does not approve physical pages as a portable format. An approved format/compatibility decision and cross-build restore evidence are required before the portable-backup release gate can close.
+Builds before [ADR-0068](../adr/0068-carry-a-portable-catalog-export-in-backup-v2.md) wrote version 1 packages whose `CatalogExport` record is a copy of the encrypted SQLCipher file. That copy differs from the canonical catalog-export requirement in [catalog v1](CATALOG_SCHEMA_V1.md) §15 and [ADR-0038](../adr/0038-adopt-sqlcipher-as-the-v1-catalog-engine.md). ADR-0068 resolves the divergence with package version 2, defined in [`BACKUP_FORMAT_V2.md`](BACKUP_FORMAT_V2.md): the catalog travels as a logical export in sealed records, and the final commit also commits to every record that is not a container. Every writer now produces version 2. A reader still restores a version 1 package through §8 of this document, and the version 1 description of the catalog record below applies only to those packages.
 
 ## 2. Package model
 
@@ -254,7 +254,7 @@ Old backups retain old portable slots. Rotating a password or recovery secret do
 
 ## 13. Limits
 
-- only `backup_version` `0x0001`, `canonical_encoding_profile` `0x0001`, and `suite_id` `0x0001` are accepted;
+- only `backup_version` `0x0001` and `0x0002` ([`BACKUP_FORMAT_V2.md`](BACKUP_FORMAT_V2.md)), `canonical_encoding_profile` `0x0001`, and `suite_id` `0x0001` are accepted;
 - `record_count` between 2 and 1048576; a package holds at least the encrypted backup manifest and the final backup commit;
 - at most 1048576 stream inventory entries and at most 16 slot inventory entries;
 - backup manifest record payload at most 16777216 bytes (16 MiB);
