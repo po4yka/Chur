@@ -39,6 +39,14 @@ During unlock:
 - platform APIs receive only the bytes required for their key-slot operation;
 - feature state receives only an opaque session handle.
 
+The application layer keeps credential copies short:
+
+- the unlock form and the recovery form drop their text when the user submits it and when the form leaves the screen;
+- the password and the recovery phrase cross the FFI as byte arrays that the caller zeroes after the call;
+- an intermediate array that a ranged read or a player read copies plaintext through is zeroed after the copy, and a ranged read that fails part way zeroes what it already filled.
+
+Residual: Compose holds the field text as a `String`, and the input method, the text layout and the IME connection keep their own copies. A `String` cannot be zeroed, and those copies stay in the managed heap until the garbage collector reuses the memory. §9 applies to all of them.
+
 ## 3. Import
 
 Preferred path:

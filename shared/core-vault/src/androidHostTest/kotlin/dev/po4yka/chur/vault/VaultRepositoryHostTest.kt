@@ -270,7 +270,7 @@ class VaultRepositoryHostTest {
         assertEquals(2, repository.slots().size)
         repository.lock(LockReason.USER)
 
-        repository.unlockWithRecovery(phrase)
+        repository.unlockWithRecovery(phrase.encodeToByteArray())
         assertIs<VaultState.Unlocked>(repository.state.value)
         repository.shutdown()
     }
@@ -306,7 +306,7 @@ class VaultRepositoryHostTest {
         assertEquals(2, repository.slots().size, "the confirmed phrase replaced the creation's")
 
         repository.lock(LockReason.USER)
-        val refused = assertFailsWith<ChurFailure> { repository.unlockWithRecovery(lost) }
+        val refused = assertFailsWith<ChurFailure> { repository.unlockWithRecovery(lost.encodeToByteArray()) }
         assertEquals(ChurStatus.AUTHENTICATION_FAILED, refused.status)
         repository.shutdown()
     }
@@ -337,9 +337,9 @@ class VaultRepositoryHostTest {
         assertFalse(first in recovery)
 
         repository.lock(LockReason.USER)
-        val refused = assertFailsWith<ChurFailure> { repository.unlockWithRecovery(old) }
+        val refused = assertFailsWith<ChurFailure> { repository.unlockWithRecovery(old.encodeToByteArray()) }
         assertEquals(ChurStatus.AUTHENTICATION_FAILED, refused.status)
-        repository.unlockWithRecovery(new)
+        repository.unlockWithRecovery(new.encodeToByteArray())
         assertIs<VaultState.Unlocked>(repository.state.value)
         repository.shutdown()
     }

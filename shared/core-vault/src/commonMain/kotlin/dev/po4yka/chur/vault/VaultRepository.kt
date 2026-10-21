@@ -225,7 +225,7 @@ class VaultRepository(
     }
 
     /** Unlocks with the recovery phrase, `RECOVERY.md`. */
-    suspend fun unlockWithRecovery(phrase: String) = mutex.withLock {
+    suspend fun unlockWithRecovery(phrase: ByteArray) = mutex.withLock {
         requireRuntime()
         openSession { ChurVault.unlockWithRecovery(runtime, phrase) }
     }

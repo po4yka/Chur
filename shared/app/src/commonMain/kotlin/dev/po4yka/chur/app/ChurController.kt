@@ -682,7 +682,12 @@ class ChurController(
         val epoch = endOpenSession()
         if (epoch != lockEpoch) return@attempt
         val target = _route.value
-        nativeEntry(epoch) { repository.unlockWithRecovery(phrase.trim()) }
+        val bytes = phrase.trim().encodeToByteArray()
+        try {
+            nativeEntry(epoch) { repository.unlockWithRecovery(bytes) }
+        } finally {
+            bytes.fill(0)
+        }
         completeUnlock(target, epoch)
     }
 

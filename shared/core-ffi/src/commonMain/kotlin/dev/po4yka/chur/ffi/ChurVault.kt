@@ -99,13 +99,18 @@ object ChurVault {
         password: ByteArray,
     ): Long = handleOf("unlock") { out -> ChurNative.vaultUnlock(runtime, FACTOR_PASSWORD, password, out) }
 
-    /** Unlocks with a recovery phrase. */
+    /**
+     * Unlocks with a recovery phrase, as UTF-8 bytes.
+     *
+     * The phrase arrives as bytes so the caller can zero them after the call,
+     * which a `String` does not allow.
+     */
     fun unlockWithRecovery(
         runtime: Long,
-        phrase: String,
+        phrase: ByteArray,
     ): Long =
         handleOf("recover") { out ->
-            ChurNative.vaultUnlock(runtime, FACTOR_RECOVERY, phrase.encodeToByteArray(), out)
+            ChurNative.vaultUnlock(runtime, FACTOR_RECOVERY, phrase, out)
         }
 
     /** Unlocks with a `DeviceUnlockSecret` the platform keystore returned. */
@@ -1413,6 +1418,23 @@ object ChurVault {
         length: Int,
     ): ByteArray {
         val out = ByteArray(length)
+        try {
+            fillRange(reader, offset, length, out)
+        } catch (failure: Throwable) {
+            // A read that fails part way leaves plaintext in `out`, and the
+            // caller never receives it to wipe.
+            out.fill(0)
+            throw failure
+        }
+        return out
+    }
+
+    private fun fillRange(
+        reader: Long,
+        offset: Long,
+        length: Int,
+        out: ByteArray,
+    ) {
         withChurBuffer(length) { buffer ->
             val written = IntArray(1)
             var at = 0
@@ -1429,14 +1451,19 @@ object ChurVault {
                 // next iteration re-reads from the authenticated container, so
                 // dropping it costs one chunk decrypt on the last step only.
                 val take = minOf(written[0], length - at)
-                buffer.copyOut(take).copyInto(out, at)
+                val chunk = buffer.copyOut(take)
+                try {
+                    chunk.copyInto(out, at)
+                } finally {
+                    // The intermediate copy is plaintext nothing else holds.
+                    chunk.fill(0)
+                }
                 at += take
             }
             if (at < length) {
                 throw ChurFailure(ChurStatus.OBJECT_INCOMPLETE, "the range ended early")
             }
         }
-        return out
     }
 
     /**
