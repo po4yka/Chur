@@ -4,7 +4,10 @@ import android.content.ContentResolver
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.ColorSpace
 import android.graphics.Matrix
+import android.graphics.Paint
 import android.media.AudioFormat
 import android.media.ExifInterface
 import android.media.MediaExtractor
@@ -12,6 +15,7 @@ import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.ParcelFileDescriptor
+import android.os.Build
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.system.ErrnoException
@@ -246,14 +250,11 @@ class AndroidMediaCodec private constructor(
         val (targetWidth, targetHeight) = target
         var bitmap: Bitmap? = null
         var scaled: Bitmap? = null
+        var srgb: Bitmap? = null
         try {
             bitmap = when (probe.mediaClass) {
                 MediaBounds.CLASS_IMAGE -> decodeScaled(uri, targetWidth, targetHeight, cancelRequested)
-                MediaBounds.CLASS_VIDEO -> withRetriever(uri) {
-                    if (cancelRequested()) null else it.getScaledFrameAtTime(
-                        -1, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, targetWidth, targetHeight,
-                    )
-                }
+                MediaBounds.CLASS_VIDEO -> videoFrame(uri, targetWidth, targetHeight, cancelRequested)
                 else -> null
             } ?: return null
             if (cancelRequested()) return null
@@ -263,16 +264,63 @@ class AndroidMediaCodec private constructor(
                 Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
             }
             if (cancelRequested()) return null
+            // The native retriever maps HDR video to SDR on API 30+. This
+            // separate canvas converts SDR gamut (including Display P3) to
+            // sRGB; it must not retag HDR pixels as if they were already SDR.
+            val output = if (probe.mediaClass == MediaBounds.CLASS_VIDEO) {
+                val targetBitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888,
+                    false, ColorSpace.get(ColorSpace.Named.SRGB))
+                srgb = targetBitmap
+                Canvas(targetBitmap).drawBitmap(scaled, 0f, 0f, Paint(Paint.FILTER_BITMAP_FLAG))
+                targetBitmap
+            } else scaled
             val out = ByteArrayOutputStream()
             // The source orientation is now in the pixels. No EXIF orientation
             // is copied into this baseline JPEG.
-            val encoded = scaled.compress(Bitmap.CompressFormat.JPEG, MediaBounds.quality(kind), out)
+            val encoded = output.compress(Bitmap.CompressFormat.JPEG, MediaBounds.quality(kind), out)
             if (!encoded || cancelRequested()) return null
             return Derivative(kind, out.toByteArray(), targetWidth, targetHeight)
         } finally {
+            srgb?.recycle()
             if (scaled !== bitmap) scaled?.recycle()
             bitmap?.recycle()
         }
+    }
+
+    private fun videoFrame(uri: Uri, width: Int, height: Int, cancelRequested: () -> Boolean): Bitmap? {
+        // Android 10's retriever lacks the native HDR capture/tone-map path.
+        // Keep that original playable/exportable, with an unavailable preview.
+        if (Build.VERSION.SDK_INT < 30 && videoColorTransfer(uri) in
+            listOf(MediaFormat.COLOR_TRANSFER_ST2084, MediaFormat.COLOR_TRANSFER_HLG)) return null
+        val frame = withRetriever(uri) {
+            if (cancelRequested()) null
+            else if (Build.VERSION.SDK_INT >= 30) it.getScaledFrameAtTime(
+                -1, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, width, height,
+                MediaMetadataRetriever.BitmapParams().apply { preferredConfig = Bitmap.Config.ARGB_8888 },
+            ) else it.getScaledFrameAtTime(-1, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, width, height)
+        } ?: return null
+        val color = frame.colorSpace
+        if (color == null || (Build.VERSION.SDK_INT >= 34 &&
+                (color == ColorSpace.get(ColorSpace.Named.BT2020_HLG) || color == ColorSpace.get(ColorSpace.Named.BT2020_PQ)))) {
+            frame.recycle()
+            return null
+        }
+        return frame
+    }
+
+    private fun videoColorTransfer(uri: Uri): Int? {
+        val descriptor = openDecodeDescriptor(uri) ?: return null
+        val extractor = MediaExtractor()
+        return try {
+            descriptor.use {
+                if (sourceLength == null) extractor.setDataSource(it.fileDescriptor)
+                else extractor.setDataSource(it.fileDescriptor, sourceOffset, sourceLength)
+                (0 until extractor.trackCount).map(extractor::getTrackFormat)
+                    .firstOrNull { format -> format.getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true }
+                    ?.let { format -> if (format.containsKey(MediaFormat.KEY_COLOR_TRANSFER))
+                        format.getInteger(MediaFormat.KEY_COLOR_TRANSFER) else null }
+            }
+        } finally { extractor.release() }
     }
 
     /** Optional embedded artwork never changes the audio's dimensions or import outcome. */

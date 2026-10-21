@@ -103,6 +103,8 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.junit)
+    androidTestImplementation(libs.androidx.media3.exoplayer)
+    androidTestImplementation(libs.androidx.media3.ui)
 }
 
 // ---------------------------------------------------------------------------
