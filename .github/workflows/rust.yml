@@ -387,7 +387,11 @@ jobs:
 
   kotlin-native:
     name: kotlin/native tests
-    runs-on: macos-latest
+    # The iOS host needs the Xcode 27.1 SDK (README.md: Xcode 27 for host
+    # builds); the macOS 26 image tops out at Xcode 26.6.
+    runs-on: xcode-27
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
     defaults:
       run:
         working-directory: .
