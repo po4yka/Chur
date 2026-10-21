@@ -78,13 +78,17 @@ fn dispatch(
     let mut writer = Writer::new();
     match command {
         1 => {
+            // The literal interface address is required; the listener never binds all interfaces.
+            let address = reader.string(128)?.parse().map_err(|_| {
+                Error::new(ChurStatus::InvalidInput, "enter this device's IP address")
+            })?;
             reader.finish()?;
             ensure!(
                 state.is_none(),
                 Conflict,
                 "a peer invitation already exists"
             );
-            let (peer, port, secret) = Peer::listen()?;
+            let (peer, port, secret) = Peer::listen(address)?;
             writer.u16(port).fixed(secret.expose());
             *state = Some(Box::new(peer));
         }

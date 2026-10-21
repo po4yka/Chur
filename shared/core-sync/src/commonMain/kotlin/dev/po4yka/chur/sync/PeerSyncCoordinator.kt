@@ -88,7 +88,8 @@ public class PeerSyncCoordinator(private val clock: () -> Long = { 0L }) {
         require(octets.size == 4 && octets.all { part -> part.toIntOrNull()?.let { it in 0..255 && it.toString() == part } == true } && address != "0.0.0.0") { "enter this device's IPv4 address" }
         require(refresh()) { "finish pairing before offering a connection" }
         prepareMedia()
-        val encoded = io(byteArrayOf(1))
+        // Native binds only this interface address, so other interfaces cannot take the invitation.
+        val encoded = io(byteArrayOf(1) + record(address.encodeToByteArray()))
         val response = PeerBytes(encoded)
         val port = response.number(2)
         val secret = response.take(32)
