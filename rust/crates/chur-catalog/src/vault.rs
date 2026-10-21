@@ -1996,12 +1996,7 @@ fn write_durably(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
 /// absent even though the file it names is intact, which for §9 would mean a
 /// vault that vanished rather than one that was never installed.
 fn sync_directory(path: &std::path::Path) -> Result<()> {
-    let directory = std::fs::File::open(path)
-        .map_err(|_| chur_core::err!(IoFailure, "the registry could not be opened"))?;
-    // A directory fsync is not supported on every platform; where it is not,
-    // the rename is still atomic and the loss window is the platform's own.
-    let _ = directory.sync_all();
-    Ok(())
+    crate::paths::sync_directory(path)
 }
 
 /// The commitment the catalog descriptor carries, `VAULT_DESCRIPTOR_V1.md` §5.

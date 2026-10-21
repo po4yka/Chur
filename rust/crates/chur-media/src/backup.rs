@@ -938,7 +938,8 @@ fn restore_inner(
             VaultCorrupt,
             "the package carries containers the restored catalog does not name"
         );
-        catalog.close()
+        catalog.close()?;
+        sync_restored_tree(root_dir, &store_id)
     })();
     if let Err(error) = installed {
         // Nothing openable was created, so removal is the whole recovery — the
@@ -1236,6 +1237,39 @@ fn hash_range(
         remaining -= take as u64;
     }
     Ok(())
+}
+
+/// Makes every directory entry the restore created durable.
+///
+/// Each restored file is synced when it is written, but its directory entry is
+/// durable only after its directory is synced. The descriptor install that
+/// follows is what makes the vault openable, so a crash after the install must
+/// not find a descriptor whose containers or catalog have no directory entry.
+/// The order is bottom-up: each shard directory, `objects/`, the vault
+/// directory that holds the catalog and `objects/`, and the directory that
+/// holds the vault directory.
+fn sync_restored_tree(root_dir: &VaultRoot, store_id: &Id) -> Result<()> {
+    let objects = root_dir.objects(store_id);
+    match std::fs::read_dir(&objects) {
+        Ok(listing) => {
+            for entry in listing {
+                let entry = entry.map_err(|_| {
+                    chur_core::err!(IoFailure, "a restored directory could not be listed")
+                })?;
+                let is_directory = entry.file_type().map_err(|_| {
+                    chur_core::err!(IoFailure, "a restored directory could not be listed")
+                })?;
+                if is_directory.is_dir() {
+                    chur_catalog::paths::sync_directory(&entry.path())?;
+                }
+            }
+            chur_catalog::paths::sync_directory(&objects)?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => bail!(IoFailure, "a restored directory could not be listed"),
+    }
+    chur_catalog::paths::sync_directory(&root_dir.vault(store_id))?;
+    chur_catalog::paths::sync_directory(&root_dir.vaults())
 }
 
 /// Writes one record's payload out to a file.

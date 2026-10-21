@@ -163,8 +163,7 @@ impl LockedStaging {
             )
         })?;
         temporary_file.installed = true;
-        sync_directory(&self.directory);
-        Ok(())
+        sync_directory(&self.directory)
     }
 
     /// Returns the oldest retained record without acknowledging or deleting it.
@@ -199,10 +198,7 @@ impl LockedStaging {
     /// Removes a record only after its caller has fully validated or rejected it.
     pub fn remove(&mut self, id: &Id) -> Result<()> {
         match std::fs::remove_file(self.record_path(id)) {
-            Ok(()) => {
-                sync_directory(&self.directory);
-                Ok(())
-            }
+            Ok(()) => sync_directory(&self.directory),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(_) => Err(Error::new(
                 ChurStatus::IoFailure,
@@ -386,10 +382,8 @@ fn read_entry(path: &Path, name: &str) -> Result<Entry> {
     })
 }
 
-fn sync_directory(path: &Path) {
-    if let Ok(directory) = File::open(path) {
-        let _ = directory.sync_all();
-    }
+fn sync_directory(path: &Path) -> Result<()> {
+    crate::paths::sync_directory(path)
 }
 
 #[cfg(test)]

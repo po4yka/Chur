@@ -238,6 +238,46 @@ impl VaultRoot {
     }
 }
 
+/// Makes the entries of a directory durable: a rename, a creation, or a removal.
+///
+/// A rename is atomic but not durable. Until the directory itself is synced, a
+/// crash can lose the entry even though the file it names is intact. An error
+/// is returned, except the results that mean the platform cannot sync a
+/// directory (`EINVAL`, `ENOTSUP`, `EOPNOTSUPP`). There the rename stays atomic
+/// and the loss window is the platform's own, and no retry can close it.
+///
+/// # Errors
+///
+/// Returns [`chur_core::ChurStatus::IoFailure`] when the directory cannot be
+/// opened or the sync fails for any other reason.
+pub fn sync_directory(path: &Path) -> Result<()> {
+    let directory = std::fs::File::open(path)
+        .map_err(|_| chur_core::err!(IoFailure, "a directory could not be opened for a sync"))?;
+    match directory.sync_all() {
+        Ok(()) => Ok(()),
+        Err(error) if sync_is_unsupported(&error) => Ok(()),
+        Err(_) => Err(chur_core::err!(
+            IoFailure,
+            "a directory could not be made durable"
+        )),
+    }
+}
+
+/// The `errno` values that mean "this file system cannot sync a directory".
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const SYNC_UNSUPPORTED: &[i32] = &[22, 95];
+#[cfg(target_vendor = "apple")]
+const SYNC_UNSUPPORTED: &[i32] = &[22, 45, 102];
+#[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+const SYNC_UNSUPPORTED: &[i32] = &[22];
+
+fn sync_is_unsupported(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::Unsupported
+        || error
+            .raw_os_error()
+            .is_some_and(|code| SYNC_UNSUPPORTED.contains(&code))
+}
+
 /// The name of the lock file inside a vault directory, see [`DirectoryClaim`].
 const CLAIM_NAME: &str = "lock";
 
@@ -340,6 +380,26 @@ mod tests {
         path.push(format!("chur-paths-{}", random::id().expect("id").to_hex()));
         std::fs::create_dir_all(&path).expect("create");
         VaultRoot::new(path)
+    }
+
+    #[test]
+    fn a_directory_sync_reports_failures_and_tolerates_only_unsupported() {
+        let root = scratch_root();
+        sync_directory(root.base()).expect("a real directory syncs");
+        assert_eq!(
+            sync_directory(&root.base().join("absent"))
+                .err()
+                .map(|error| error.status()),
+            Some(chur_core::ChurStatus::IoFailure)
+        );
+        assert!(sync_is_unsupported(&std::io::Error::from_raw_os_error(22)));
+        assert!(sync_is_unsupported(&std::io::Error::from(
+            std::io::ErrorKind::Unsupported
+        )));
+        // EIO and ENOSPC are real failures of the device, not of the platform.
+        assert!(!sync_is_unsupported(&std::io::Error::from_raw_os_error(5)));
+        assert!(!sync_is_unsupported(&std::io::Error::from_raw_os_error(28)));
+        std::fs::remove_dir_all(root.base()).expect("cleanup");
     }
 
     #[test]
