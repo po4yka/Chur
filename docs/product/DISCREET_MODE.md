@@ -61,6 +61,8 @@ The optional whole-app gate controls access through the interface. It does not e
 
 Public-shell storage is included in the ordinary platform backup and private-vault storage is excluded from it without exception. Both halves are deliberate: a Notes surface that loses its content on device transfer is not functional, and an object store carried by a transport that chooses what to copy is not restorable. The two rules apply to disjoint directories and are implemented by [`../ANDROID.md`](../ANDROID.md) §13.4 and [`../IOS.md`](../IOS.md) §14.1. A change that places a vault path in a backup include set is a release blocker, and no public-shell backup rule may be widened to a path outside public storage.
 
+Settings that only an open vault can write (the device-slot policy, the whole-app lock and the auto-lock time) are not public-shell content. Their presence would show that a vault was set up, so Android keeps them in `noBackupFilesDir` and not in `public/`. A device that restores a backup starts with their defaults. Android cloud backup also requires end-to-end encryption by the transport (`disableIfNoEncryptionCapabilities`), so the public shell is not sent to a server that can read it.
+
 The settings statement carries both halves: public-shell content is backed up by the platform, and vault content is excluded from ordinary platform backup. Explicit full/selective archives use [`../format/BACKUP_FORMAT_V1.md`](../format/BACKUP_FORMAT_V1.md). Configured sync and collection sharing transfer encrypted content; explicit plaintext export leaves the vault boundary under its own disclosure.
 
 ## Session gate

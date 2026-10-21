@@ -522,7 +522,7 @@ The rules are per path and checked into the application. An `<include>` set make
 ```xml
 <!-- res/xml/data_extraction_rules.xml, android:dataExtractionRules -->
 <data-extraction-rules>
-    <cloud-backup>
+    <cloud-backup disableIfNoEncryptionCapabilities="true">
         <include domain="file" path="public/" />
         <include domain="sharedpref" path="public_shell.xml" />
     </cloud-backup>
@@ -540,6 +540,8 @@ The rules are per path and checked into the application. An `<include>` set make
     <include domain="sharedpref" path="public_shell.xml" />
 </full-backup-content>
 ```
+
+Cloud backup runs only when the transport encrypts it end to end. The security settings that only an open vault writes (device-slot policy, whole-app lock, auto-lock) are in `noBackupFilesDir/settings/`, not in `public/`, so a backup does not show that a vault was set up, [`product/DISCREET_MODE.md`](product/DISCREET_MODE.md).
 
 Consequences:
 

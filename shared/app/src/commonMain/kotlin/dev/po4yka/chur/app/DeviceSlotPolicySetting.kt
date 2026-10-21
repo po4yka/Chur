@@ -14,10 +14,11 @@ import kotlin.concurrent.Volatile
  * [ChurController.toggleDeviceSlotPolicy] re-enrolls the open vault's device
  * slot on a change rather than leaving it to answer the old policy.
  *
- * The choice says nothing about whether a vault exists, so it is public-shell
- * state: a host keeps it in a plain file beside the notes, by the same
- * reasoning `FileNoteStore` states. [unset] keeps the choice in memory, which
- * is what tests and a host without a device slot use.
+ * The choice is device-wide rather than per identity, so every identity reads
+ * the same one, `DECOY_VAULT.md` §10. It is written only from an open vault,
+ * so a host keeps it outside every backup: Android in `noBackupFilesDir`, with
+ * the app-lock and auto-lock choices, `DISCREET_MODE.md`. [unset] keeps the
+ * choice in memory, which is what tests and a host without a device slot use.
  */
 class DeviceSlotPolicySetting(
     private val reader: () -> Boolean,
