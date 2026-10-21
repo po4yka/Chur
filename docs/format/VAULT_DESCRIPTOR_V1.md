@@ -273,6 +273,14 @@ A crash before `ACTIVE` must be recoverable or removable without exposing a part
 
 Local descriptor generations are strictly increasing. A lower generation discovered beside a newer authenticated catalog state is suspicious and must not be selected silently.
 
+`catalog.catalog_generation` binds the descriptor to the freshness of its catalog:
+
+1. A lock writes a new descriptor generation that records the catalog's current `catalog_generation` when the catalog is ahead of the descriptor.
+2. Every unlock reads the catalog's `catalog_generation` after the catalog opens. If the value is lower than the descriptor's `catalog.catalog_generation`, the unlock stops with `VAULT_CORRUPT`. The catalog is then an older copy of the same file, and the header commitment of §5 cannot detect it.
+3. If the value is higher, the session that wrote it stopped before its lock. The unlock records the higher value in a new descriptor generation before the session starts.
+
+This check detects a catalog that is older than the last recorded lock or unlock. It does not detect a copy taken after the last recorded state, and it does not detect an older descriptor that is written back together with its catalog.
+
 Sync and backup rollback protection is separate; a copied old but authentic standalone vault may require an external trusted checkpoint to detect.
 
 ## 11. Discovery and real/decoy handling
