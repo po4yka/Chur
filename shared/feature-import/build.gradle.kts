@@ -23,8 +23,17 @@ kotlin {
         androidResources { enable = true }
         withHostTest {}
     }
-    iosArm64()
-    iosSimulatorArm64()
+    listOf(iosArm64(), iosSimulatorArm64()).forEach { target ->
+        target.binaries.withType<org.jetbrains.kotlin.gradle.plugin.mpp.TestExecutable>().configureEach {
+            val triple = if (target.name == "iosArm64") "aarch64-apple-ios" else "aarch64-apple-ios-sim"
+            val archive = rootProject.layout.projectDirectory.file("rust/target/$triple/debug/libchur_ffi.a")
+            linkerOpts(archive.asFile.absolutePath)
+            linkTaskProvider.configure {
+                inputs.file(archive)
+                dependsOn(":shared:core-ffi:cargoBuildFfi${target.name.replaceFirstChar { it.uppercase() }}")
+            }
+        }
+    }
 
     sourceSets {
         commonMain.dependencies {
@@ -92,4 +101,8 @@ tasks.withType<KotlinNativeSimulatorTest>().configureEach {
     inputs.dir(hevcFixtures).withPathSensitivity(PathSensitivity.RELATIVE)
     environment("CHUR_HEVC_MAIN10_FIXTURES", hevcFixtures.asFile.absolutePath)
     environment("SIMCTL_CHILD_CHUR_HEVC_MAIN10_FIXTURES", hevcFixtures.asFile.absolutePath)
+    val jpegXlFixtures = rootProject.layout.projectDirectory.dir("tests/media/jpeg-xl")
+    inputs.dir(jpegXlFixtures).withPathSensitivity(PathSensitivity.RELATIVE)
+    environment("CHUR_JPEG_XL_FIXTURES", jpegXlFixtures.asFile.absolutePath)
+    environment("SIMCTL_CHILD_CHUR_JPEG_XL_FIXTURES", jpegXlFixtures.asFile.absolutePath)
 }

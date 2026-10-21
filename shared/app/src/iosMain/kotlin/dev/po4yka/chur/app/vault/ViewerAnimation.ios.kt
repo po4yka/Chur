@@ -72,6 +72,7 @@ import platform.UIKit.UIImageView
 import platform.UIKit.UIViewContentMode.UIViewContentModeScaleAspectFit
 
 internal actual fun openViewerAnimation(original: ChurBuffer): ViewerAnimationDecoder? {
+    openJpegXlViewerAnimation(original)?.let { return it }
     val provider = CGDataProviderCreateWithData(null, original.pointer, original.capacityBytes.toULong(), null) ?: return null
     val options = CFDictionaryCreateMutable(null, 1, kCFTypeDictionaryKeyCallBacks.ptr, kCFTypeDictionaryValueCallBacks.ptr)
     if (options == null) { CGDataProviderRelease(provider); return null }

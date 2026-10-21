@@ -256,6 +256,18 @@ final class IncomingShareInbox: @unchecked Sendable {
             self.handle = handle; self.key = key; self.header = header; self.metadata = metadata
         }
         deinit { try? handle.close() }
+        /// Checks authenticated content without consuming the later import stream.
+        func isJpegXl(shouldContinue: () -> Bool) throws -> Bool {
+            guard metadata.size >= 2 else { return false }
+            guard shouldContinue() else { throw IncomingShareFailure.cancelled }
+            let offset = try handle.offset()
+            defer { try? handle.seek(toOffset: offset) }
+            var first = try IncomingShareInbox.readFrame(from: handle, key: key,
+                aad: header + IncomingShareInbox.number(1), limit: IncomingShareInbox.chunkSize)
+            defer { first.resetBytes(in: 0..<first.count) }
+            return first.starts(with: [0xff, 0x0a]) ||
+                first.starts(with: [0, 0, 0, 12, 0x4a, 0x58, 0x4c, 0x20, 0x0d, 0x0a, 0x87, 0x0a])
+        }
         func stream(to descriptor: Int32, shouldContinue: () -> Bool) throws {
             // Suppress SIGPIPE when cancellation closes the native consumer.
             guard fcntl(descriptor, F_SETNOSIGPIPE, 1) == 0 else { throw IncomingShareFailure.unavailable }

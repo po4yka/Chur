@@ -21,8 +21,9 @@ import android.provider.OpenableColumns
 import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
+import dev.po4yka.chur.ffi.ChurBuffer
+import dev.po4yka.chur.ffi.JpegXlDecoder
 import dev.po4yka.chur.ffi.StreamKind
-import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.FilterInputStream
 import java.io.InterruptedIOException
@@ -190,6 +191,9 @@ class AndroidMediaCodec private constructor(
      * reaches the decoder.
      */
     private fun probeImage(uri: Uri, type: String): ProbedMedia? {
+        if (isJpegXl(uri)) return withJpegXl(uri) { decoder ->
+            ProbedMedia(MediaBounds.CLASS_IMAGE, decoder.width, decoder.height, 0, "image/jxl")
+        }
         val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         read(uri) { stream -> BitmapFactory.decodeStream(stream, null, options) }
         if (options.outWidth <= 0 || options.outHeight <= 0) return probeRawThumbnail(uri, type)
@@ -253,7 +257,14 @@ class AndroidMediaCodec private constructor(
         var srgb: Bitmap? = null
         try {
             bitmap = when (probe.mediaClass) {
-                MediaBounds.CLASS_IMAGE -> decodeScaled(uri, targetWidth, targetHeight, cancelRequested)
+                MediaBounds.CLASS_IMAGE -> if (probe.contentType == "image/jxl") {
+                    withJpegXl(uri, cancelRequested) { decoder ->
+                        val frame = decoder.renderFrame(0, maxOf(targetWidth, targetHeight))
+                        try {
+                            if (cancelRequested()) null else jpegXlBitmap(frame)
+                        } finally { frame.close() }
+                    }
+                } else decodeScaled(uri, targetWidth, targetHeight, cancelRequested)
                 MediaBounds.CLASS_VIDEO -> videoFrame(uri, targetWidth, targetHeight, cancelRequested)
                 else -> null
             } ?: return null
@@ -273,17 +284,31 @@ class AndroidMediaCodec private constructor(
                 srgb = targetBitmap
                 Canvas(targetBitmap).drawBitmap(scaled, 0f, 0f, Paint(Paint.FILTER_BITMAP_FLAG))
                 targetBitmap
+            } else if (probe.contentType == "image/jxl" && scaled.hasAlpha()) {
+                // JPEG has no alpha. Composite JXL pixels over white.
+                val targetBitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888,
+                    false, ColorSpace.get(ColorSpace.Named.SRGB))
+                srgb = targetBitmap
+                Canvas(targetBitmap).apply {
+                    drawColor(android.graphics.Color.WHITE)
+                    drawBitmap(scaled, 0f, 0f, null)
+                }
+                targetBitmap
             } else scaled
-            val out = ByteArrayOutputStream()
-            // The source orientation is now in the pixels. No EXIF orientation
-            // is copied into this baseline JPEG.
-            val encoded = output.compress(Bitmap.CompressFormat.JPEG, MediaBounds.quality(kind), out)
-            if (!encoded || cancelRequested()) return null
-            return Derivative(kind, out.toByteArray(), targetWidth, targetHeight)
+            val out = ClearingByteArrayOutputStream()
+            try {
+                // The source orientation is now in the pixels. No EXIF
+                // orientation is copied into this baseline JPEG.
+                val encoded = output.compress(Bitmap.CompressFormat.JPEG, MediaBounds.quality(kind), out)
+                if (!encoded || cancelRequested()) return null
+                val bytes = out.toByteArray()
+                if (cancelRequested()) { bytes.fill(0); return null }
+                return Derivative(kind, bytes, targetWidth, targetHeight)
+            } finally { out.close() }
         } finally {
-            srgb?.recycle()
-            if (scaled !== bitmap) scaled?.recycle()
-            bitmap?.recycle()
+            srgb?.let { if (it.isMutable) it.eraseColor(android.graphics.Color.TRANSPARENT); it.recycle() }
+            if (scaled !== bitmap) scaled?.let { if (it.isMutable) it.eraseColor(android.graphics.Color.TRANSPARENT); it.recycle() }
+            bitmap?.let { if (it.isMutable) it.eraseColor(android.graphics.Color.TRANSPARENT); it.recycle() }
         }
     }
 
@@ -741,6 +766,81 @@ class AndroidMediaCodec private constructor(
             } finally { Os.lseek(descriptor.fileDescriptor, position, OsConstants.SEEK_SET) }
         }
 
+    private fun isJpegXl(uri: Uri): Boolean = read(uri) { source ->
+        val header = ByteArray(12)
+        try {
+            var size = 0
+            while (size < header.size) {
+                val count = source.read(header, size, header.size - size)
+                if (count <= 0) break
+                size += count
+            }
+            jpegXlSignature(header, size)
+        } finally { header.fill(0) }
+    } ?: false
+
+    private fun <T> withJpegXl(uri: Uri, cancelRequested: () -> Boolean = { false }, body: (JpegXlDecoder) -> T): T? =
+        try {
+            if (cancelRequested()) null else openDecodeDescriptor(uri)?.use { source ->
+                val seekable = try {
+                    Os.lseek(source.fileDescriptor, 0, OsConstants.SEEK_CUR)
+                    true
+                } catch (failure: ErrnoException) {
+                    if (failure.errno == OsConstants.ESPIPE) false else throw failure
+                }
+                if (seekable) {
+                    val decoder = JpegXlDecoder.open(source.fd)
+                    try { if (cancelRequested()) null else body(decoder) } finally { decoder.close() }
+                } else withJpegXlPipe(source, cancelRequested, body)
+            }
+        } catch (_: Exception) { null }
+
+    /** A provider pipe has no positional reads. Only this independently opened FD is consumed. */
+    private fun <T> withJpegXlPipe(
+        source: ParcelFileDescriptor,
+        cancelRequested: () -> Boolean,
+        body: (JpegXlDecoder) -> T,
+    ): T? {
+        val chunk = ByteArray(64 * 1024)
+        var encoded = ChurBuffer(chunk.size)
+        var length = 0
+        try {
+            ParcelFileDescriptor.AutoCloseInputStream(source).use { input ->
+                while (true) {
+                    if (cancelRequested()) return null
+                    // At the cap, read one byte only to distinguish EOF from an
+                    // oversized source. Provider length metadata is not trusted.
+                    val count = input.read(chunk, 0, minOf(chunk.size, JPEG_XL_ENCODED_MAX_BYTES - length + 1))
+                    if (count < 0) break
+                    if (count == 0) continue
+                    if (count > JPEG_XL_ENCODED_MAX_BYTES - length) return null
+                    if (length + count > encoded.capacityBytes) {
+                        val grown = ChurBuffer(minOf(JPEG_XL_ENCODED_MAX_BYTES, encoded.capacityBytes * 2))
+                        try {
+                            grown.buffer.put(encoded.buffer.duplicate().apply { position(0); limit(length) })
+                        } catch (failure: Throwable) {
+                            grown.clear(); grown.release(); throw failure
+                        }
+                        encoded.clear()
+                        encoded.release()
+                        encoded = grown
+                    }
+                    encoded.buffer.position(length)
+                    encoded.buffer.put(chunk, 0, count)
+                    length += count
+                    chunk.fill(0, 0, count)
+                }
+            }
+            if (cancelRequested() || length == 0) return null
+            val decoder = JpegXlDecoder.open(encoded, length)
+            try { return if (cancelRequested()) null else body(decoder) } finally { decoder.close() }
+        } finally {
+            chunk.fill(0)
+            encoded.clear()
+            encoded.release()
+        }
+    }
+
     private fun uriOf(media: PickedMedia): Uri? = media.platformHandle as? Uri
 
     /**
@@ -754,6 +854,9 @@ class AndroidMediaCodec private constructor(
         hint.substringBefore(';').trim().lowercase()
 
     private fun sourceType(uri: Uri, name: String?, hint: String?): String {
+        // The byte signature takes priority even when a provider supplies a
+        // specific but incorrect type. No filename is required.
+        if (isJpegXl(uri)) return "image/jxl"
         val normalized = hint?.let(::normalizeType)
         if (normalized != null && normalized !in setOf("application/octet-stream", "binary/octet-stream", "application/ogg")) {
             return normalized
@@ -784,6 +887,7 @@ class AndroidMediaCodec private constructor(
             if (type != null) return type
         }
         return when (name?.substringAfterLast('.')?.lowercase()) {
+            "jxl" -> "image/jxl"
             "avif" -> "image/avif"
             "dng" -> "image/x-adobe-dng"
             "tif", "tiff" -> "image/tiff"
@@ -881,3 +985,5 @@ private val EXIF_DATE_TIME: DateTimeFormatter =
 
 private val CONTAINER_DATE: DateTimeFormatter =
     DateTimeFormatter.ofPattern("uuuuMMdd'T'HHmmss[.SSS]'Z'").withResolverStyle(ResolverStyle.STRICT)
+
+private const val JPEG_XL_ENCODED_MAX_BYTES = 64 * 1024 * 1024

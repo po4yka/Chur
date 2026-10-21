@@ -4,10 +4,13 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asComposeImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import dev.po4yka.chur.ffi.ChurBuffer
+import dev.po4yka.chur.ffi.JpegXlDecoder
+import dev.po4yka.chur.ffi.JpegXlFrame
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.IntVar
 import kotlinx.cinterop.alloc
+import kotlinx.cinterop.get
 import kotlinx.cinterop.interpretCPointer
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
@@ -47,6 +50,7 @@ import platform.ImageIO.kCGImageSourceCreateThumbnailFromImageAlways
 import platform.ImageIO.kCGImageSourceCreateThumbnailWithTransform
 import platform.ImageIO.kCGImageSourceShouldCacheImmediately
 import platform.ImageIO.kCGImageSourceThumbnailMaxPixelSize
+import platform.posix.memcpy
 
 internal actual fun decodeThumbnail(bytes: ByteArray): ImageBitmap? =
     runCatching { Image.makeFromEncoded(bytes).toComposeImageBitmap() }.getOrNull()
@@ -66,6 +70,15 @@ internal actual fun decodeThumbnail(bytes: ByteArray): ImageBitmap? =
  */
 @OptIn(ExperimentalForeignApi::class)
 internal actual fun decodeForDisplay(original: ChurBuffer, maxEdgePx: Int): ImageBitmap? {
+    if (jpegXlSignature(original)) {
+        return runCatching {
+            val decoder = JpegXlDecoder.open(original)
+            try {
+                val frame = decoder.renderFrame(0, maxEdgePx)
+                try { jpegXlFrameBitmap(frame) } finally { frame.close() }
+            } finally { decoder.close() }
+        }.getOrNull()
+    }
     val provider = CGDataProviderCreateWithData(
         null,
         original.pointer,
@@ -151,4 +164,28 @@ internal fun rasterOf(image: CGImageRef): ImageBitmap? {
     CGContextRelease(context)
     bitmap.setImmutable()
     return bitmap.asComposeImageBitmap()
+}
+
+/** Copy decoded pixels into the UI bitmap before the zeroized native frame is released. */
+@OptIn(ExperimentalForeignApi::class)
+internal actual fun jpegXlFrameBitmap(frame: JpegXlFrame): ImageBitmap? {
+    val bitmap = Bitmap()
+    if (!bitmap.allocPixels(ImageInfo(frame.width, frame.height, ColorType.RGBA_8888, ColorAlphaType.UNPREMUL))) {
+        bitmap.close()
+        return null
+    }
+    val pixels = bitmap.peekPixels()
+    if (pixels == null) { bitmap.close(); return null }
+    try {
+        memcpy(interpretCPointer<ByteVar>(pixels.addr), frame.pixels.pointer, frame.pixels.capacityBytes.toULong())
+    } finally { pixels.close() }
+    bitmap.setImmutable()
+    return bitmap.asComposeImageBitmap()
+}
+
+@OptIn(ExperimentalForeignApi::class)
+private fun jpegXlSignature(original: ChurBuffer): Boolean {
+    if (original.capacityBytes >= 2 && original.pointer[0] == 0xffu.toUByte() && original.pointer[1] == 0x0au.toUByte()) return true
+    val signature = intArrayOf(0, 0, 0, 12, 0x4a, 0x58, 0x4c, 0x20, 13, 10, 0x87, 10)
+    return original.capacityBytes >= signature.size && signature.indices.all { original.pointer[it].toInt() == signature[it] }
 }

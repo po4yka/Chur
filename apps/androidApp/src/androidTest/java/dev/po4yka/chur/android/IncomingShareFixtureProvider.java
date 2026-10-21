@@ -19,13 +19,14 @@ public final class IncomingShareFixtureProvider extends ContentProvider {
 
     @Override public boolean onCreate() { return true; }
     @Override public String getType(Uri source) {
+        if ("jpeg-xl".equals(source.getLastPathSegment())) return "image/jpeg";
         if ("image".equals(source.getLastPathSegment())) return "image/png";
         if ("invalid-image".equals(source.getLastPathSegment())) return "image/jpeg";
         return "application/octet-stream";
     }
     @Override public Cursor query(Uri source, String[] projection, String selection, String[] selectionArgs, String sortOrder) {
         MatrixCursor cursor = new MatrixCursor(new String[]{OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE});
-        cursor.addRow(new Object[]{"image".equals(source.getLastPathSegment()) ? "shared-image.png" : "../shared-report.bin", fixtureBytes(source).length + ("truncated".equals(source.getLastPathSegment()) ? 1 : 0)});
+        cursor.addRow(new Object[]{"image".equals(source.getLastPathSegment()) ? "shared-image.png" : "../shared-report.bin", sourceBytes(source).length + ("truncated".equals(source.getLastPathSegment()) ? 1 : 0)});
         return cursor;
     }
     @Override public ParcelFileDescriptor openFile(Uri source, String mode) throws FileNotFoundException {
@@ -34,7 +35,7 @@ public final class IncomingShareFixtureProvider extends ContentProvider {
             ParcelFileDescriptor[] pipe = ParcelFileDescriptor.createPipe();
             new Thread(() -> {
                 try (ParcelFileDescriptor.AutoCloseOutputStream output = new ParcelFileDescriptor.AutoCloseOutputStream(pipe[1])) {
-                    output.write(fixtureBytes(source));
+                    output.write(sourceBytes(source));
                 } catch (IOException ignored) { /* A cancelled reader closes its pipe. */ }
             }).start();
             return pipe[0];
@@ -43,6 +44,18 @@ public final class IncomingShareFixtureProvider extends ContentProvider {
     @Override public Uri insert(Uri source, ContentValues values) { return null; }
     @Override public int delete(Uri source, String selection, String[] selectionArgs) { return 0; }
     @Override public int update(Uri source, ContentValues values, String selection, String[] selectionArgs) { return 0; }
+
+    private byte[] sourceBytes(Uri source) {
+        if (!"jpeg-xl".equals(source.getLastPathSegment()) &&
+            !"jpeg-xl-generic".equals(source.getLastPathSegment())) return fixtureBytes(source);
+        try (java.io.InputStream input = getContext().getAssets().open("jpeg-xl/still-container.jxl")) {
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            byte[] block = new byte[8192];
+            int count;
+            while ((count = input.read(block)) >= 0) output.write(block, 0, count);
+            return output.toByteArray();
+        } catch (IOException failure) { throw new IllegalStateException("JPEG XL test fixture missing", failure); }
+    }
 
     public static byte[] fixtureBytes() { return fixtureBytes(uri); }
     public static byte[] fixtureBytes(Uri source) {

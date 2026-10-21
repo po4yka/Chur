@@ -12,6 +12,7 @@ import dev.po4yka.chur.app.IncomingShareSource
 import dev.po4yka.chur.imports.AndroidMediaCodec
 import dev.po4yka.chur.imports.PickedMedia
 import dev.po4yka.chur.imports.normalizedFileContentType
+import dev.po4yka.chur.imports.jpegXlSignature
 
 /** Read grants and shared text stay in this process until one confirmed import or discard. */
 internal class AndroidIncomingShareSource(
@@ -34,7 +35,8 @@ internal class AndroidIncomingShareSource(
         return if (index in 0 until uriCount && uri != null) {
             val type = runCatching { context.contentResolver.getType(uri) }.getOrNull().orEmpty()
             val normalized = normalizedFileContentType(type)
-            val asFile = !(normalized.startsWith("image/") || normalized.startsWith("video/") || normalized.startsWith("audio/"))
+            val asFile = !(normalized.startsWith("image/") || normalized.startsWith("video/") || normalized.startsWith("audio/") ||
+                sharedJpegXl(uri))
             val media = codec.open(uri, asFile = asFile) ?: return null
             if (synchronized(lock) { closed } || !prepare(0, 0)) {
                 media.close()
@@ -50,6 +52,21 @@ internal class AndroidIncomingShareSource(
             openText()
         } else null
     }
+
+    private fun sharedJpegXl(uri: android.net.Uri): Boolean = runCatching {
+        val header = ByteArray(12)
+        try {
+            context.contentResolver.openInputStream(uri)?.use { source ->
+                var length = 0
+                while (length < header.size) {
+                    val count = source.read(header, length, header.size - length)
+                    if (count <= 0) break
+                    length += count
+                }
+                jpegXlSignature(header, length)
+            } ?: false
+        } finally { header.fill(0) }
+    }.getOrDefault(false)
 
     private fun openText(): PickedMedia? = synchronized(lock) {
         val bytes = payload.text ?: return null

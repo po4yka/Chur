@@ -24,6 +24,29 @@ final class IncomingShareSelectionTests: XCTestCase {
         try inbox.finish(batch)
         return try XCTUnwrap(inbox.pending().first)
     }
+    func testJpegXlContentWithGenericOrWrongMimeUsesTheMediaPathAndKeepsExactBytes() throws {
+        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let bytes = try Data(contentsOf: repository.appendingPathComponent("tests/media/jpeg-xl/still-container.jxl"))
+        for hint in ["application/octet-stream", "text/plain", "image/jpeg", "image/jxl"] {
+            let batch = try makeBatch(bytes, type: hint)
+            let finished = expectation(description: "JPEG XL media path for \(hint)")
+            let selection = try IncomingShareSelection(inbox: inbox, batch: batch, scratch: scratch, onClosed: {})
+            selection.load(index: 0, shouldContinue: { true }) { fd, _, type, size, path, release in
+                XCTAssertEqual(fd, -1)
+                XCTAssertEqual(type, "image/jxl")
+                XCTAssertEqual(size, Int64(bytes.count))
+                guard let path else { XCTFail("JPEG XL must reach the media decoder"); finished.fulfill(); return }
+                XCTAssertEqual(URL(fileURLWithPath: path).pathExtension, "jxl")
+                XCTAssertEqual(try? Data(contentsOf: URL(fileURLWithPath: path)), bytes)
+                release()
+                XCTAssertFalse(FileManager.default.fileExists(atPath: path))
+                finished.fulfill()
+            }
+            wait(for: [finished], timeout: 10)
+            selection.close()
+        }
+    }
     func testDocumentStreamsExactBytesWithoutPlaintextScratch() throws {
         let bytes = Data(repeating: 37, count: 2 * IncomingShareInbox.chunkSize + 5)
         let batch = try makeBatch(bytes, type: "application/pdf")

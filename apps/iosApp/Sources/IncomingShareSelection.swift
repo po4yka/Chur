@@ -68,14 +68,18 @@ final class IncomingShareSelection: @unchecked Sendable {
                 guard continuing() else { throw IncomingShareFailure.cancelled }
                 let reader = try self.inbox.open(self.files[index], shouldContinue: continuing)
                 let meta = reader.metadata
+                let jpegXl = try reader.isJpegXl(shouldContinue: continuing)
+                let nativeType = UTType(mimeType: meta.contentType)
+                let isMedia = jpegXl || nativeType.map {
+                    $0.conforms(to: .image) || $0.conforms(to: .movie) || $0.conforms(to: .audio)
+                } == true
                 // Existing ImageIO/AVFoundation codecs need a file URL. Only media
                 // uses protected scratch; documents and text always stream.
-                if let type = UTType(mimeType: meta.contentType),
-                    type.conforms(to: .image) || type.conforms(to: .movie) || type.conforms(to: .audio),
+                if isMedia,
                     let budget = try? ScratchCopy.remainingBudget(in: [self.scratch,
                         FileManager.default.temporaryDirectory.appendingPathComponent("chur-media-imports"),
                         FileManager.default.temporaryDirectory.appendingPathComponent("chur-exports")]), meta.size <= budget {
-                    let suffix = type.preferredFilenameExtension ?? "bin"
+                    let suffix = jpegXl ? "jxl" : nativeType?.preferredFilenameExtension ?? "bin"
                     let target = self.scratch.appendingPathComponent(UUID().uuidString).appendingPathExtension(suffix)
                     let fd = Darwin.open(target.path, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, S_IRUSR | S_IWUSR)
                     guard fd >= 0 else { throw IncomingShareFailure.unavailable }
@@ -87,7 +91,7 @@ final class IncomingShareSelection: @unchecked Sendable {
                     try reader.stream(to: fd, shouldContinue: continuing)
                     guard continuing() else { throw IncomingShareFailure.cancelled }
                     delivered = true
-                    loaded(-1, meta.name, meta.contentType, meta.size, target.path, release)
+                    loaded(-1, meta.name, jpegXl ? "image/jxl" : meta.contentType, meta.size, target.path, release)
                 } else {
                     var descriptors: [Int32] = [-1, -1]
                     guard pipe(&descriptors) == 0 else { throw IncomingShareFailure.unavailable }

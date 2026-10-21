@@ -131,22 +131,25 @@ class IncomingShareAndroidTest {
         try {
             vault.start()
             vault.create("incoming-media-password".encodeToByteArray(), false)
-            for (path in listOf("image", "invalid-image")) {
+            for (path in listOf("image", "invalid-image", "jpeg-xl", "jpeg-xl-generic")) {
                 val uri = IncomingShareFixtureProvider.uri.buildUpon().path(path).build()
+                val supported = path != "invalid-image"
+                val expectedBytes = context.contentResolver.openInputStream(uri)!!.use { it.readBytes() }
                 val payload = requireNotNull(incomingSharePayload(context,
                     Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, uri)))
                 val source = AndroidIncomingShareSource(context, payload)
                 try {
                     val picked = requireNotNull(source.open(0) { _, _ -> true })
-                    assertEquals(path != "image", picked.importAsFile)
-                    assertEquals(path != "image", picked.mediaPreviewUnavailable)
+                    assertEquals(!supported, picked.importAsFile)
+                    assertEquals(!supported, picked.mediaPreviewUnavailable)
                     val outcome = MediaImporter(AndroidMediaCodec(context)).import(vault, picked)
                     assertTrue("The source must remain storable: $path", outcome is MediaImporter.Outcome.Imported)
                     val id = (outcome as MediaImporter.Outcome.Imported).objectId
-                    assertEquals(path != "image", outcome.storedAsFile)
-                    assertEquals(if (path == "image") null else MediaImporter.PreviewWarning.DECODING_FAILED,
+                    assertEquals(!supported, outcome.storedAsFile)
+                    assertEquals(if (supported) null else MediaImporter.PreviewWarning.DECODING_FAILED,
                         outcome.previewWarning)
-                    assertEquals(if (path == "image") "image/png" else "image/jpeg", vault.detail(id).contentType)
+                    assertEquals(when (path) { "image" -> "image/png"; "invalid-image" -> "image/jpeg"; else -> "image/jxl" },
+                        vault.detail(id).contentType)
                     val output = File(root, path)
                     ParcelFileDescriptor.open(output, ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_READ_WRITE).use {
                         val operation = vault.beginExport(id, it.fd)
@@ -156,7 +159,7 @@ class IncomingShareAndroidTest {
                             assertEquals(0, progress.status)
                         } finally { vault.closeOperation(operation) }
                     }
-                    assertArrayEquals(IncomingShareFixtureProvider.fixtureBytes(uri), output.readBytes())
+                    assertArrayEquals(expectedBytes, output.readBytes())
                 } finally { source.close() }
             }
         } finally { vault.shutdown(); root.deleteRecursively() }

@@ -168,7 +168,7 @@ class IosMediaCodec : MediaCodec {
         val attributes = NSFileManager.defaultManager.attributesOfItemAtPath(path, null)
         val size = (attributes?.get(NSFileSize) as? NSNumber)?.longLongValue
         val bundle = try { readLivePhotoBundle(descriptor, size, validatePayloads = false) } catch (failure: Exception) { platform.posix.close(descriptor); throw failure }
-        val type = if (bundle != null) LivePhotoBundle.CONTENT_TYPE else detectedType(url, name)
+        val type = if (bundle != null) LivePhotoBundle.CONTENT_TYPE else if (jpegXlSignature(descriptor)) "image/jxl" else detectedType(url, name)
         return PickedMedia(
             descriptor = descriptor,
             seekable = true,
@@ -215,7 +215,7 @@ class IosMediaCodec : MediaCodec {
     ): PickedMedia? {
         if (descriptor < 0 || knownLength < 0) { release(); return null }
         val bundle = try { readLivePhotoBundle(descriptor, knownLength, validatePayloads = false) } catch (failure: Exception) { release(); throw failure }
-        val type = if (bundle != null) LivePhotoBundle.CONTENT_TYPE else detectedType(url, name).takeUnless { it == "application/octet-stream" }
+        val type = if (bundle != null) LivePhotoBundle.CONTENT_TYPE else (if (jpegXlSignature(descriptor)) "image/jxl" else detectedType(url, name)).takeUnless { it == "application/octet-stream" }
             ?: normalizedFileContentType(contentType.orEmpty())
         return PickedMedia(
             descriptor = descriptor,
@@ -255,6 +255,9 @@ class IosMediaCodec : MediaCodec {
         if (media.livePhoto != null) {
             val dimensions = withLivePhotoImage(media) { imageDimensions(it) }
             return ProbedMedia(MediaBounds.CLASS_IMAGE, dimensions?.first ?: 0, dimensions?.second ?: 0, 0, LivePhotoBundle.CONTENT_TYPE)
+        }
+        if (media.contentTypeHint == "image/jxl") return withJpegXl(media.descriptor) { decoder ->
+            ProbedMedia(MediaBounds.CLASS_IMAGE, decoder.width, decoder.height, 0, "image/jxl")
         }
         val url = urlOf(media)
             ?: return ProbedMedia(MediaBounds.CLASS_OPAQUE, 0, 0, 0, media.contentTypeHint)
@@ -314,7 +317,12 @@ class IosMediaCodec : MediaCodec {
         val target = MediaBounds.targetSize(kind, probe.width, probe.height) ?: return null
         var (width, height) = target
         val image = when (probe.mediaClass) {
-            MediaBounds.CLASS_IMAGE -> if (media.livePhoto == null) loadImage(url, maxOf(width, height)) else withLivePhotoImage(media) { source ->
+            MediaBounds.CLASS_IMAGE -> if (probe.contentType == "image/jxl") {
+                withJpegXl(media.descriptor) { decoder ->
+                    val frame = decoder.renderFrame(0, maxOf(width, height))
+                    try { jpegXlImage(frame) } finally { frame.close() }
+                }
+            } else if (media.livePhoto == null) loadImage(url, maxOf(width, height)) else withLivePhotoImage(media) { source ->
                 val frame = boundedThumbnail(source, maxOf(width, height)) ?: return@withLivePhotoImage null
                 try { UIImage.imageWithCGImage(frame) } finally { CGImageRelease(frame) }
             }
@@ -522,6 +530,7 @@ class IosMediaCodec : MediaCodec {
             UTType.typeWithIdentifier(imageType)?.preferredMIMEType?.let { return it }
         }
         val extension = (name ?: url.path.orEmpty()).substringAfterLast('.', "").lowercase()
+        if (extension == "jxl") return "image/jxl"
         val native = UTType.typeWithFilenameExtension(extension)
         return native?.preferredMIMEType ?: "application/octet-stream"
     }

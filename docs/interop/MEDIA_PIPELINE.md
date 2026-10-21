@@ -316,3 +316,45 @@ The Android CI emulator runs the Main10 instrumentation class in addition to
 the notes and lock tests. The iOS simulator suite reads the same fixture files.
 These tests do not establish physical-device HDR display output, performance
 at 4K, or calibrated tone-map fidelity. Those remain device acceptance checks.
+
+## 15. JPEG XL
+
+Android and iOS use the same bounded Rust decoder for standalone `.jxl` images.
+It accepts raw codestreams and standard containers. Signatures confirm the format
+when a provider gives a generic or incorrect MIME type. The canonical type is
+`image/jxl`. Explicit **Documents and files** selection keeps its opaque-file
+contract; Photos/media selection and incoming media shares use image import.
+Generic incoming shares with a JPEG XL signature also use the media path.
+Unsupported media shares retain the fallback warning; explicit file imports do
+not receive that warning.
+
+Import records upright dimensions, keeps the exact original and creates the
+existing baseline JPEG derivatives. Transparent derivatives have a white opaque
+background. The original viewer retains alpha, including associated-alpha input.
+Rendering converts supported embedded ICC profiles to 8-bit sRGB. This is SDR
+presentation, not native HDR output. Export does not decode or transcode the
+original, so source bit depth, color metadata and animation bytes remain intact.
+JPEG XL compressed ProRAW DNG is a separate RAW format; standalone JXL acceptance
+does not establish support for that RAW compression.
+
+JPEG XL animations use the settled-page viewer, reduced-motion policy,
+play/pause controls and lock disposal. Display respects frame durations and loop
+counts; zero loops means infinite playback. A finished finite animation can be
+played again. The player retains one displayed raster. Animation sources remain
+limited to 2048 pixels per edge and rendering to 1024 pixels. The general
+animation byte and frame limits also apply.
+
+The decoder limits encoded input to 64 MiB, source geometry to 16384 pixels per
+edge and 67108864 pixels total, tracked grids to 256 MiB, header prefix to 2 MiB,
+and encoded and decoded ICC profiles to 1 MiB each. Dimensions and ICC
+declarations are checked before upstream initialization. Only codestream events
+reach the decoder; unused Exif, XML and Brotli metadata is not decompressed.
+Output is at most 4096 pixels per edge, with bounded nearest-sample scaling.
+Failures return status codes. Upstream grids are released on close but cannot
+be guaranteed to be zeroized; controlled source, row and output buffers are
+cleared. This limit is recorded in the FFI contract and dependency policy.
+
+`tests/media/jpeg-xl` contains real synthetic codestream/container, orientation,
+alpha, associated-alpha, ICC, finite/infinite animation and boundary fixtures.
+Native and platform tests cover import, JPEG derivatives, displayed pixels,
+original export, animation timing and decoder disposal.

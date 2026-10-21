@@ -42,7 +42,7 @@ internal fun animationCandidate(projection: ObjectProjection): Boolean =
         PresentedState.of(projection) != PresentedState.QUARANTINED
 
 internal fun animationContentType(contentType: String?): Boolean =
-    contentType?.substringBefore(';')?.trim()?.lowercase() in setOf("image/gif", "image/webp", "image/png", "image/apng")
+    contentType?.substringBefore(';')?.trim()?.lowercase() in setOf("image/gif", "image/webp", "image/png", "image/apng", "image/jxl")
 
 /** Only the settled viewer page calls this. The source never enters a heap array or a file. */
 @Composable
