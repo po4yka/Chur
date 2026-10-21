@@ -50,6 +50,8 @@ pub const MAX_HANDLES: usize = 4_096;
 /// Each variant is behind its own `Mutex` because §8 serializes calls per
 /// handle rather than per registry.
 pub enum Entry {
+    /// A transient portable JPEG XL decoder.
+    JpegXl(Mutex<chur_media::jpeg_xl::Decoder>),
     /// The one runtime of §14.
     Runtime(Mutex<crate::runtime::Runtime>),
     /// An unlocked vault session, and the runtime that opened it.
@@ -112,7 +114,7 @@ impl Entry {
     #[must_use]
     pub const fn owner(&self) -> Option<Handle> {
         match self {
-            Entry::Runtime(_) => None,
+            Entry::Runtime(_) | Entry::JpegXl(_) => None,
             Entry::Session { runtime, .. } | Entry::Creation { runtime, .. } => Some(*runtime),
             Entry::Reader { session, .. } => Some(*session),
             Entry::Operation { owner, .. } => Some(*owner),
@@ -125,6 +127,7 @@ impl Entry {
     const fn kind(&self) -> Kind {
         match self {
             Entry::Runtime(_) => Kind::Runtime,
+            Entry::JpegXl(_) => Kind::JpegXl,
             Entry::Session { .. } => Kind::Session,
             Entry::Creation { .. } => Kind::Creation,
             Entry::Reader { .. } => Kind::Reader,
@@ -136,6 +139,8 @@ impl Entry {
 /// The handle types of §3.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
+    /// A JPEG XL decoder.
+    JpegXl,
     /// `RuntimeHandle`.
     Runtime,
     /// `VaultSessionHandle`.

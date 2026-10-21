@@ -16,6 +16,7 @@ pub mod derived;
 pub mod export;
 pub mod import;
 pub mod integrity;
+pub mod jpeg_xl;
 pub mod keys;
 mod live_photo;
 pub mod progress;

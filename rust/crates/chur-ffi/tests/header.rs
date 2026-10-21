@@ -203,6 +203,7 @@ fn the_capability_bits_match() {
             chur_ffi::CHUR_CAP_SHARED_OBJECTS,
             8,
         ),
+        ("CHUR_CAP_JPEG_XL", chur_ffi::CHUR_CAP_JPEG_XL, 9),
     ];
     assert_eq!(header.len(), expected.len());
     for (name, rust_value, bit) in expected {
@@ -427,6 +428,10 @@ fn every_declared_function_is_exported() {
         // §6.12, the recipient revocation surface added at ABI 1.8.
         "chur_sharing_revoke",
         // §6.6, the Android Keystore surface added at ABI 1.2.
+        "chur_jpeg_xl_open",
+        "chur_jpeg_xl_open_fd",
+        "chur_jpeg_xl_render",
+        "chur_jpeg_xl_close",
         "chur_vault_keystore_begin",
         "chur_vault_keystore_commit",
         "chur_vault_keystore_material",
@@ -441,7 +446,7 @@ fn every_declared_function_is_exported() {
 
     // Calling each one proves the list above is not a stale copy.
     assert_eq!(chur_ffi::chur_abi_version_major(), 7);
-    assert_eq!(chur_ffi::chur_abi_version_minor(), 0);
+    assert_eq!(chur_ffi::chur_abi_version_minor(), 1);
     assert_eq!(
         chur_ffi::chur_capabilities(),
         chur_ffi::CHUR_CAP_DECOY_VAULT
@@ -452,6 +457,7 @@ fn every_declared_function_is_exported() {
             | chur_ffi::CHUR_CAP_SYNC
             | chur_ffi::CHUR_CAP_COLLECTION_SHARING
             | chur_ffi::CHUR_CAP_SHARED_OBJECTS
+            | chur_ffi::CHUR_CAP_JPEG_XL
     );
     assert_eq!(chur_ffi::chur_object_format_min(), 1);
     assert_eq!(chur_ffi::chur_object_format_max(), 1);

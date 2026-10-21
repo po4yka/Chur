@@ -109,7 +109,7 @@ typedef int32_t chur_status_t;
 /* -------------------------------------------------------------------------
  * Capability bits, returned by chur_capabilities().
  *
- * An unknown set bit is ignored and never enables behaviour. Bits 9 to 63 are
+ * An unknown set bit is ignored and never enables behaviour. Bits 10 to 63 are
  * reserved and are zero in v1.
  * ---------------------------------------------------------------------- */
 
@@ -122,6 +122,7 @@ typedef int32_t chur_status_t;
 #define CHUR_CAP_CONCURRENT_READS (UINT64_C(1) << 6)
 #define CHUR_CAP_COLLECTION_SHARING (UINT64_C(1) << 7)
 #define CHUR_CAP_SHARED_OBJECTS (UINT64_C(1) << 8)
+#define CHUR_CAP_JPEG_XL (UINT64_C(1) << 9)
 
 /* -------------------------------------------------------------------------
  * Build-flavor bits, returned by chur_build_flavor().
@@ -844,6 +845,25 @@ chur_status_t chur_external_archive_begin(chur_handle_t runtime, const uint8_t *
  */
 chur_status_t chur_selective_export_begin(chur_handle_t session, const uint8_t *request, uint32_t length, int32_t descriptor, chur_handle_t *out_operation);
 chur_status_t chur_selective_import_begin(chur_handle_t session, const uint8_t *request, uint32_t length, int32_t descriptor, chur_handle_t *out_operation);
+
+/* ABI 7.1: bounded portable JPEG XL. Input is borrowed; no pointer is retained.
+ * Open FD borrows and duplicates the descriptor without changing its offset.
+ * Decoder handles require close, including when the vault locks.
+ * Source limit 64 MiB, 64M pixels, 1024 displayed frames; grid tracker 256 MiB.
+ * Render max_edge is 1..4096; never upscales. RGBA8 sRGB, straight alpha.
+ * Output size is floor(source dimension * min(1,max_edge / longest edge)),
+ * each dimension at least one. Capacity must cover output width*height*4.
+ */
+typedef struct ChurJpegXlInfoV1 {
+    uint32_t width;
+    uint32_t height;
+    uint32_t frame_count;
+    uint32_t loop_count;
+} ChurJpegXlInfoV1;
+chur_status_t chur_jpeg_xl_open(const uint8_t *source, size_t length, chur_handle_t *out_handle, ChurJpegXlInfoV1 *out_info);
+chur_status_t chur_jpeg_xl_open_fd(int32_t descriptor, chur_handle_t *out_handle, ChurJpegXlInfoV1 *out_info);
+chur_status_t chur_jpeg_xl_render(chur_handle_t handle, uint32_t index, uint32_t max_edge, uint8_t *destination, size_t capacity, uint32_t *out_duration_ms);
+chur_status_t chur_jpeg_xl_close(chur_handle_t handle);
 
 #ifdef __cplusplus
 } /* extern "C" */

@@ -327,3 +327,56 @@ A dependency that captures logs, crashes, analytics, sessions, screens, or netwo
 ### Note attachment serialization
 
 The catalog reuses already-pinned workspace `serde`/`serde_json` and existing `base64ct` 1.8.3 (alloc) for the portable JSON package and standard padded Base64. These are direct dependency edges to libraries already present in the production lockfile; no package version, crypto algorithm, network loader, or archive extractor is added. Temporary file bytes, Base64 strings and export buffers are zeroized. Native catalog validation remains independent of the UI package decoder.
+
+### Portable JPEG XL decoder (2026-10-21)
+
+The user approved `jxl-oxide =0.12.6` for Android and iOS. The OS codec alone
+cannot provide the same JPEG XL support on both platforms. The crate is a
+pure Rust decoder, under MIT OR Apache-2.0. Its optional `moxcms` feature
+converts embedded ICC profiles to sRGB. Default features are off: no Rayon,
+image encoder, CLI, native C codec, or network client enters the app graph.
+The exact requirement follows the user's approval. Review a security update
+before changing this pin.
+
+The lockfile adds the `jxl-*` parser and rendering crates, Brotli decoding,
+tracing, allocation helpers, and `moxcms` with `pxfm`, `num-traits`, and
+`autocfg`. All licenses pass the existing allow list. Published source was
+scanned for process, network, environment, and home-directory access. Runtime
+parser code has no such access. `num-traits/build.rs` only runs compiler
+feature probes through `autocfg`; it was read before the first build. The
+candidate graph passed `cargo deny --locked check`: advisories, licenses,
+bans, and sources. The pre-existing duplicate `syn` versions remain warnings.
+
+Treat every source as untrusted. The adapter admits only a codestream or
+standard container signature, at most 64 MiB encoded bytes, source dimensions
+at most 16384 per edge and 64 Mi pixels, 1024 displayed frames, and 4096
+internal frames. It checks source dimensions before feeding remaining frame
+payloads. ImageHeader is parsed before decoder initialization. Encoded and decoded ICC
+profile declarations are each capped at 1 MiB, before upstream ICC allocations.
+The retained header prefix is at most 2 MiB. The adapter uses the container
+parser to extract codestream events only: Exif, XML, compressed `brob`, JPEG
+reconstruction, and other ancillary boxes never enter the pixel decoder. This
+avoids unbounded decompression of metadata that viewing does not need. The
+already locked `jxl-bitstream`, `jxl-oxide-common`, `jxl-coding`, and `jxl-grid`
+crates are direct dependencies for this preflight and typed allocation errors.
+The decoder grid allocation tracker has a 256 MiB ceiling. That
+tracker does not cover every dependency allocation, including compressed
+input, ICC profiles, and frame metadata; the encoded-size and frame limits
+provide additional bounds. Each output is at most 4096 per edge. Output is
+RGBA8 sRGB with straight alpha; this is an SDR display path, not HDR output.
+Scaling does not upscale and uses nearest samples.
+
+The caller keeps source bytes in a transient direct buffer or supplies a
+borrowed seekable FD. FD reads use positional IO and do not change its offset.
+There are no plaintext temporary files. Rust clears its transient 4 KiB encoded
+read buffer and row buffer, and Kotlin clears each caller-owned output before
+release. The upstream decoder's private cached grids do not expose a secure
+wipe API: close releases those allocations, with the same residual allocator
+risk as a platform image decoder. Do not claim that decoder close proves
+zeroization of every upstream allocation. Viewers must close the decoder and
+release image surfaces on lock, disposal, and memory pressure.
+
+Every C and JNI export contains panics and returns fixed status codes, with
+no untrusted decoder error text. Handles use the existing typed generational
+registry; forged values are never dereferenced. ABI 7.1 adds four decoder
+exports and capability bit 9 without changing the vault or sync format.

@@ -36,7 +36,7 @@ chur_key_slot_format_max() -> uint16_t
 chur_build_flavor()        -> uint32_t
 ```
 
-- native API version is the (major, minor) pair. The current library reports 7.0: pairing control records are version 2 without service addresses or tokens, and `chur_peer_call` supplies ephemeral direct peer IO; §6.4 reads bounded text for every scope and binds cursors to the complete query filter; §6.25 adds attachment counts and bounded note-owned file operations while retaining explicit note format, and §6.30 retains the caller-persisted import and album identities introduced in published ABI 3.0; §6.19 changes the album-list record, §6.20 adds atomic album placement, §6.21 adds tag and favourite selection controls, §6.22 adds recoverable trash, §6.23 stages the recovery slot until its phrase is confirmed, §6.24 reads and acknowledges the sync fork state, §6.25 adds local private notes, §6.26 adds selective archives, §6.26.1 adds external-file encryption, §6.28 adds the encrypted content index, and §6.29 adds atomic album removal. Incoming OS sharing reuses the existing import surface. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
+- native API version is the (major, minor) pair. The current library reports 7.1: portable bounded JPEG XL decoding is additive; pairing control records are version 2 without service addresses or tokens, and `chur_peer_call` supplies ephemeral direct peer IO; §6.4 reads bounded text for every scope and binds cursors to the complete query filter; §6.25 adds attachment counts and bounded note-owned file operations while retaining explicit note format, and §6.30 retains the caller-persisted import and album identities introduced in published ABI 3.0; §6.19 changes the album-list record, §6.20 adds atomic album placement, §6.21 adds tag and favourite selection controls, §6.22 adds recoverable trash, §6.23 stages the recovery slot until its phrase is confirmed, §6.24 reads and acknowledges the sync fork state, §6.25 adds local private notes, §6.26 adds selective archives, §6.26.1 adds external-file encryption, §6.28 adds the encrypted content index, and §6.29 adds atomic album removal. Incoming OS sharing reuses the existing import surface. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
 - the object-format range is the inclusive `container_version` interval this build reads, using the values registered in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15;
 - the key-slot range is the inclusive key-slot format interval;
 - build flavor is a bitfield: bit 0 set means a release build, bit 1 set means debug assertions are compiled in, bit 2 set means test hooks are compiled in. A release application refuses a library with bit 1 or bit 2 set;
@@ -55,7 +55,8 @@ chur_build_flavor()        -> uint32_t
 | 6 | `CHUR_CAP_CONCURRENT_READS` | one reader handle serves parallel reads (§8) |
 | 7 | `CHUR_CAP_COLLECTION_SHARING` | local sharing identity and collection records available |
 | 8 | `CHUR_CAP_SHARED_OBJECTS` | authenticated source publication and recipient object activation available |
-| 9-63 | reserved | zero in v1 |
+| 9 | `CHUR_CAP_JPEG_XL` | bounded portable JPEG XL decoding available (§6.31) |
+| 10-63 | reserved | zero in v1 |
 
 An unknown set bit is ignored and never enables behavior. Minor and capability differences are negotiated only within explicitly compatible behavior; they never select cryptographic suites from untrusted input.
 
@@ -67,6 +68,7 @@ Opaque handles represent:
 RuntimeHandle
 VaultSessionHandle
 ObjectReaderHandle
+JpegXlDecoderHandle
 ImportHandle
 ExportHandle
 IntegrityScanHandle
@@ -75,7 +77,7 @@ IntegrityScanHandle
 Requirements:
 
 - `chur_handle_t` is `uint64_t`: the low 32 bits index a typed registry slot, the high 32 bits carry that slot's generation counter. It is never a raw pointer and never a business ID; `0` is the null handle;
-- explicit owner runtime/session;
+- explicit owner runtime/session for vault handles; the standalone JPEG XL decoder owns no vault authority and requires explicit host close;
 - thread affinity and concurrency fixed per handle type by the table in §8, not per instance;
 - close is idempotent for every handle type without exception: the first close releases the resources, and every later close of the same value returns success and does nothing. Close never returns `NOT_FOUND` or `SESSION_EXPIRED`; closing a value this process never issued returns `INVALID_INPUT`, which the generation counter makes distinguishable from a re-close;
 - a handle value is never reissued: the generation counter of a slot increments on every allocation, so a stale value cannot alias a live handle for the life of the process;
@@ -925,7 +927,7 @@ Permanent deletion revokes every reader for that object in the same physical vau
 
 `chur_album_create(session, name, name_length, requested_album_id, out_album_id)` similarly accepts an optional random ID. Replaying an existing matching ID/name returns the existing ID without resetting its placement or membership; conflicting metadata is `INVALID_INPUT`. The desktop records folder IDs before creation and reapplies parent placement on resume.
 
-This is an incompatible native ABI change: the caller-persisted identity layout was introduced in ABI 3.0. Current bundled C/JNI/Kotlin/iOS callers use ABI 7.0, which retains this layout and adds private-note format; the host rejects every earlier major. The encrypted container, catalog and key-slot formats do not change. Desktop protocol version 2 requires these transfer identities and identifies the open vault during pairing; no version-1 control compatibility path is retained.
+This is an incompatible native ABI change: the caller-persisted identity layout was introduced in ABI 3.0. Current bundled C/JNI/Kotlin/iOS callers use ABI 7.1, which retains this layout and adds private-note format; the host rejects every earlier major. The encrypted container, catalog and key-slot formats do not change. Desktop protocol version 2 requires these transfer identities and identifies the open vault during pairing; no version-1 control compatibility path is retained.
 
 ### Direct peer IO
 
@@ -936,3 +938,46 @@ Listen returns `port:u16 || secret[32]`. Connect takes a canonical string contai
 There is one ephemeral connection per session. Vault lock, session close, runtime close, and panic invalidation close it even if an app coroutine has not completed. Every call rechecks the unlocked session before IO. Android JNI and iOS cinterop map the same export. Pairing control records and the encrypted approval credential payload are version 2 and include no network endpoint or transport token.
 
 Pairing-evidence command 10 has empty input and returns a presence byte followed, when present, by the current version-2 `DevicePairingCredentials` record. Native code revalidates the encrypted catalog approval before returning it. A finalized or absent approval returns only zero. No network connection is opened or recovered.
+
+
+### 6.31 Portable JPEG XL decoding, ABI 7.1
+
+`CHUR_CAP_JPEG_XL` enables `chur_jpeg_xl_open`, `chur_jpeg_xl_open_fd`,
+`chur_jpeg_xl_render`, and `chur_jpeg_xl_close`, as declared in `chur.h`.
+These additions keep major ABI 7 and all vault and sync formats unchanged.
+A host checks ABI 7.1 and capability bit 9 before it calls the decoder.
+
+The decoder accepts a borrowed authenticated direct buffer or a borrowed
+seekable FD. It reads an FD from offset zero with positional IO, closes only
+its duplicate, and does not change the caller's offset. It retains no caller
+pointer. Android providers without positional IO use a bounded transient
+direct buffer. No plaintext temporary file is required.
+
+One typed generational handle owns each decoder. Calls on that handle,
+including close, are serialized; work may run on any host worker thread.
+A host closes the decoder when viewing stops, on cancellation, on vault lock,
+and on memory pressure. Close is idempotent. The decoder has no session,
+keys, storage authority, or access to other objects.
+
+Open reports oriented source width, height, displayed frame count, and the
+animation repeat count (zero means infinite). Render writes caller-owned
+RGBA8 sRGB with straight alpha and reports the frame duration in milliseconds.
+This is an SDR display path. It preserves source aspect ratio, never upscales,
+and samples at a maximum edge of 1..4096. The host clears and releases each
+output after it copies the pixels to a platform surface.
+
+The source ceiling is 64 MiB encoded, 16384 per edge, 64 Mi pixels, 1024
+displayed frames, and 4096 internal frames. Source dimensions are checked
+before decoder initialization. Encoded and expanded ICC profile declarations
+are each capped at 1 MiB; the retained header prefix is at most 2 MiB.
+Ancillary container boxes are skipped before pixel decoding, including
+compressed metadata. Decoder grid storage has a 256 MiB allocation tracker.
+Other allocations remain bounded by input, ICC, prefix, and frame limits;
+the tracker alone is not a process-wide memory limit.
+
+Malformed or incomplete image payloads fail with fixed status codes. The
+boundary contains panics and validates handles before access. It never
+returns decoder error strings. Rust clears its 4 KiB IO and raster row
+buffers. Upstream decoder grids have no secure wipe API: close releases them
+but does not prove allocator zeroization. The host also releases the platform
+image surface when the vault locks.

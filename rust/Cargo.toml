@@ -76,6 +76,13 @@ rusqlite = { version = "0.40", default-features = false, features = [
 jni = { version = "0.22", default-features = false }
 
 
+# Portable JPEG XL parser. Explicitly approved; see DEPENDENCY_POLICY.md.
+jxl-bitstream = "=1.1.0"
+jxl-oxide-common = "=1.0.0"
+jxl-coding = "=1.0.1"
+jxl-grid = "=0.6.2"
+jxl-oxide = { version = "=0.12.6", default-features = false, features = ["moxcms"] }
+
 # Errors and CLI.
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }

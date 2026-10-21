@@ -52,8 +52,8 @@ int main(void) {
           "neither format range is the empty panic fallback");
 
     check(chur_abi_version_major() == 7, "major ABI version is 7");
-    check(chur_abi_version_minor() == 0,
-          "minor ABI version is 0, including persisted transfer identities and private note formats");
+    check(chur_abi_version_minor() == 1,
+          "minor ABI version is 1, including portable JPEG XL decoding");
 
     check(chur_object_format_min() <= chur_object_format_max(),
           "object format range is ordered");
@@ -87,7 +87,7 @@ int main(void) {
                             CHUR_CAP_SEQUENTIAL_READER | CHUR_CAP_INTEGRITY_SCAN |
                             CHUR_CAP_BACKUP_PACKAGE | CHUR_CAP_SYNC |
                             CHUR_CAP_CONCURRENT_READS |
-                            CHUR_CAP_COLLECTION_SHARING | CHUR_CAP_SHARED_OBJECTS)) == 0,
+                            CHUR_CAP_COLLECTION_SHARING | CHUR_CAP_SHARED_OBJECTS | CHUR_CAP_JPEG_XL)) == 0,
           "no reserved capability bit is set");
 
     uint32_t flavor = chur_build_flavor();

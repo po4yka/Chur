@@ -76,6 +76,9 @@ subprojects {
             .withPropertyName("churHostJniLibrary")
             .withPathSensitivity(PathSensitivity.NONE)
         systemProperty("java.library.path", hostLibraryDirectory.asFile.absolutePath)
+        val jpegXlFixtures = rootProject.layout.projectDirectory.dir("tests/media/jpeg-xl")
+        inputs.dir(jpegXlFixtures).withPathSensitivity(PathSensitivity.RELATIVE)
+        environment("CHUR_JPEG_XL_FIXTURES", jpegXlFixtures.asFile.absolutePath)
     }
 
     // `docs/DEPENDENCY_POLICY.md` "Lockfiles": the committed gradle.lockfile

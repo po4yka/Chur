@@ -22,6 +22,14 @@ internal object ChurJni {
         System.loadLibrary("chur_jni")
     }
 
+    external fun jpegXlOpen(source: ByteBuffer, length: Int, outHandle: LongArray, outInfo: IntArray): Int
+
+    external fun jpegXlOpenFd(descriptor: Int, outHandle: LongArray, outInfo: IntArray): Int
+
+    external fun jpegXlRender(handle: Long, index: Int, maxEdge: Int, destination: ByteBuffer, outDuration: IntArray): Int
+
+    external fun jpegXlClose(handle: Long): Int
+
     external fun abiVersionMajor(): Int
 
     external fun abiVersionMinor(): Int

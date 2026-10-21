@@ -3916,3 +3916,129 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_peerCall<'local>(
         finish_written(env, status, &out_written, written)
     })
 }
+
+/// Opens a JPEG XL direct buffer.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_jpegXlOpen<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    source: JByteBuffer<'local>,
+    length: jint,
+    out_handle: JLongArray<'local>,
+    out_info: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((address, capacity)) = direct_buffer(env, &source) else {
+            return INVALID_INPUT;
+        };
+        if length <= 0 || length as usize > capacity {
+            return INVALID_INPUT;
+        }
+        let mut handle = 0;
+        let mut info = chur_ffi::jpeg_xl::ChurJpegXlInfoV1::default();
+        // SAFETY: direct buffer capacity and both local records are valid for the call.
+        let status = unsafe {
+            chur_ffi::jpeg_xl::chur_jpeg_xl_open(address, length as usize, &mut handle, &mut info)
+        };
+        jpeg_xl_open_result(env, status, handle, info, &out_handle, &out_info)
+    })
+}
+
+/// Opens a borrowed JPEG XL source descriptor.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_jpegXlOpenFd<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    descriptor: jint,
+    out_handle: JLongArray<'local>,
+    out_info: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let mut handle = 0;
+        let mut info = chur_ffi::jpeg_xl::ChurJpegXlInfoV1::default();
+        // SAFETY: both output records are live locals.
+        let status =
+            unsafe { chur_ffi::jpeg_xl::chur_jpeg_xl_open_fd(descriptor, &mut handle, &mut info) };
+        jpeg_xl_open_result(env, status, handle, info, &out_handle, &out_info)
+    })
+}
+
+fn jpeg_xl_open_result(
+    env: &mut Env<'_>,
+    status: jint,
+    handle: u64,
+    info: chur_ffi::jpeg_xl::ChurJpegXlInfoV1,
+    out_handle: &JLongArray<'_>,
+    out_info: &JIntArray<'_>,
+) -> jint {
+    if status != 0 {
+        return status;
+    }
+    if !write_ints(
+        env,
+        out_info,
+        &[
+            info.width as jint,
+            info.height as jint,
+            info.frame_count as jint,
+            info.loop_count as jint,
+        ],
+    ) || !write_long(env, out_handle, 0, handle as jlong)
+    {
+        chur_ffi::jpeg_xl::chur_jpeg_xl_close(handle);
+        return INVALID_INPUT;
+    }
+    0
+}
+
+/// Renders a JPEG XL frame into a direct buffer.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_jpegXlRender<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    index: jint,
+    max_edge: jint,
+    destination: JByteBuffer<'local>,
+    out_duration: JIntArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some((address, capacity)) = direct_buffer(env, &destination) else {
+            return INVALID_INPUT;
+        };
+        if index < 0 || max_edge < 1 {
+            return INVALID_INPUT;
+        }
+        let mut duration = 0;
+        // SAFETY: destination is a direct buffer; duration is a writable local.
+        let status = unsafe {
+            chur_ffi::jpeg_xl::chur_jpeg_xl_render(
+                handle_of(handle),
+                index as u32,
+                max_edge as u32,
+                address,
+                capacity,
+                &mut duration,
+            )
+        };
+        if status != 0 {
+            return status;
+        }
+        if !write_ints(env, &out_duration, &[duration.min(i32::MAX as u32) as jint]) {
+            return INVALID_INPUT;
+        }
+        0
+    })
+}
+
+/// Closes a JPEG XL decoder.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_jpegXlClose(
+    _env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) -> jint {
+    crate::convert::contain(INTERNAL_FAILURE, || {
+        chur_ffi::jpeg_xl::chur_jpeg_xl_close(handle_of(handle))
+    })
+}

@@ -26,6 +26,7 @@ pub mod api;
 pub mod content_index;
 pub mod device_pairing;
 pub mod external_archive;
+pub mod jpeg_xl;
 pub mod own_sync;
 pub mod peer;
 pub mod selective;
@@ -71,7 +72,7 @@ pub const ABI_VERSION_MAJOR: u32 = 7;
 /// ABI 6 reads bounded query text for every scope and binds cursors to its complete filter.
 /// It retains ABI 3 caller-persisted import and album identities for safe desktop retries.
 /// A caller from an earlier major must refuse before exchanging any payload.
-pub const ABI_VERSION_MINOR: u32 = 0;
+pub const ABI_VERSION_MINOR: u32 = 1;
 
 /// Capability bit: independent decoy identity supported.
 pub const CHUR_CAP_DECOY_VAULT: u64 = 1 << 0;
@@ -91,6 +92,9 @@ pub const CHUR_CAP_CONCURRENT_READS: u64 = 1 << 6;
 pub const CHUR_CAP_COLLECTION_SHARING: u64 = 1 << 7;
 /// Capability bit: authenticated source publication and recipient object activation.
 pub const CHUR_CAP_SHARED_OBJECTS: u64 = 1 << 8;
+
+/// Capability bit: bounded portable JPEG XL decoder.
+pub const CHUR_CAP_JPEG_XL: u64 = 1 << 9;
 
 /// Build-flavor bit: this is a release build.
 pub const CHUR_FLAVOR_RELEASE: u32 = 1 << 0;
@@ -153,7 +157,8 @@ const CAPABILITIES: u64 = CHUR_CAP_DECOY_VAULT
     | CHUR_CAP_BACKUP_PACKAGE
     | CHUR_CAP_SYNC
     | CHUR_CAP_COLLECTION_SHARING
-    | CHUR_CAP_SHARED_OBJECTS;
+    | CHUR_CAP_SHARED_OBJECTS
+    | CHUR_CAP_JPEG_XL;
 
 /// The major ABI version.
 // SAFETY: the function takes no pointer, reads no caller memory, and returns a
@@ -302,7 +307,7 @@ mod tests {
     #[test]
     fn the_handshake_answers_every_documented_fact() {
         assert_eq!(chur_abi_version_major(), 7);
-        assert_eq!(chur_abi_version_minor(), 0);
+        assert_eq!(chur_abi_version_minor(), 1);
         assert_eq!(chur_object_format_min(), 1);
         assert_eq!(chur_object_format_max(), 1);
         assert_eq!(chur_key_slot_format_min(), 1);
@@ -362,7 +367,8 @@ mod tests {
             0,
             "a capability is declared but every reader handle is still serialized"
         );
-        for bit in 9..64 {
+        assert_ne!(declared & CHUR_CAP_JPEG_XL, 0);
+        for bit in 10..64 {
             assert_eq!(
                 declared & (1 << bit),
                 0,

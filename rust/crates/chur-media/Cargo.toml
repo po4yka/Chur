@@ -15,6 +15,11 @@ chur-catalog.workspace = true
 chur-sync-protocol.workspace = true
 
 zeroize.workspace = true
+jxl-oxide.workspace = true
+jxl-bitstream.workspace = true
+jxl-oxide-common.workspace = true
+jxl-coding.workspace = true
+jxl-grid.workspace = true
 
 [lints]
 workspace = true
