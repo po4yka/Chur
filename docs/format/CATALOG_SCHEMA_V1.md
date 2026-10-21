@@ -231,6 +231,8 @@ Deletion runs in this order and no other:
 
 Steps 1 and 2 are the atomic boundary §17 requires for deletion. Steps 3 to 6 are garbage collection: each is idempotent, none is required for the crypto-erasure claim of [`../security/SECURITY_INVARIANTS.md`](../security/SECURITY_INVARIANTS.md) SEC-026, and a crash inside them loses no security property.
 
+`object_search` and `private_note_search` use the FTS5 `secure-delete` option, so a removed search row does not stay in the index segments. After the removal of a private note commits, by purge from Trash or by expiry, the engine runs a `wal_checkpoint(TRUNCATE)`, so the old note pages do not stay in the WAL. The purge is committed before this step, so a failed checkpoint (for example, one that a reader blocks) does not make the purge fail. Every unlock runs the checkpoint again after its sweeps.
+
 A permanent source deletion first persists its signed `PurgeObject` in the durable outgoing log. Receipt of this terminal event removes every local object envelope, pending envelope, and disposable private prekey in the accepted-log transaction, and writes a permanent tombstone even when no object row exists. The native receive/process completion path always verifies WAL truncation before it reports success. A tombstone referenced by an own-vault or shared signed log remains after physical collection, so later epochs and replay cannot issue another key request.
 
 Garbage collection runs at the first unlock of a session and again after each deletion that session performs. It never runs while locked, because it needs the catalog key that lock has already zeroized. A run sweeps every row left in `DELETING` or `TOMBSTONED`, so an interrupted deletion always completes rather than being repaired.
