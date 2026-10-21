@@ -548,6 +548,7 @@ Consequences:
 - `filesDir/vaults/`, including `incoming/` and `quarantine/`, never enters an archive, and neither does `filesDir/registry/`;
 - `noBackupFilesDir/` and `cacheDir/` are excluded by the platform as well, so the device slot and the scratch directory are excluded twice;
 - release MUST fail when either file names a path under `vaults/` or `registry/`, or declares `<include domain="root">` or `<include domain="external">`;
+- `scripts/check-backup-rules.py` checks `<cloud-backup>` and `<device-transfer>` each on its own, because a section that is absent or has no `<include>` backs up every file; it also fails on any `device_*` include, on a path that normalizes to the whole domain or uses `..`, on any unknown or namespaced element, and when the manifest does not name both rule files. With `--merged-manifest`, which CI runs after the debug build, it checks the merged manifest too, so a library or variant manifest cannot replace either attribute;
 - the exclusion MUST be proved by an actual backup and restore run, not by reading the XML.
 
 ---

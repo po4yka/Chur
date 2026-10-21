@@ -187,8 +187,10 @@ jobs:
       # external domain. An <include> set makes everything else excluded, so
       # widening one is how vault storage would enter an archive, and it would
       # enter silently. The script also checks that the public shell's own two
-      # paths are still included, which DISCREET_MODE.md requires.
+      # paths are still included, which DISCREET_MODE.md requires, checks each
+      # data-extraction section on its own, and checks the manifest wiring.
       - run: python3 scripts/check-backup-rules.py
+      - run: python3 -m unittest discover -s scripts -p test_check_backup_rules.py -v
 
   native-targets:
     name: native targets (${{ matrix.kind }})
@@ -300,6 +302,10 @@ jobs:
       # error. The instrumented tests are assembled here and the notes/lock
       # and HEVC Main10 checks run that application on an owned emulator.
       - run: ./gradlew --no-daemon :apps:androidApp:assembleDebug :apps:androidApp:lintDebug :apps:androidApp:assembleDebugAndroidTest
+      # ANDROID.md 13.4: the merged manifest is what the platform reads, so a
+      # library or variant manifest must not replace either backup-rules file.
+      - name: check the backup wiring of the merged manifest
+        run: python3 scripts/check-backup-rules.py --merged-manifest
       - name: install the Android notes UI test image
         run: |
           set -euo pipefail
