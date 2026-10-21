@@ -1,0 +1,102 @@
+{
+  "fixture": "main10-long-gop-vfr.mp4",
+  "sdk": 37,
+  "model": "Pixel 8 Pro",
+  "buildType": "debug instrumentation",
+  "cacheState": "not flushed; repeated runs share process and filesystem caches",
+  "firstFrameEndpoint": "first observed rendered video buffer after mounting the app player",
+  "memoryScope": "sampled whole-app process PSS; excludes separate codec processes and unreported GPU memory",
+  "strictVideoSupported": true,
+  "result": "measured",
+  "iterations": [
+    {
+      "iteration": 1,
+      "firstFrameMs": 484,
+      "seeks": [
+        {
+          "targetMs": 15375,
+          "latencyMs": 874,
+          "observedFramePtsUs": 15400000
+        },
+        {
+          "targetMs": 57750,
+          "latencyMs": 684,
+          "observedFramePtsUs": 57820000
+        },
+        {
+          "targetMs": 31125,
+          "latencyMs": 933,
+          "observedFramePtsUs": 31140000
+        }
+      ],
+      "steadyWindowMs": 5155,
+      "steadyRenderedBuffers": 96,
+      "steadyDroppedBuffers": 0,
+      "appProcessCpuMs": 3965,
+      "baselineProcessPssKiB": 153692,
+      "maxObservedProcessPssKiB": 186927,
+      "afterReleaseProcessPssKiB": 133043
+    },
+    {
+      "iteration": 2,
+      "firstFrameMs": 451,
+      "seeks": [
+        {
+          "targetMs": 15375,
+          "latencyMs": 856,
+          "observedFramePtsUs": 15400000
+        },
+        {
+          "targetMs": 57750,
+          "latencyMs": 676,
+          "observedFramePtsUs": 57820000
+        },
+        {
+          "targetMs": 31125,
+          "latencyMs": 885,
+          "observedFramePtsUs": 31140000
+        }
+      ],
+      "steadyWindowMs": 5177,
+      "steadyRenderedBuffers": 98,
+      "steadyDroppedBuffers": 0,
+      "appProcessCpuMs": 3762,
+      "baselineProcessPssKiB": 125183,
+      "maxObservedProcessPssKiB": 197620,
+      "afterReleaseProcessPssKiB": 161262
+    },
+    {
+      "iteration": 3,
+      "firstFrameMs": 298,
+      "seeks": [
+        {
+          "targetMs": 15375,
+          "latencyMs": 918,
+          "observedFramePtsUs": 15400000
+        },
+        {
+          "targetMs": 57750,
+          "latencyMs": 612,
+          "observedFramePtsUs": 57820000
+        },
+        {
+          "targetMs": 31125,
+          "latencyMs": 944,
+          "observedFramePtsUs": 31140000
+        }
+      ],
+      "steadyWindowMs": 5192,
+      "steadyRenderedBuffers": 99,
+      "steadyDroppedBuffers": 0,
+      "appProcessCpuMs": 3574,
+      "baselineProcessPssKiB": 193819,
+      "maxObservedProcessPssKiB": 193819,
+      "afterReleaseProcessPssKiB": 143657
+    }
+  ],
+  "firstFrameP50Ms": 451,
+  "firstFrameP95Ms": 484,
+  "seekP50Ms": 874,
+  "seekP95Ms": 944,
+  "percentileMethod": "nearest rank; 3 startup samples and 9 seek samples, not a population estimate"
+}

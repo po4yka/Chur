@@ -317,6 +317,18 @@ the notes and lock tests. The iOS simulator suite reads the same fixture files.
 These tests do not establish physical-device HDR display output, performance
 at 4K, or calibrated tone-map fidelity. Those remain device acceptance checks.
 
+The [extended video acceptance](../assurance/VIDEO_ACCEPTANCE_2026-10-21.md)
+adds real encoded 4K60, VFR/long-GOP and portrait inputs, plus an unchanged
+public camera-origin Dolby Vision sample with pinned source and license.
+Android and iOS test encrypted decode, actual frame timestamps after seek,
+exact original export and reader invalidation. The short Dolby Vision sample
+tests its initial frame and preservation, not sustained playback.
+The [HDR output checks](../assurance/VIDEO_HDR_OUTPUT_2026-10-21.md) verify
+native color output and the Pixel's app-layer PQ/HLG dataspaces. The
+[performance checks](../assurance/VIDEO_PERFORMANCE_2026-10-21.md) record
+startup, seeks, dropped frames and process memory. They do not set universal
+speed limits or equate simulator buffer decode with physical HDR output.
+
 ## 15. JPEG XL
 
 Android and iOS use the same bounded Rust decoder for standalone `.jxl` images.

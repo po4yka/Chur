@@ -1,0 +1,47 @@
+{
+  "schema_version" : 1,
+  "platform" : "ios",
+  "simulator" : 1,
+  "device_model" : "iPhone",
+  "os_version" : "27.0",
+  "fixture" : "main10-4k60.mp4",
+  "passed" : 1,
+  "measurement_scope" : "encrypted local playback using AVPlayerItemVideoOutput; not on-screen frame pacing",
+  "threshold_policy" : "No device-independent performance threshold is asserted",
+  "memory_before_player" : {
+    "resident_bytes" : 439205888,
+    "process_peak_resident_bytes" : 475365376,
+    "scope" : "Whole native test process; peak includes earlier tests and is not a decoder-only allocation"
+  },
+  "ready_to_play_ms" : 4402.2030833293684,
+  "first_decoded_frame_ms" : 4412.7415833354462,
+  "memory_after_first_frame" : {
+    "resident_bytes" : 497614848,
+    "process_peak_resident_bytes" : 497614848,
+    "scope" : "Whole native test process; peak includes earlier tests and is not a decoder-only allocation"
+  },
+  "decoded_frames_observed_during_sampling" : 0,
+  "decoded_frame_sampling_seconds" : 0.75020854166359641,
+  "seek_to_decoded_frame" : [
+    {
+      "target_seconds" : 0.5,
+      "elapsed_ms" : 12963.101916655432
+    },
+    {
+      "target_seconds" : 1.5,
+      "elapsed_ms" : 284.59137500612997
+    }
+  ],
+  "native_dropped_video_frames" : 0,
+  "native_dropped_video_frames_reason" : "AVPlayerItem access-log counters",
+  "memory_after_playback_and_seeks" : {
+    "resident_bytes" : 693551104,
+    "process_peak_resident_bytes" : 695648256,
+    "scope" : "Whole native test process; peak includes earlier tests and is not a decoder-only allocation"
+  },
+  "memory_after_player_release_and_lock" : {
+    "resident_bytes" : 384860160,
+    "process_peak_resident_bytes" : 722649088,
+    "scope" : "Whole native test process; peak includes earlier tests and is not a decoder-only allocation"
+  }
+}

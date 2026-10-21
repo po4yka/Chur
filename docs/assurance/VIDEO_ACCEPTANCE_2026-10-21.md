@@ -65,4 +65,5 @@ A physical iPhone was unavailable. Simulator results do not establish iPhone
 camera coverage, physical HDR display output, calibrated tone-map fidelity,
 sustained 4K60 playback, large-file throughput or thermal behavior. The 64-second
 low-resolution input tests timestamp and seek mechanics, not a four-hour or
-high-bitrate recording.
+high-bitrate recording. The [HDR](VIDEO_HDR_OUTPUT_2026-10-21.md) and
+[performance](VIDEO_PERFORMANCE_2026-10-21.md) reports keep these checks separate.
