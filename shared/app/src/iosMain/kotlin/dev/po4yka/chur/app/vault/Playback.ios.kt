@@ -55,6 +55,7 @@ import platform.AVFoundation.AVFoundationErrorDomain
 import platform.AVFoundation.AVPlayerItemStatusFailed
 import platform.AVFoundation.error
 import platform.AVFoundation.status
+import platform.AVFoundation.playable
 import platform.AVFoundation.AVAsset
 import platform.AVFoundation.AVAssetResourceLoader
 import platform.AVFoundation.AVAssetResourceLoaderDelegateProtocol
@@ -175,6 +176,10 @@ actual fun VaultPlayer(
         while (true) {
             val item = player.currentItem
             if (item?.status == AVPlayerItemStatusReadyToPlay) {
+                // Native playback can accept AAC while silently dropping an
+                // unsupported MP4 video track. A ready item alone is not proof
+                // that this video asset is playable.
+                if (!audio && nativeProblem == null) nativeProblem = iosVideoPlaybackSupportProblem(item)
                 if (!groupsLoaded) {
                     audioGroup = item.asset.mediaSelectionGroupForMediaCharacteristic(AVMediaCharacteristicAudible)
                     subtitleGroup = item.asset.mediaSelectionGroupForMediaCharacteristic(AVMediaCharacteristicLegible)
@@ -385,7 +390,7 @@ internal fun privatePlayerItem(loader: ChurResourceLoader): AVPlayerItem {
     asset.resourceLoader.setDelegate(loader, loaderQueue)
     return AVPlayerItem(
         asset as AVAsset,
-        automaticallyLoadedAssetKeys = listOf("availableMediaCharacteristicsWithMediaSelectionOptions"),
+        automaticallyLoadedAssetKeys = listOf("playable", "availableMediaCharacteristicsWithMediaSelectionOptions"),
     )
 }
 
@@ -543,6 +548,9 @@ private fun ByteArray.toNSData(): NSData = usePinned { pinned ->
 }
 
 /** Native codec failures are separate from authenticated reader failures. */
+internal fun iosVideoPlaybackSupportProblem(item: AVPlayerItem): PlaybackProblem? =
+    if (item.status == AVPlayerItemStatusReadyToPlay && !item.asset.playable) PlaybackProblem.UNSUPPORTED else null
+
 internal fun iosNativePlaybackProblem(error: NSError?): PlaybackProblem =
     if (error != null && error.domain == AVFoundationErrorDomain &&
         (error.code == AVErrorDecoderNotFound || error.code == AVErrorFileFormatNotRecognized)

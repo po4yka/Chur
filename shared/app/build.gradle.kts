@@ -317,4 +317,8 @@ tasks.withType<KotlinNativeSimulatorTest>().configureEach {
     inputs.dir(livePhotoFixtures).withPathSensitivity(PathSensitivity.RELATIVE)
     environment("CHUR_LIVE_PHOTO_FIXTURES", livePhotoFixtures.asFile.absolutePath)
     environment("SIMCTL_CHILD_CHUR_LIVE_PHOTO_FIXTURES", livePhotoFixtures.asFile.absolutePath)
+    val hevcFixtures = rootProject.layout.projectDirectory.dir("tests/media/hevc-main10")
+    inputs.dir(hevcFixtures).withPathSensitivity(PathSensitivity.RELATIVE)
+    environment("CHUR_HEVC_MAIN10_FIXTURES", hevcFixtures.asFile.absolutePath)
+    environment("SIMCTL_CHILD_CHUR_HEVC_MAIN10_FIXTURES", hevcFixtures.asFile.absolutePath)
 }
