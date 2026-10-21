@@ -8,15 +8,76 @@ import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
 import android.graphics.drawable.Icon
 import android.util.Log
+import java.io.File
+import java.io.IOException
+import java.security.MessageDigest
+import java.security.SecureRandom
 import dev.po4yka.chur.app.LauncherAction
 import java.util.concurrent.Executors
 
-/** Fixed, public capabilities only. Never publish session state or private content. */
+/**
+ * Fixed, public capabilities only. Never publish session state or private content.
+ *
+ * The one extra is the per-install [LauncherToken]. MainActivity is exported, so
+ * any app can send it an action; only the launcher that holds the shortcut has the
+ * token, and an action without it is an ordinary launch.
+ */
 internal fun launcherShortcutIntent(context: Context, action: LauncherAction): Intent =
     Intent(context, MainActivity::class.java).apply {
         this.action = action.externalAction
         flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        putExtra(EXTRA_LAUNCHER_TOKEN, LauncherToken.get(context))
     }
+
+/** The launcher action of [intent], or null when the action or the launcher token is wrong. */
+internal fun externalLauncherAction(context: Context, intent: Intent): LauncherAction? =
+    LauncherAction.fromExternalAction(intent.action)?.takeIf { LauncherToken.matches(context, intent) }
+
+internal const val EXTRA_LAUNCHER_TOKEN = "dev.po4yka.chur.extra.LAUNCHER_TOKEN"
+
+/**
+ * A random value that only Chur and the launcher know. It names no vault, session or
+ * identity, and it stays in noBackupFilesDir, so a restored install makes a new one
+ * and republishes its shortcuts.
+ */
+internal object LauncherToken {
+    @Volatile private var cached: String? = null
+
+    fun get(context: Context): String = cached ?: synchronized(this) {
+        cached ?: load(context.applicationContext).also { cached = it }
+    }
+
+    /**
+     * True only when [intent] carries this install's token. A token that cannot be
+     * read or stored matches nothing: the shortcut then opens the app with no command.
+     */
+    fun matches(context: Context, intent: Intent): Boolean {
+        val supplied = try { intent.getStringExtra(EXTRA_LAUNCHER_TOKEN) } catch (_: RuntimeException) { null }
+            ?: return false
+        val expected = try { get(context) } catch (_: IOException) { return false } catch (_: RuntimeException) { return false }
+        return MessageDigest.isEqual(supplied.toByteArray(), expected.toByteArray())
+    }
+
+    /** Drops the cached value, so the next use reads storage again. Tests only. */
+    @androidx.annotation.VisibleForTesting
+    internal fun forget() = synchronized(this) { cached = null }
+
+    private fun load(context: Context): String {
+        val file = File(context.noBackupFilesDir, "launcher-token")
+        val stored = try { file.readText() } catch (_: IOException) { null }
+        if (stored != null && TOKEN.matches(stored)) return stored
+        val token = ByteArray(16).also(SecureRandom()::nextBytes).joinToString("") { "%02x".format(it.toInt() and 255) }
+        val temporary = File(context.noBackupFilesDir, "launcher-token.tmp")
+        temporary.writeText(token)
+        if (!temporary.renameTo(file)) {
+            temporary.delete()
+            throw IOException("the launcher token could not be stored")
+        }
+        return token
+    }
+
+    private val TOKEN = Regex("[0-9a-f]{32}")
+}
 
 internal fun launcherShortcutInfos(context: Context): List<ShortcutInfo> =
     LauncherAction.entries.mapIndexed { rank, action ->
@@ -58,6 +119,10 @@ internal object LauncherShortcuts {
         worker.execute {
             try {
                 publish(application)
+            } catch (_: IOException) {
+                // The launcher token could not be read or stored; publish nothing
+                // rather than shortcuts that no launch would accept.
+                Log.w("ChurShortcuts", "App actions could not be refreshed.")
             } catch (_: RuntimeException) {
                 // The OS may refuse updates while the device user is locked.
                 // Retry on the next foreground/locale refresh, never by polling.
