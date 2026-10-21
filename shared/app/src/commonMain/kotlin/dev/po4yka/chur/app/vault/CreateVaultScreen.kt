@@ -93,13 +93,13 @@ fun CreateVaultScreen(
     var confirmationChecked by remember { mutableStateOf(false) }
     val colors = LocalChurColors.current
     val matching = password.isNotEmpty() && password == confirmation &&
-        (!usePin || isValidVaultPin(password))
+        (if (usePin) isValidVaultPin(password) else isAcceptableNewPassword(password))
     val confirmationMismatch = confirmationChecked && confirmation.isNotEmpty() && password != confirmation
     val confirmationHint = when {
         confirmationMismatch -> if (usePin) "PINs do not match." else "Passwords do not match."
         matching -> if (usePin) "PINs match. Ready to create vault." else "Passwords match. Ready to create vault."
         usePin -> "Enter the same 12–20 digit PIN in both fields to enable Create vault."
-        else -> "Enter the same password in both fields to enable Create vault."
+        else -> "Enter the same password of at least 12 characters in both fields to enable Create vault."
     }
     Surface(color = colors.canvas, modifier = Modifier.fillMaxSize()) {
         Column(

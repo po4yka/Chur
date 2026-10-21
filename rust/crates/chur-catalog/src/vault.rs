@@ -274,6 +274,7 @@ pub fn create_with_params(
     // not write a slot.
     password::check_memory_available(params)?;
     let canonical = password::canonical_bytes(password)?;
+    check_new_password(&canonical)?;
 
     // §11: the registry holds at most two entries.
     let existing = root_dir.registry_names()?;
@@ -1377,6 +1378,7 @@ impl Session {
         let root = self.root_secret()?;
         password::check_memory_available(params)?;
         let canonical = password::canonical_bytes(password)?;
+        check_new_password(&canonical)?;
         let generation = self.next_slot_generation(SlotType::Password);
         let slot = seal_password_slot(
             &self.descriptor.vault_id,
@@ -1664,6 +1666,28 @@ fn is_device_slot(entry: &KeySlotDescriptor) -> bool {
         entry.slot_type,
         SlotType::AndroidKeystore | SlotType::AppleKeychain
     )
+}
+
+/// Refuses a new or changed password shorter than
+/// `docs/security/PASSWORD_PROFILE.md` §3 allows.
+///
+/// Only a slot that is being created is checked. An unlock never is, so a
+/// slot made before the rule existed still opens. The count is of Unicode
+/// scalar values, so a host cannot meet it with bytes alone.
+fn check_new_password(canonical: &[u8]) -> Result<()> {
+    let characters = core::str::from_utf8(canonical)
+        .map_err(|_| {
+            Error::new(
+                ChurStatus::InvalidInput,
+                "password bytes are not valid UTF-8",
+            )
+        })?
+        .chars()
+        .count();
+    if characters < chur_core::limits::password::NEW_MIN_CHARS {
+        bail!(InvalidInput, "a new password needs at least 12 characters");
+    }
+    Ok(())
 }
 
 fn read_entry(root_dir: &VaultRoot, name: &RegistryName) -> Result<Vec<u8>> {
@@ -2650,13 +2674,13 @@ mod tests {
         let root_dir = scratch();
         drop(make(&root_dir));
         drop(
-            create(&root_dir, b"second", 1)
+            create(&root_dir, b"the second identity", 1)
                 .expect("create")
                 .activate()
                 .expect("activate"),
         );
         assert_eq!(
-            rejection(create(&root_dir, b"third", 1)),
+            rejection(create(&root_dir, b"the third identity", 1)),
             ChurStatus::ResourceLimitExceeded
         );
     }
@@ -3026,6 +3050,42 @@ mod tests {
         std::fs::remove_file(&path).expect("remove");
         std::fs::create_dir(&path).expect("directory");
         second.begin_android_keystore_slot().expect("begin");
+    }
+
+    #[test]
+    fn a_new_or_changed_password_needs_twelve_characters() {
+        let root_dir = scratch();
+        assert_eq!(
+            rejection(create(&root_dir, b"1234a", 1)),
+            ChurStatus::InvalidInput
+        );
+        // Eleven scalar values in more than twelve bytes is still too short.
+        assert_eq!(
+            rejection(create(
+                &root_dir,
+                "\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}abcde".as_bytes(),
+                1
+            )),
+            ChurStatus::InvalidInput
+        );
+        let mut session = create(&root_dir, b"123456789012", 1)
+            .expect("a 12-digit PIN")
+            .activate()
+            .expect("activate");
+        assert_eq!(
+            rejection(session.replace_password(b"short", Argon2Params::v1_default())),
+            ChurStatus::InvalidInput
+        );
+        session
+            .replace_password(b"a longer passphrase", Argon2Params::v1_default())
+            .expect("change");
+        drop(session);
+        // An unlock is never held to the rule: a short attempt is only a wrong
+        // credential, so a slot made before the rule still opens.
+        assert_eq!(
+            rejection(unlock_with_password(&root_dir, b"short", 1)),
+            ChurStatus::AuthenticationFailed
+        );
     }
 
     #[test]

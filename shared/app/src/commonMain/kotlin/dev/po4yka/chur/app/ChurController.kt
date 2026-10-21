@@ -2,7 +2,7 @@ package dev.po4yka.chur.app
 
 import dev.po4yka.chur.app.vault.PresentedState
 import dev.po4yka.chur.app.vault.ThumbnailCache
-import dev.po4yka.chur.app.vault.isValidVaultPin
+import dev.po4yka.chur.app.vault.isAcceptableNewPassword
 import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.AlbumSummary
 import dev.po4yka.chur.ffi.ChurFailure
@@ -581,9 +581,8 @@ class ChurController(
 
     /** Creates a vault, `PROVISIONING.md` §3. */
     fun create(password: String, offerRecovery: Boolean) = requestPhrase {
-        if (password.isNotEmpty() && password.all { it in '0'..'9' } &&
-            password.length <= 20 && !isValidVaultPin(password)) {
-            say("Use at least 12 digits for a vault PIN.")
+        if (!isAcceptableNewPassword(password)) {
+            say(NEW_PASSWORD_RULE)
             return@requestPhrase
         }
         val epoch = endOpenSession()
@@ -1753,9 +1752,8 @@ class ChurController(
 
     /** Replaces the password slot with a password or a long numeric PIN. */
     fun changePassword(password: String) = guarded {
-        if (password.isEmpty() ||
-            (password.all { it in '0'..'9' } && password.length <= 20 && !isValidVaultPin(password))) {
-            say("Use a password or a PIN of at least 12 digits.")
+        if (!isAcceptableNewPassword(password)) {
+            say(NEW_PASSWORD_RULE)
             return@guarded
         }
         val bytes = password.encodeToByteArray()
@@ -3241,6 +3239,9 @@ class ChurController(
     private companion object {
         /** The confirmation of `DESIGN.md` §17.1 step 6. */
         const val PHRASE_SAVED = "Recovery phrase saved."
+
+        /** The rule a new or changed credential meets, `PASSWORD_PROFILE.md` §3. */
+        const val NEW_PASSWORD_RULE = "Use at least 12 characters, or a PIN of at least 12 digits."
 
         /** The routes whose screen is a credential form, which reads [formError]. */
         val FORM_ROUTES: Set<AppRoute> = setOf(

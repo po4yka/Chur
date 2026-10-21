@@ -28,7 +28,10 @@ case folding: none
 encoding: strict UTF-8
 maximum encoded length: 1024 bytes
 empty password: rejected for new vaults
+minimum length of a new or changed password: 12 Unicode scalar values
 ```
+
+The minimum applies when a password slot is created: at vault creation and at a password change. It does not apply at unlock, so a slot made before this rule still opens. Rust enforces it in `vault::create` and `Session::replace_password` (`chur_core::limits::password::NEW_MIN_CHARS`), so no host can bypass it, and returns `INVALID_INPUT` for a shorter password. A PIN of 12 to 20 digits meets the rule. The Kotlin forms apply the same rule before they call Rust, and count code points as Rust counts scalar values. With m=64 MiB and t=3, an offline attack on a short password from a copied registry is practical, which is why the floor exists.
 
 The profile identifier is stored in the password slot. Android, iOS, and CLI must produce identical bytes for identical input. Future normalization cannot reinterpret existing slots; it requires a new profile ID.
 

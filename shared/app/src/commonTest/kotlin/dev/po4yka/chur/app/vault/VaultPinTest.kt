@@ -16,4 +16,19 @@ class VaultPinTest {
         assertFalse(isValidVaultPin(" 123456789012"))
         assertFalse(isValidVaultPin("١٢٣٤٥٦٧٨٩٠١٢"))
     }
+
+    @Test
+    fun a_new_password_needs_twelve_characters_or_a_valid_pin() {
+        // `PASSWORD_PROFILE.md` section 3: the same floor Rust applies.
+        assertFalse(isAcceptableNewPassword(""))
+        assertFalse(isAcceptableNewPassword("1234a"))
+        assertFalse(isAcceptableNewPassword("abcdefghijk"))
+        assertTrue(isAcceptableNewPassword("abcdefghijkl"))
+        assertTrue(isAcceptableNewPassword("123456789012"))
+        assertFalse(isAcceptableNewPassword("12345678901"))
+        // A surrogate pair is one character, as Rust counts scalar values.
+        val emoji = "\uD83D\uDE00"
+        assertFalse(isAcceptableNewPassword(emoji.repeat(11)))
+        assertTrue(isAcceptableNewPassword(emoji.repeat(12)))
+    }
 }
