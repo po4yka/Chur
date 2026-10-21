@@ -29,6 +29,22 @@ use zeroize::Zeroizing;
 /// itself outside the protection.
 const PRE_KEY_PRAGMAS: &str = "PRAGMA cipher_memory_security = ON;\n";
 
+/// The cipher parameters of every catalog, set after the key and before the
+/// first page is read.
+///
+/// They are the SQLCipher 4 defaults that every existing catalog was written
+/// with. They are pinned so that a later SQLCipher with other defaults cannot
+/// make an existing catalog unreadable, or write a new one in another format.
+/// With the raw-key pragma, `kdf_iter` does not derive the page key; it is
+/// pinned with the rest so the full profile is stated in one place.
+const CIPHER_PRAGMAS: &str = "\
+PRAGMA cipher_page_size = 4096;
+PRAGMA cipher_hmac_algorithm = HMAC_SHA512;
+PRAGMA cipher_kdf_algorithm = PBKDF2_HMAC_SHA512;
+PRAGMA kdf_iter = 256000;
+PRAGMA cipher_plaintext_header_size = 0;
+";
+
 /// The pragmas the connection sets once the key has opened a page.
 ///
 /// `synchronous = FULL` is required rather than preferred:
@@ -153,6 +169,7 @@ impl CatalogDb {
         };
         db.apply_batch(PRE_KEY_PRAGMAS, "a catalog memory pragma was refused")?;
         db.apply_key(key)?;
+        db.apply_batch(CIPHER_PRAGMAS, "a catalog cipher pragma was refused")?;
         db.check_readable()?;
         db.apply_batch(SESSION_PRAGMAS, "a catalog session pragma was refused")?;
         Ok(db)
@@ -492,6 +509,82 @@ mod tests {
             !bytes.windows(6).any(|window| window == b"canary"),
             "a written value appears in the file"
         );
+    }
+
+    /// Reads one cipher setting as text, whatever type SQLCipher reports.
+    fn cipher_setting(connection: &Connection, name: &str) -> String {
+        connection
+            .query_row(&format!("PRAGMA {name}"), [], |row| {
+                Ok(match row.get::<_, rusqlite::types::Value>(0)? {
+                    rusqlite::types::Value::Integer(value) => value.to_string(),
+                    rusqlite::types::Value::Text(value) => value,
+                    other => panic!("unexpected {name} value {other:?}"),
+                })
+            })
+            .expect(name)
+    }
+
+    /// The SQLCipher 4 profile that catalogs written before the parameters
+    /// were pinned use, read from the bundled library's defaults.
+    const V4_PROFILE: [(&str, &str); 5] = [
+        ("cipher_page_size", "4096"),
+        ("cipher_hmac_algorithm", "HMAC_SHA512"),
+        ("cipher_kdf_algorithm", "PBKDF2_HMAC_SHA512"),
+        ("kdf_iter", "256000"),
+        ("cipher_plaintext_header_size", "0"),
+    ];
+
+    #[test]
+    fn the_pinned_cipher_parameters_are_the_sqlcipher_4_defaults() {
+        let directory = tempdir();
+        let path = directory.join("catalog.db");
+        let (_root, _vault, catalog) = key();
+        let db = CatalogDb::open(&CatalogLocation::File(&path), &catalog).expect("create");
+        for (name, value) in V4_PROFILE {
+            assert_eq!(cipher_setting(db.connection(), name), value, "{name}");
+        }
+        // A connection with no cipher pragma reports the library defaults; they
+        // must equal the pinned values, or catalogs written before the pin
+        // would have another format.
+        let unpinned = Connection::open_in_memory().expect("open");
+        unpinned
+            .pragma_update(None, "key", catalog.raw_key_pragma().as_str())
+            .expect("key");
+        for (name, value) in V4_PROFILE {
+            assert_eq!(cipher_setting(&unpinned, name), value, "default {name}");
+        }
+        db.close().expect("close");
+        std::fs::remove_dir_all(directory).expect("cleanup");
+    }
+
+    #[test]
+    fn a_catalog_written_without_pinned_parameters_still_opens() {
+        let directory = tempdir();
+        let path = directory.join("catalog.db");
+        let (_root, _vault, catalog) = key();
+        {
+            // The open path before the pin: the memory pragma, the raw key,
+            // and the session pragmas, with no cipher parameter.
+            let old = Connection::open(&path).expect("create");
+            old.execute_batch(PRE_KEY_PRAGMAS).expect("memory pragma");
+            old.pragma_update(None, "key", catalog.raw_key_pragma().as_str())
+                .expect("key");
+            old.execute_batch(SESSION_PRAGMAS).expect("session pragmas");
+            old.execute_batch(
+                "CREATE TABLE probe (value TEXT); INSERT INTO probe VALUES ('kept');",
+            )
+            .expect("write");
+            old.close().map_err(|(_, error)| error).expect("close");
+        }
+        let db = CatalogDb::open(&CatalogLocation::File(&path), &catalog).expect("reopen");
+        let value: String = db
+            .connection()
+            .query_row("SELECT value FROM probe", [], |row| row.get(0))
+            .expect("read");
+        assert_eq!(value, "kept");
+        db.verify_cipher_pages().expect("every page authenticates");
+        db.close().expect("close");
+        std::fs::remove_dir_all(directory).expect("cleanup");
     }
 
     /// A private temporary directory that outlives the test body.

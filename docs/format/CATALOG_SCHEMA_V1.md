@@ -258,6 +258,8 @@ Proposed:
 
 The catalog key reaches SQLCipher through the raw-key pragma. It is already a full-entropy HKDF output under `chur/v1/root/catalog-database`, so SQLCipher's own password KDF is not run over it: a second KDF would add cost without adding entropy and would put a second profile into the at-rest format.
 
+The connection sets the cipher parameters explicitly after the key and before it reads the first page: `cipher_page_size = 4096`, `cipher_hmac_algorithm = HMAC_SHA512`, `cipher_kdf_algorithm = PBKDF2_HMAC_SHA512`, `kdf_iter = 256000`, and `cipher_plaintext_header_size = 0`. These are the SQLCipher 4 defaults, and every catalog written before they were pinned uses them. A SQLCipher update that changes its defaults therefore does not change the page format. A change to these values is a format change and needs a migration.
+
 `synchronous` is `FULL` and `journal_mode` is `WAL`. The pair is required rather than preferred, because §11 makes a journal reservation durable only under a mode that survives power loss, and `NORMAL` in WAL mode returns from a commit once the write reaches the operating system.
 
 [ADR-0038](../adr/0038-adopt-sqlcipher-as-the-v1-catalog-engine.md) records the build, size, linkage, WAL, licensing, and migration evidence. Performance and energy on a device from [ADR-0017](../adr/0017-freeze-the-supported-device-set.md), and backup correctness, are still outstanding.
