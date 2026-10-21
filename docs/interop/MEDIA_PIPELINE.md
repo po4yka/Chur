@@ -230,6 +230,29 @@ Derivative generation must define:
 
 Pixel-identical cross-platform thumbnails may be impractical; cryptographic binding and declared generator profile are required even when output differs.
 
+Video thumbnails and posters use an 8-bit SDR sRGB bitmap before JPEG encoding.
+Android requests `ARGB_8888` from `MediaMetadataRetriever`, uses the platform's
+HDR frame conversion, and draws into an sRGB bitmap. iOS sets
+`AVAssetImageGenerator.dynamicRangePolicy` to `ForceSDR`, then draws into an
+8-bit sRGB Core Graphics context. If that generator reports `AVErrorDecodeFailed`,
+iOS retries with `MatchSource`; Core Graphics maps the HDR image into the same
+SDR context. The platform owns the HDR tone map; the app
+does not relabel PQ or HLG samples as sRGB. A failed frame conversion leaves
+the original intact and reports an incomplete preview under §13. This policy
+does not change the original video's codec, bit depth, color metadata, or bytes.
+Android 10 has no native HDR poster conversion in this path. It reports an
+unavailable preview for a PQ or HLG source and keeps the original for playback
+and export. Main10 SDR preview remains available when its decoder is supported.
+
+HEVC Main10 can contain SDR or HDR video. Native decoder and display support
+are separate requirements. A successful MP4 metadata probe does not prove that
+the device can decode its profile, level, resolution, or frame rate. Android
+also reports unsupported video or audio tracks when the other track can play.
+iOS loads the asset's `playable` key before readiness and rejects an unplayable
+video even when its audio track lets `AVPlayerItem` become ready. In particular,
+an unsupported `hev1` sample entry must not appear to play as audio-only video.
+Chur does not rewrite sample entries in the original to make a decoder accept it.
+
 ## 12. Limits
 
 - still image at most 16384 px in either dimension and at most 67108864 px in total; a source above either bound is rejected before decode;
@@ -277,3 +300,19 @@ A regular Photos selection may contain a Live Photo, a RAW/JPEG pair, or edited 
 - storage full and process death;
 - derivative revision invalidation;
 - no plaintext cache/scratch leakage.
+
+[`tests/media/hevc-main10`](../../tests/media/hevc-main10/README.md) contains
+real 10-bit HEVC MP4 fixtures for SDR, PQ, and HLG with `hvc1` and `hev1` sample
+entries. The iOS `hvc1` tests require native poster generation, encrypted playback
+with a decoded video frame, seeking, and byte-identical original export. The
+`hev1` cases verify native rejection, an unsupported result and user message, intact
+original export, and reader invalidation after lock.
+Android requires these results when its decoder reports support. If it has no
+decoder, the tests require an explicit unsupported result and intact export;
+Android 10 HDR preview follows the unavailable-preview policy in §11. A decoder
+that reports support must decode the fixture. No decoder case is skipped.
+The fixtures also exercise SDR sRGB preview output and cancellation or reader invalidation.
+The Android CI emulator runs the Main10 instrumentation class in addition to
+the notes and lock tests. The iOS simulator suite reads the same fixture files.
+These tests do not establish physical-device HDR display output, performance
+at 4K, or calibrated tone-map fidelity. Those remain device acceptance checks.

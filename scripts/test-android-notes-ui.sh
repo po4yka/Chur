@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the real notes/lock UI tests on one disposable Linux/KVM emulator.
+# Run the notes/lock and HEVC Main10 tests on one disposable Linux/KVM emulator.
 # The APKs are built by the Android application job; this script never compiles.
 set -euo pipefail
 
@@ -125,9 +125,18 @@ if grep -Eq 'INSTRUMENTATION_(FAILED|ABORTED)|INSTRUMENTATION_STATUS_CODE: -[0-9
     echo "Instrumentation failed, skipped a selected test, or aborted" >&2
     exit 1
 fi
+timeout 600 "$adb" -s "$serial" shell am instrument -w -r \
+    -e class dev.po4yka.chur.android.HevcMain10AndroidTest \
+    "$application.test/androidx.test.runner.AndroidJUnitRunner" 2>&1 | tr -d '\r' | tee "$results/instrumentation-hevc-main10.txt"
+grep -Eq '^OK \(3 tests\)$' "$results/instrumentation-hevc-main10.txt"
+grep -Eq '^INSTRUMENTATION_CODE: -1$' "$results/instrumentation-hevc-main10.txt"
+if grep -Eq 'INSTRUMENTATION_(FAILED|ABORTED)|INSTRUMENTATION_STATUS_CODE: -[0-9]+|FAILURES!!!|shortMsg=' "$results/instrumentation-hevc-main10.txt"; then
+    echo "HEVC Main10 instrumentation failed, skipped a selected test, or aborted" >&2
+    exit 1
+fi
 collect_artifacts
 [[ "$files_collected" == true ]] || { echo "Could not retrieve the UI screenshots" >&2; exit 1; }
 [[ -n "$(find "$results/screenshots" -name private-note-managed-image-public-fixture.png -print -quit)" ]] || {
     echo "The actual native attachment image screenshot is missing" >&2; exit 1;
 }
-echo "All 22 notes and lock UI tests passed; screenshots and device logs: $results"
+echo "All 22 notes/lock and 3 HEVC Main10 tests passed; screenshots and device logs: $results"
