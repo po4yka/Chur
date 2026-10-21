@@ -101,7 +101,9 @@ unsafe fn control(
             return Err(chur_core::err!(InvalidInput, "the handle is not a session"));
         };
         let mut guard = registry::lock(guarded);
-        let mut out = Zeroizing::new(Vec::new());
+        // The response bound is reserved first, so a response within it never
+        // regrows and releases a smaller buffer of index text without a wipe.
+        let mut out = Zeroizing::new(Vec::with_capacity(CAPACITY));
         body(guard.catalog()?, &mut r, &mut out)?;
         ensure!(
             out.len() <= CAPACITY,

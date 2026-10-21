@@ -114,9 +114,16 @@ impl<const N: usize> Secret<N> {
     ///
     /// It is a named method rather than a `Clone` implementation so a duplicate
     /// of a secret is always visible at the call site.
+    ///
+    /// The bytes are copied into a value that already has the `Drop` wipe, so
+    /// no bare array copy exists between the read and the new owner. Prefer
+    /// this to `Secret::new(*other.expose())`, whose dereference makes an
+    /// unnamed array that nothing wipes.
     #[must_use]
     pub fn duplicate(&self) -> Self {
-        Self(self.0)
+        let mut copy = Self::zeroed();
+        copy.0.copy_from_slice(&self.0);
+        copy
     }
 }
 

@@ -158,6 +158,8 @@ Private metadata is revisioned rather than mutating ciphertext in place. Fields 
 
 The logical model may store queryable plaintext inside an unlocked SQLCipher database, but persisted pages remain encrypted and the database key is session-scoped.
 
+In v1 the queryable columns of `metadata_revisions` are the only copy of the revision. SQLCipher under `CatalogDatabaseKey` is their only protection at rest. No v1 writer seals a revision under `MetadataKey` or `CatalogRecordRootKey`, and the `record` column is reserved for a sealed canonical revision and stays empty. Private-note rows and search rows follow the same rule.
+
 ### 8.1 Timestamp provenance
 
 Two times are stored per object and neither is trusted:
@@ -231,6 +233,8 @@ Deletion runs in this order and no other:
 
 Steps 1 and 2 are the atomic boundary §17 requires for deletion. Steps 3 to 6 are garbage collection: each is idempotent, none is required for the crypto-erasure claim of [`../security/SECURITY_INVARIANTS.md`](../security/SECURITY_INVARIANTS.md) SEC-026, and a crash inside them loses no security property.
 
+`object_search` and `private_note_search` use the FTS5 `secure-delete` option, so a removed search row does not stay in the index segments. After the removal of a private note commits, by purge from Trash or by expiry, the engine runs a `wal_checkpoint(TRUNCATE)`, so the old note pages do not stay in the WAL. The purge is committed before this step, so a failed checkpoint (for example, one that a reader blocks) does not make the purge fail. Every unlock runs the checkpoint again after its sweeps.
+
 A permanent source deletion first persists its signed `PurgeObject` in the durable outgoing log. Receipt of this terminal event removes every local object envelope, pending envelope, and disposable private prekey in the accepted-log transaction, and writes a permanent tombstone even when no object row exists. The native receive/process completion path always verifies WAL truncation before it reports success. A tombstone referenced by an own-vault or shared signed log remains after physical collection, so later epochs and replay cannot issue another key request.
 
 Garbage collection runs at the first unlock of a session and again after each deletion that session performs. It never runs while locked, because it needs the catalog key that lock has already zeroized. A run sweeps every row left in `DELETING` or `TOMBSTONED`, so an interrupted deletion always completes rather than being repaired.
@@ -257,6 +261,8 @@ Proposed:
 **Known implementation divergence:** current `chur-media::backup::CatalogSnapshot` copies the encrypted physical database into a backup. It does not satisfy the canonical-export requirement above. [Backup format](BACKUP_FORMAT_V1.md#current-implementation-and-portability-gap) and [release gates](../assurance/RELEASE_GATES.md) track the required compatibility decision and cross-build restore evidence; this note does not weaken that requirement.
 
 The catalog key reaches SQLCipher through the raw-key pragma. It is already a full-entropy HKDF output under `chur/v1/root/catalog-database`, so SQLCipher's own password KDF is not run over it: a second KDF would add cost without adding entropy and would put a second profile into the at-rest format.
+
+The connection sets the cipher parameters explicitly after the key and before it reads the first page: `cipher_page_size = 4096`, `cipher_hmac_algorithm = HMAC_SHA512`, `cipher_kdf_algorithm = PBKDF2_HMAC_SHA512`, `kdf_iter = 256000`, and `cipher_plaintext_header_size = 0`. These are the SQLCipher 4 defaults, and every catalog written before they were pinned uses them. A SQLCipher update that changes its defaults therefore does not change the page format. A change to these values is a format change and needs a migration.
 
 `synchronous` is `FULL` and `journal_mode` is `WAL`. The pair is required rather than preferred, because §11 makes a journal reservation durable only under a mode that survives power loss, and `NORMAL` in WAL mode returns from a commit once the write reaches the operating system.
 

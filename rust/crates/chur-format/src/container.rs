@@ -1330,6 +1330,17 @@ impl Layout {
 ///
 /// Opening authenticates the manifest, so every later operation works from
 /// trusted structure. Nothing here returns plaintext whose tag has not verified.
+///
+/// Opening does not authenticate the final commit, so a single chunk read
+/// cannot detect a truncated container. The chunk read is therefore internal,
+/// and a caller outside this crate reads through [`ContainerReader::read_range`]
+/// or [`ContainerReader::verify_complete`], which check the final commit first:
+///
+/// ```compile_fail
+/// fn chunk(reader: &chur_format::container::ContainerReader<'_>) {
+///     let _ = reader.read_chunk(0);
+/// }
+/// ```
 pub struct ContainerReader<'a> {
     bytes: &'a [u8],
     manifest: CanonicalManifest,
@@ -1424,11 +1435,14 @@ impl<'a> ContainerReader<'a> {
 
     /// Reads and authenticates one chunk.
     ///
+    /// It does not check the final commit, so it cannot detect truncation. Only
+    /// the readers in this module call it, after they have checked the commit.
+    ///
     /// # Errors
     ///
     /// Returns [`ChurStatus::ObjectIncomplete`] when the record is absent and
     /// [`ChurStatus::ObjectCorrupt`] when it is malformed or does not verify.
-    pub fn read_chunk(&self, chunk_index: u64) -> Result<Zeroizing<Vec<u8>>> {
+    pub(crate) fn read_chunk(&self, chunk_index: u64) -> Result<Zeroizing<Vec<u8>>> {
         ensure!(
             chunk_index < self.layout.chunk_count,
             ObjectIncomplete,
@@ -1559,7 +1573,9 @@ impl<'a> ContainerReader<'a> {
             InvalidInput,
             "range extends past the authenticated object length"
         );
-        let mut out = Zeroizing::new(Vec::new());
+        let mut out = reserve_range(length)?;
+        let capacity = usize::try_from(length)
+            .map_err(|_| Error::new(ChurStatus::ResourceLimitExceeded, "range exceeds a usize"))?;
         if length == 0 {
             return Ok(out);
         }
@@ -1578,10 +1594,35 @@ impl<'a> ContainerReader<'a> {
                 ObjectCorrupt,
                 "range slice is outside an authenticated chunk"
             );
+            // A chunk longer than the canonical chunking would overrun the
+            // reservation and regrow the buffer.
+            ensure!(
+                out.len() + (to - from) <= capacity,
+                ObjectCorrupt,
+                "an authenticated chunk is longer than its range"
+            );
             out.extend_from_slice(&plaintext[from..to]);
         }
         Ok(out)
     }
+}
+
+/// Reserves a range buffer before any plaintext enters it.
+///
+/// A vector that grew while it was filled would release each smaller buffer,
+/// with plaintext in it, without a wipe. A reservation the allocator refuses
+/// is a resource failure, not an abort.
+fn reserve_range(length: u64) -> Result<Zeroizing<Vec<u8>>> {
+    let capacity = usize::try_from(length)
+        .map_err(|_| Error::new(ChurStatus::ResourceLimitExceeded, "range exceeds a usize"))?;
+    let mut out = Zeroizing::new(Vec::new());
+    out.try_reserve_exact(capacity).map_err(|_| {
+        Error::new(
+            ChurStatus::ResourceLimitExceeded,
+            "the range buffer could not be reserved",
+        )
+    })?;
+    Ok(out)
 }
 
 fn byte_at(bytes: &[u8], offset: u64) -> Result<u8> {
@@ -2193,9 +2234,9 @@ impl<R: ReadAt> StreamReader<R> {
             InvalidInput,
             "the range is past the authenticated plaintext"
         );
+        let mut out = reserve_range(length)?;
         let capacity = usize::try_from(length)
             .map_err(|_| Error::new(ChurStatus::ResourceLimitExceeded, "range exceeds a usize"))?;
-        let mut out = Zeroizing::new(Vec::with_capacity(capacity));
         let chunk_size = u64::from(self.manifest.chunk_size());
         let mut position = offset;
         while out.len() < capacity {
@@ -2588,7 +2629,16 @@ mod tests {
                 &plaintext[from..to],
                 "range {offset}+{length}"
             );
+            // One allocation of the exact size: a regrowth would have released
+            // a smaller plaintext buffer without a wipe.
+            assert_eq!(read.capacity(), to - from, "range {offset}+{length}");
         }
+    }
+
+    #[test]
+    fn a_range_the_allocator_refuses_is_a_resource_failure() {
+        let error = reserve_range(u64::MAX).unwrap_err();
+        assert_eq!(error.status(), ChurStatus::ResourceLimitExceeded);
     }
 
     #[test]

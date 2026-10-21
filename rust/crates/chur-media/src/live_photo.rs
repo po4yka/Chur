@@ -33,7 +33,7 @@ pub(crate) struct Validator {
 impl Validator {
     pub(crate) fn new() -> Self {
         Self {
-            header: Zeroizing::new(Vec::new()),
+            header: Zeroizing::new(Vec::with_capacity(FIXED_HEADER)),
             header_length: FIXED_HEADER,
             resources: Vec::new(),
             resource_index: 0,
@@ -97,6 +97,12 @@ impl Validator {
                     InvalidInput,
                     "the Live Photo header length is invalid"
                 );
+                // The full header is reserved in a new buffer and the fixed
+                // part is moved over, so the old buffer is wiped on drop
+                // rather than released by a regrowth.
+                let mut grown = Zeroizing::new(Vec::with_capacity(self.header_length));
+                grown.extend_from_slice(&self.header);
+                self.header = grown;
                 ensure!(
                     i64::from_be_bytes(read(&self.header, &mut at)?) >= -1,
                     InvalidInput,
@@ -250,4 +256,30 @@ fn text<'a>(bytes: &'a [u8], at: &mut usize, length: usize) -> Result<&'a str> {
         .ok_or_else(|| err!(InvalidInput, "the Live Photo resource string is invalid"))?;
     *at = end;
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::panic, clippy::expect_used)]
+
+    use super::*;
+
+    #[test]
+    fn the_header_buffer_is_reserved_once_at_its_declared_length() {
+        // A regrowth would release the smaller buffer without a wipe, so the
+        // declared length is reserved as soon as the fixed part is read.
+        let mut fixed = b"CHURLIVE".to_vec();
+        fixed.extend_from_slice(&1u16.to_be_bytes());
+        fixed.extend_from_slice(&2u16.to_be_bytes());
+        fixed.extend_from_slice(&200u32.to_be_bytes());
+        fixed.extend_from_slice(&(-1i64).to_be_bytes());
+        let mut validator = Validator::new();
+        assert_eq!(validator.header.capacity(), FIXED_HEADER);
+        validator.update(&fixed).unwrap();
+        assert!(validator.error.is_none());
+        assert_eq!(validator.header.len(), FIXED_HEADER);
+        assert_eq!(validator.header.capacity(), 200);
+        validator.update(&[0u8; 100]).unwrap();
+        assert_eq!(validator.header.capacity(), 200);
+    }
 }

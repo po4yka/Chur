@@ -572,6 +572,80 @@ impl Import {
     }
 }
 
+/// Deletes every temporary container that no journal record names, §14.4.
+///
+/// An import writes its temporary container before it writes its journal
+/// record, so a process that dies between the two leaves a file that
+/// [`reconcile`] cannot see. The file holds ciphertext under a key that only
+/// the lost record carried, so it is unreadable, but it uses storage for ever.
+/// This runs at unlock after [`reconcile`], before the session becomes a
+/// handle, so no import of this session can be between the two writes.
+/// Entries whose names are not container identifiers are left alone, and so
+/// is a received object download that can still resume; see
+/// [`chur_catalog::deletion::is_orphan_temporary`]. It returns how many
+/// containers it deleted.
+///
+/// # Errors
+///
+/// Returns [`chur_core::ChurStatus::IoFailure`] when the namespace cannot be
+/// read or a dead container cannot be deleted.
+pub fn sweep_orphan_temporaries(session: &Session) -> Result<usize> {
+    let directory = session.root_dir().incoming(&session.object_store_id());
+    let listing = match std::fs::read_dir(&directory) {
+        Ok(listing) => listing,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(_) => bail!(
+            IoFailure,
+            "the temporary container namespace could not be read"
+        ),
+    };
+    let mut removed = 0;
+    for entry in listing {
+        let entry = entry.map_err(|_| {
+            chur_core::err!(IoFailure, "a temporary container entry could not be read")
+        })?;
+        let Some(temp_path_id) = entry.file_name().to_str().and_then(parse_path_id) else {
+            continue;
+        };
+        let is_file = entry
+            .file_type()
+            .map_err(|_| {
+                chur_core::err!(IoFailure, "a temporary container entry could not be read")
+            })?
+            .is_file();
+        if is_file
+            && chur_catalog::deletion::is_orphan_temporary(session.catalog_ref()?, &temp_path_id)?
+        {
+            std::fs::remove_file(entry.path()).map_err(|_| {
+                chur_core::err!(IoFailure, "a dead temporary container could not be deleted")
+            })?;
+            removed += 1;
+        }
+    }
+    if removed > 0 {
+        chur_catalog::paths::sync_directory(&directory)?;
+    }
+    Ok(removed)
+}
+
+/// Reads a path identifier: exactly 32 lowercase hexadecimal characters.
+fn parse_path_id(name: &str) -> Option<Id> {
+    let digits = name.as_bytes();
+    if digits.len() != 32 {
+        return None;
+    }
+    let value = |digit: u8| match digit {
+        b'0'..=b'9' => Some(digit - b'0'),
+        b'a'..=b'f' => Some(digit - b'a' + 10),
+        _ => None,
+    };
+    let mut bytes = [0u8; 16];
+    for (byte, [high, low]) in bytes.iter_mut().zip(digits.as_chunks::<2>().0) {
+        *byte = (value(*high)? << 4) | value(*low)?;
+    }
+    Id::from_slice(&bytes).ok()
+}
+
 /// Reconciles every live import at the first unlock of a session, §14.4.
 ///
 /// A journal record whose temporary container is absent is dead, and so is one

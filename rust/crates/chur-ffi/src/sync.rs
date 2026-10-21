@@ -5,7 +5,6 @@ use chur_catalog::sync_staging::LockedStaging;
 use chur_catalog::{sync_log, sync_membership};
 use chur_core::limits::sync as bounds;
 use chur_core::{ChurStatus, Error, Id, Result, ensure};
-use chur_crypto::Key;
 use chur_format::codec::Writer;
 
 use crate::api::{Status, borrow_bytes_mut, borrow_large, write_out};
@@ -177,7 +176,7 @@ pub unsafe extern "C" fn chur_sync_process(
         let mut session = registry::lock(session);
         let vault_id = session.vault_id();
         let root_dir = session.root_dir().clone();
-        let root = Key::new(*session.root_secret()?.expose());
+        let root = session.root_secret()?.duplicate();
         let mut staging = LockedStaging::open(root_dir.sync_inbox(&vault_id))?;
         let report =
             sync_engine::process_staged(session.catalog()?, &root, vault_id, &mut staging, now_ms)?;

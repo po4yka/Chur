@@ -181,6 +181,8 @@ atomic finalize where destination supports it
 
 When writing to a non-atomic external provider, incomplete state remains explicitly marked and is never advertised as complete.
 
+The catalog snapshot is an encrypted copy of the catalog in the fixed directory `incoming/backup-snapshot/` of the vault. The writer removes the directory when the backup ends. If a process stops before that, the next unlock removes the directory before the session opens, and the next backup removes it before it writes a new copy. Thus no more than one snapshot copy can exist, and it does not outlive the next unlock.
+
 ### 7.1 Inventory order
 
 A stream inventory entry is one canonical structure per backed-up stream, and a slot inventory entry is one per portable slot:
@@ -221,10 +223,10 @@ The domain tag is a fixed ASCII byte constant with no length prefix, per [`CANON
 3. authenticate manifest and root context;
 4. verify package/inventory completeness;
 5. restore to temporary app-private namespace;
-6. validate catalog and object-key references;
+6. validate catalog and object-key references. The catalog's `catalog_generation` must equal the manifest's `catalog_generation`, and must not be lower than the `catalog_generation` that the package descriptor records. If not, the restore stops with `VAULT_CORRUPT` before it installs anything. The catalog header commitment identifies the catalog file only, and every copy of the same catalog has the same header, so this check is what refuses a catalog export from a different package of the same vault;
 7. verify object final commits at the required level;
 8. create new local platform key slot;
-9. commit local vault descriptor atomically;
+9. sync every restored directory (each shard directory, `objects/`, the vault directory and its parent), then commit local vault descriptor atomically. A directory sync error stops the restore. Only a result that means the platform cannot sync a directory is accepted;
 10. clean temporary state.
 
 ## 9. Confidentiality and leakage

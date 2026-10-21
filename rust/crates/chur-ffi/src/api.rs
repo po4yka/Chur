@@ -21,7 +21,7 @@ use chur_core::{ChurStatus, Error, Id, Result};
 use chur_crypto::Key;
 use chur_format::constants::{MediaClass, ObjectState, StreamKind};
 use chur_media::import::{CanonicalMedia, SourceCapability};
-use chur_media::{export, import, integrity, reader};
+use chur_media::{backup, export, import, integrity, reader};
 
 use crate::operation::{Operation, OperationKind, Stage};
 use crate::panic::{guard_status, guard_status_for};
@@ -405,7 +405,7 @@ pub unsafe extern "C" fn chur_vault_unlock(
         // and it runs before the session becomes a handle, so no host call
         // reaches a vault whose journal still holds a dead transaction. The
         // other dead form of §14.4, a temporary container with no journal
-        // record, has no sweep in v1.
+        // record, is swept right after it.
         if let Err(error) = import::reconcile(&mut session, now) {
             // The session is not a handle yet, so no `chur_vault_lock` can
             // reach it, and `Session` has no `Drop`. A plain drop closes the
@@ -416,13 +416,30 @@ pub unsafe extern "C" fn chur_vault_unlock(
             let _ = session.lock();
             return Err(error);
         }
+        if let Err(error) = import::sweep_orphan_temporaries(&session) {
+            let _ = session.lock();
+            return Err(error);
+        }
         // `PLAINTEXT_LIFECYCLE.md` §5: startup cleanup deletes every scratch
         // entry a previous process abandoned. It runs beside the import
         // reconciliation and before this session becomes a handle, so no host
         // call observes an entry that is about to be deleted and a crash the
         // previous process died in leaves no readable plaintext behind it.
-        export::clear_scratch(&session)?;
-        crate::selective::sweep_staging(&session)?;
+        if let Err(error) = export::clear_scratch(&session) {
+            let _ = session.lock();
+            return Err(error);
+        }
+        // A backup that was killed leaves its encrypted catalog snapshot in
+        // `incoming/`. It is removed here, for the same reason as the scratch
+        // entries above.
+        if let Err(error) = backup::clear_snapshot(&session) {
+            let _ = session.lock();
+            return Err(error);
+        }
+        if let Err(error) = crate::selective::sweep_staging(&session) {
+            let _ = session.lock();
+            return Err(error);
+        }
         if let Err(error) = crate::product::sweep_expired_trash(&mut session, now) {
             let _ = session.lock();
             return Err(error);

@@ -518,6 +518,86 @@ fn a_damaged_package_installs_nothing() {
     assert!(destination.registry_names().unwrap().is_empty());
 }
 
+/// The package's records as `(record type, header and payload)` in order.
+fn records(package: &[u8]) -> Vec<(u8, Vec<u8>)> {
+    let mut out = Vec::new();
+    let mut offset = 32usize;
+    while offset < package.len() {
+        let header = &package[offset..offset + 12];
+        let length = usize::try_from(u64::from_be_bytes(header[4..12].try_into().unwrap()))
+            .expect("a record length fits a usize");
+        out.push((header[0], package[offset..offset + 12 + length].to_vec()));
+        offset += 12 + length;
+    }
+    out
+}
+
+/// Two packages of the same vault share the catalog's salt, so the header
+/// commitment cannot tell their catalogs apart. A package whose catalog export
+/// comes from an older package of the same vault, with every other record its
+/// own, must not restore the older state under the newer package's identity.
+#[test]
+fn a_catalog_export_spliced_from_an_older_package_installs_nothing() {
+    let (_root, mut session) = new_vault();
+    import_one(&mut session, 8_192, "a.jpg", 0x6161);
+    let mut older = Cursor::new(Vec::new());
+    backup::create(&mut session, &mut older, NOW, &mut Uninterrupted).expect("older");
+
+    // Only catalog state changes between the two packages.
+    chur_catalog::notes::save(
+        session.catalog().expect("catalog"),
+        None,
+        0,
+        "later",
+        "a note the older package does not hold",
+        false,
+        chur_catalog::notes::NoteFormat::PlainText,
+        NOW + 1,
+    )
+    .expect("save a note");
+    let mut newer = Cursor::new(Vec::new());
+    backup::create(&mut session, &mut newer, NOW + 2, &mut Uninterrupted).expect("newer");
+    session.lock().expect("lock");
+    let older = older.into_inner();
+    let newer = newer.into_inner();
+
+    let older_catalog = records(&older)
+        .into_iter()
+        .find(|(record_type, _)| *record_type == 0x03)
+        .expect("the older package has a catalog export")
+        .1;
+    let mut spliced = newer[..32].to_vec();
+    for (record_type, bytes) in records(&newer) {
+        if record_type == 0x03 {
+            spliced.extend_from_slice(&older_catalog);
+        } else {
+            spliced.extend_from_slice(&bytes);
+        }
+    }
+
+    let destination = scratch_root();
+    assert_eq!(
+        rejection(backup::restore(
+            &destination,
+            &mut Cursor::new(spliced),
+            PASSWORD,
+            &mut Uninterrupted,
+        )),
+        ChurStatus::VaultCorrupt
+    );
+    assert!(destination.registry_names().unwrap().is_empty());
+
+    // The newer package itself still restores.
+    let destination = scratch_root();
+    backup::restore(
+        &destination,
+        &mut Cursor::new(newer),
+        PASSWORD,
+        &mut Uninterrupted,
+    )
+    .expect("restore the newer package");
+}
+
 /// An offset inside the first container record's ciphertext.
 ///
 /// A container begins with the `CHUROBJ1` magic, and the flip is placed well
@@ -1154,4 +1234,26 @@ fn clearing_ocr_while_trashed_does_not_resurrect_text_on_restore_or_backup() {
     drop(source);
     std::fs::remove_dir_all(root.base()).unwrap();
     std::fs::remove_dir_all(destination.base()).unwrap();
+}
+
+/// The catalog snapshot has one fixed name. A copy that a killed backup left
+/// behind does not stop the next backup, and neither copy survives it.
+#[test]
+fn a_backup_replaces_and_removes_a_stale_catalog_snapshot() {
+    let (root, mut session) = new_vault();
+    let snapshot = root
+        .incoming(&session.object_store_id())
+        .join(backup::SNAPSHOT_DIRECTORY);
+    std::fs::create_dir_all(&snapshot).unwrap();
+    std::fs::write(snapshot.join("catalog.db"), b"an abandoned catalog copy").unwrap();
+
+    let mut package = Cursor::new(Vec::new());
+    backup::create(&mut session, &mut package, NOW, &mut Uninterrupted).expect("create");
+    assert!(!snapshot.exists());
+
+    std::fs::create_dir_all(&snapshot).unwrap();
+    assert!(backup::clear_snapshot(&session).expect("clear"));
+    assert!(!snapshot.exists());
+    assert!(!backup::clear_snapshot(&session).expect("clear again"));
+    session.lock().expect("lock");
 }

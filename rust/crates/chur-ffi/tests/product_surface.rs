@@ -1861,3 +1861,111 @@ fn private_workspace_commands_are_bounded_cas_and_restore_saved_source() {
     assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// The one vault directory a fresh root holds.
+fn only_vault_directory(root: &std::path::Path) -> std::path::PathBuf {
+    let mut vaults = std::fs::read_dir(root.join("vaults"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(vaults.len(), 1);
+    vaults.remove(0)
+}
+
+fn unlock_with_password(runtime: u64) -> u64 {
+    let unlock = ChurUnlockRequestV1 {
+        factor: 1,
+        reserved: [0; 3],
+        secret: PASSWORD.as_ptr(),
+        secret_length: PASSWORD.len() as u32,
+    };
+    let mut session = 0u64;
+    assert_eq!(
+        unsafe { chur_vault_unlock(runtime, &unlock, &mut session) },
+        OK
+    );
+    session
+}
+
+/// A backup that is killed keeps its encrypted catalog snapshot in
+/// `incoming/`. The next unlock removes it before the session is returned.
+#[test]
+fn an_unlock_removes_the_catalog_snapshot_a_killed_backup_left() {
+    let root = scratch();
+    let runtime = open_runtime(&root);
+    let session = fresh_session(runtime);
+    assert_eq!(unsafe { chur_vault_lock(session, 1) }, OK);
+    assert_eq!(unsafe { chur_session_close(session) }, OK);
+
+    let snapshot = only_vault_directory(&root)
+        .join("incoming")
+        .join(chur_media::backup::SNAPSHOT_DIRECTORY);
+    std::fs::create_dir_all(&snapshot).unwrap();
+    std::fs::write(snapshot.join("catalog.db"), b"an abandoned catalog copy").unwrap();
+
+    let session = unlock_with_password(runtime);
+    assert!(!snapshot.exists());
+    assert_eq!(unsafe { chur_session_close(session) }, OK);
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// `OBJECT_CONTAINER_V1.md` §14.4: a temporary container with no journal
+/// record is dead. An import that dies after it writes the container and
+/// before it writes the record leaves one; the next unlock deletes it, and
+/// leaves an entry that is not a container name alone.
+#[test]
+fn an_unlock_deletes_a_temporary_container_with_no_journal_record() {
+    let root = scratch();
+    let runtime = open_runtime(&root);
+    let session = fresh_session(runtime);
+    assert_eq!(unsafe { chur_vault_lock(session, 1) }, OK);
+    assert_eq!(unsafe { chur_session_close(session) }, OK);
+
+    let incoming = only_vault_directory(&root).join("incoming");
+    let orphan = incoming.join(chur_crypto::random::id().unwrap().to_hex());
+    std::fs::write(&orphan, b"CHUROBJ1 and a manifest no record names").unwrap();
+    let foreign = incoming.join("not-a-container");
+    std::fs::write(&foreign, b"unknown").unwrap();
+
+    let session = unlock_with_password(runtime);
+    assert!(!orphan.exists());
+    assert!(foreign.exists());
+    assert_eq!(unsafe { chur_session_close(session) }, OK);
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// A failed startup sweep still runs the lock. The lock removes the whole
+/// scratch directory, so the entry the sweep could not delete is gone, and
+/// the next unlock succeeds rather than failing on the same entry again.
+#[test]
+fn a_failed_scratch_sweep_at_unlock_still_locks_the_session() {
+    let root = scratch();
+    let runtime = open_runtime(&root);
+    let session = fresh_session(runtime);
+    assert_eq!(unsafe { chur_vault_lock(session, 1) }, OK);
+    assert_eq!(unsafe { chur_session_close(session) }, OK);
+
+    // `remove_file` cannot delete a directory, so the sweep fails on it.
+    let stuck = only_vault_directory(&root).join("scratch").join("stuck");
+    std::fs::create_dir_all(stuck.join("inner")).unwrap();
+    let unlock = ChurUnlockRequestV1 {
+        factor: 1,
+        reserved: [0; 3],
+        secret: PASSWORD.as_ptr(),
+        secret_length: PASSWORD.len() as u32,
+    };
+    let mut session = 0u64;
+    assert_ne!(
+        unsafe { chur_vault_unlock(runtime, &unlock, &mut session) },
+        OK
+    );
+    assert_eq!(session, 0);
+    assert!(!stuck.exists(), "the lock removes the scratch directory");
+
+    let session = unlock_with_password(runtime);
+    assert_eq!(unsafe { chur_session_close(session) }, OK);
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+    std::fs::remove_dir_all(root).unwrap();
+}

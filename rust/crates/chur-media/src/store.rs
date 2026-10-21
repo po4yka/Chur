@@ -222,15 +222,15 @@ fn normalize_times(path: &Path) -> Result<()> {
 }
 
 /// Makes a rename durable, where the platform supports it.
+///
+/// It uses the one rule of [`chur_catalog::paths::sync_directory`]: a failure
+/// is an error, except a result that means the platform cannot sync a
+/// directory.
 fn sync_directory(path: Option<&Path>) -> Result<()> {
     let Some(path) = path else {
         return Ok(());
     };
-    let directory = File::open(path)
-        .map_err(|_| err!(IoFailure, "the object directory could not be opened"))?;
-    directory
-        .sync_all()
-        .map_err(|_| err!(IoFailure, "the object directory could not be made durable"))
+    chur_catalog::paths::sync_directory(path)
 }
 
 impl Write for TemporaryContainer {
@@ -247,16 +247,23 @@ impl Write for TemporaryContainer {
 mod tests {
     use super::sync_directory;
     use chur_core::ChurStatus;
-    use std::path::Path;
 
     #[test]
     fn a_failed_directory_sync_is_not_a_successful_commit() {
-        // /dev/null opens successfully but cannot persist a directory rename.
+        // A directory that cannot be opened cannot make a rename durable.
+        let absent = std::env::temp_dir().join(format!(
+            "chur-store-absent-{}",
+            chur_crypto::random::id()
+                .map(|id| id.to_hex())
+                .unwrap_or_default()
+        ));
         assert_eq!(
-            sync_directory(Some(Path::new("/dev/null")))
+            sync_directory(Some(&absent))
                 .err()
                 .map(|error| error.status()),
             Some(ChurStatus::IoFailure)
         );
+        assert!(sync_directory(Some(&std::env::temp_dir())).is_ok());
+        assert!(sync_directory(None).is_ok());
     }
 }

@@ -1679,6 +1679,14 @@ pub(crate) fn sweep_expired_trash(session: &mut Session, now_ms: u64) -> Result<
     for id in ids {
         run_deletion(session, &id, now_ms)?;
     }
+    // A note purge truncates the WAL after it commits, but only where no
+    // reader blocks the checkpoint, and a failed attempt does not fail the
+    // purge. This runs at every unlock, after the sweeps, so an earlier
+    // blocked attempt does not leave the old pages in the WAL for good. It is
+    // best effort for the same reason: the sweeps above are committed.
+    if let Ok(catalog) = session.catalog() {
+        let _ = catalog.checkpoint();
+    }
     Ok(())
 }
 

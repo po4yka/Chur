@@ -108,7 +108,9 @@ pub fn write_bytes(env: &mut Env<'_>, target: &JByteArray<'_>, bytes: &[u8]) -> 
     if length < bytes.len() {
         return false;
     }
-    let signed: Vec<i8> = bytes.iter().map(|byte| *byte as i8).collect();
+    // The bytes can be secret (an unwrapped key, a plaintext range), so the
+    // signed copy that the JNI call needs is wiped when it is dropped.
+    let signed: Zeroizing<Vec<i8>> = Zeroizing::new(bytes.iter().map(|byte| *byte as i8).collect());
     target.set_region(env, 0, &signed).is_ok()
 }
 

@@ -204,7 +204,7 @@ pub fn change(
     now: u64,
 ) -> Result<Option<Note>> {
     let time = as_sqlite_integer(now, "the note time is out of range")?;
-    db.transaction(|tx|{
+    let changed = db.transaction(|tx|{
         let old=get_conn(tx,id)?;ensure!(old.revision==expected,Conflict,"the private note changed");
         ensure!(expected<i64::MAX as u64,ResourceLimitExceeded,"the note revision is exhausted");
         match action{
@@ -222,12 +222,29 @@ pub fn change(
             _=>return Err(chur_core::err!(InvalidInput,"the private note action is unknown")),
         }
         schema::bump_generation(tx)?;get_conn(tx,id).map(Some)
-    })
+    })?;
+    if action == 5 {
+        erase_residue(db);
+    }
+    Ok(changed)
+}
+/// Removes the old pages a note removal leaves in the WAL, where it can.
+///
+/// `secure_delete` clears the cells of the current pages, and the FTS5
+/// `secure-delete` option of `private_note_search` clears the deleted tokens
+/// from its segments. The pages as they were before the removal stay in the
+/// WAL until a `TRUNCATE` checkpoint.
+///
+/// The removal is already committed when this runs, so a failed checkpoint
+/// does not make the removal fail. A reader can block it; the next unlock runs
+/// the checkpoint again after its sweeps.
+fn erase_residue(db: &mut CatalogDb) {
+    let _ = db.checkpoint();
 }
 /// Purges expired local notes; no media or synchronization rows are changed.
 pub fn purge_expired(db: &mut CatalogDb, now: u64) -> Result<()> {
     let now = as_sqlite_integer(now, "the note time is out of range")?;
-    db.transaction(|tx| {
+    let purged = db.transaction(|tx| {
         let ids = {
             let mut st = tx
                 .prepare("SELECT note_id FROM private_notes WHERE expires_ms<=?1")
@@ -244,8 +261,12 @@ pub fn purge_expired(db: &mut CatalogDb, now: u64) -> Result<()> {
         if !ids.is_empty() {
             schema::bump_generation(tx)?;
         }
-        Ok(())
-    })
+        Ok(!ids.is_empty())
+    })?;
+    if purged {
+        erase_residue(db);
+    }
+    Ok(())
 }
 /// Searches literal token prefixes with stable keyset pagination.
 pub fn page(
@@ -396,6 +417,81 @@ mod tests {
         let mut db = CatalogDb::open(&CatalogLocation::Memory, &key).expect("db");
         schema::open_at_current_version(&mut db, 1).expect("schema");
         db
+    }
+    #[test]
+    fn a_note_purge_truncates_the_wal_and_survives_a_blocked_checkpoint() {
+        let directory = std::env::temp_dir().join(format!(
+            "chur-notes-{}",
+            chur_crypto::random::id().expect("id").to_hex()
+        ));
+        std::fs::create_dir_all(&directory).expect("directory");
+        let path = directory.join("catalog.db");
+        let root = chur_crypto::random::secret::<32>().expect("root");
+        let id = chur_crypto::random::id().expect("id");
+        let key = CatalogKey::derive(&root, &id).expect("key");
+        let mut db = CatalogDb::open(&CatalogLocation::File(&path), &key).expect("db");
+        schema::open_at_current_version(&mut db, 1).expect("schema");
+        let wal = path.with_extension("db-wal");
+        let wal_len = || std::fs::metadata(&wal).expect("WAL").len();
+        let note = |db: &mut CatalogDb, body: &str, now: u64| {
+            let n = save(
+                db,
+                None,
+                0,
+                "title",
+                body,
+                false,
+                NoteFormat::PlainText,
+                now,
+            )
+            .expect("save");
+            change(db, &n.id, n.revision, 3, now)
+                .expect("trash")
+                .expect("note")
+        };
+
+        // A purge from Trash and an expiry each truncate the WAL.
+        let manual = note(&mut db, "zebra", 2);
+        assert!(wal_len() > 0);
+        assert!(
+            change(&mut db, &manual.id, manual.revision, 5, 3)
+                .expect("purge")
+                .is_none()
+        );
+        assert_eq!(wal_len(), 0);
+        note(&mut db, "quokka", 4);
+        assert!(wal_len() > 0);
+        purge_expired(&mut db, 4 + crate::trash::RETENTION_MS).expect("expiry");
+        assert_eq!(wal_len(), 0);
+
+        // A reader that blocks the checkpoint does not fail a committed purge.
+        let blocked = note(&mut db, "lynx", 5);
+        let reader = CatalogDb::open(&CatalogLocation::File(&path), &key).expect("reader");
+        reader
+            .connection()
+            .execute_batch("BEGIN; SELECT count(*) FROM private_notes;")
+            .expect("retain old snapshot");
+        db.connection()
+            .execute_batch("PRAGMA busy_timeout = 0;")
+            .expect("no wait");
+        assert!(
+            change(&mut db, &blocked.id, blocked.revision, 5, 6)
+                .expect("the purge is committed")
+                .is_none()
+        );
+        assert_eq!(
+            status(get(&db, &blocked.id)),
+            chur_core::ChurStatus::NotFound
+        );
+        assert_eq!(
+            page(&db, "lynx", true, 10, None).expect("page").notes.len(),
+            0
+        );
+        reader.close().expect("close reader");
+        db.checkpoint().expect("a later checkpoint completes");
+        assert_eq!(wal_len(), 0);
+        db.close().expect("close");
+        std::fs::remove_dir_all(directory).expect("cleanup");
     }
     fn status<T>(r: Result<T>) -> chur_core::ChurStatus {
         match r {

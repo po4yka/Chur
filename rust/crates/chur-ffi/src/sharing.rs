@@ -68,7 +68,7 @@ pub unsafe extern "C" fn chur_sharing_identity(
         let encoded = {
             let mut session = registry::lock(session);
             let vault_id = session.vault_id();
-            let root = Key::new(*session.root_secret()?.expose());
+            let root = session.root_secret()?.duplicate();
             let (enrollment, operation) = chur_catalog::sync_receive::provision_local_identity(
                 session.catalog()?,
                 &root,
@@ -294,7 +294,7 @@ pub unsafe extern "C" fn chur_sharing_prepare(
         let encoded = {
             let mut session = registry::lock(session);
             let source_vault_id = session.vault_id();
-            let root = Key::new(*session.root_secret()?.expose());
+            let root = session.root_secret()?.duplicate();
             let prepared = chur_catalog::sharing_service::prepare_share(
                 session.catalog()?,
                 &root,
@@ -386,7 +386,7 @@ pub unsafe extern "C" fn chur_sharing_prepare_device(
         let encoded = {
             let mut session = registry::lock(session);
             let source_vault_id = session.vault_id();
-            let root = Key::new(*session.root_secret()?.expose());
+            let root = session.root_secret()?.duplicate();
             let prepared = chur_catalog::sharing_service::prepare_share_for_device(
                 session.catalog()?,
                 &root,
@@ -464,7 +464,7 @@ pub unsafe extern "C" fn chur_sharing_revoke(
         let encoded = {
             let mut session = registry::lock(session);
             let source_vault_id = session.vault_id();
-            let root = Key::new(*session.root_secret()?.expose());
+            let root = session.root_secret()?.duplicate();
             let prepared = chur_catalog::sharing_service::prepare_share_revocation(
                 session.catalog()?,
                 &root,
@@ -565,7 +565,7 @@ pub unsafe extern "C" fn chur_sharing_accept(
             ));
         };
         let mut session = registry::lock(session);
-        let root = Key::new(*session.root_secret()?.expose());
+        let root = session.root_secret()?.duplicate();
         chur_catalog::sharing_service::accept_share(
             session.catalog()?,
             &root,
@@ -683,7 +683,7 @@ pub unsafe extern "C" fn chur_sharing_receive(
         };
         let mut session = registry::lock(session);
         let vault_id = session.vault_id();
-        let root = Key::new(*session.root_secret()?.expose());
+        let root = session.root_secret()?.duplicate();
         let plan = chur_catalog::sharing_receive::receive(
             session.catalog()?,
             &root,
@@ -765,7 +765,7 @@ pub unsafe extern "C" fn chur_sharing_download_offset(
         };
         let mut session = registry::lock(session);
         let vault_id = session.vault_id();
-        let root = Key::new(*session.root_secret()?.expose());
+        let root = session.root_secret()?.duplicate();
         let object = chur_catalog::sharing_receive::pending_object_for_collection(
             session.catalog()?,
             &root,
@@ -827,7 +827,7 @@ pub unsafe extern "C" fn chur_sharing_download_append(
         };
         let mut session = registry::lock(session);
         let vault_id = session.vault_id();
-        let root = Key::new(*session.root_secret()?.expose());
+        let root = session.root_secret()?.duplicate();
         let object = chur_catalog::sharing_receive::pending_object_for_collection(
             session.catalog()?,
             &root,
@@ -881,7 +881,7 @@ pub unsafe extern "C" fn chur_sharing_download_finish(
         };
         let mut session = registry::lock(session);
         let vault_id = session.vault_id();
-        let root = Key::new(*session.root_secret()?.expose());
+        let root = session.root_secret()?.duplicate();
         let object = chur_catalog::sharing_receive::pending_object_for_collection(
             session.catalog()?,
             &root,
@@ -1143,7 +1143,7 @@ unsafe fn object_key_call(
         let encoded = {
             let mut session = registry::lock(session);
             let vault_id = session.vault_id();
-            let root = Key::new(*session.root_secret()?.expose());
+            let root = session.root_secret()?.duplicate();
             run(session.catalog()?, &root, vault_id, input)?
         };
         ensure!(
@@ -1182,7 +1182,7 @@ pub unsafe extern "C" fn chur_sharing_outbound(
         };
         let encoded = {
             let session = registry::lock(session);
-            let root = Key::new(*session.root_secret()?.expose());
+            let root = session.root_secret()?.duplicate();
             let db = session.catalog_ref()?;
             let membership = chur_catalog::sync_membership::load(db)?.ok_or_else(|| {
                 Error::new(ChurStatus::RecoveryRequired, "outbox membership is absent")

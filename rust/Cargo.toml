@@ -37,9 +37,12 @@ chur-ffi = { path = "crates/chur-ffi", version = "0.1.0" }
 chur-sync-protocol = { path = "crates/chur-sync-protocol", version = "0.1.0" }
 
 # Cryptography. Narrow, well-reviewed libraries only (DEPENDENCY_POLICY.md).
-argon2 = { version = "0.6", default-features = false, features = ["alloc"] }
+# `zeroize` makes argon2 wipe its initial hash and gives `Block` the trait the
+# caller-owned, wiped block buffer needs. In chacha20poly1305 it wipes the key
+# that each cipher instance holds when the instance is dropped.
+argon2 = { version = "0.6", default-features = false, features = ["alloc", "zeroize"] }
 blake3 = "1"
-chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc"] }
+chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc", "zeroize"] }
 # Phase 3 operation signatures. Exact on first adoption; no hazmat, batch,
 # serialization, key-file, or RNG feature enters the protocol build.
 ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["fast", "zeroize"] }

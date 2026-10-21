@@ -220,6 +220,13 @@ iOS adds nothing: `AVFoundation` is part of the platform, and the resource-loade
 
 Disable default features unless they are understood. Features that add platform key access, network clients, file-system traversal, dynamic loading, serialization formats, or native libraries require review.
 
+### `zeroize` for `argon2` 0.6 and `chacha20poly1305` 0.11
+
+- **Change:** both crates keep default features disabled and enable `alloc` and `zeroize`. The feature adds a dependency edge to `zeroize` 1.9.1, which the lockfile already contains. It adds no package, version, algorithm, build script, or native code.
+- **Reason:** without the feature, `argon2` does not wipe its initial hash and `Block` does not implement `Zeroize`, and `chacha20poly1305` does not wipe the key that a cipher instance holds. With parallelism 1, the final Argon2 block determines the password KEK.
+- **Use:** `chur-crypto` gives Argon2 a block buffer that it owns as `Zeroizing<Vec<Block>>`, because `Argon2::hash_password_into` releases its own buffer without a wipe. The derived key does not change; a unit test compares it with the output of the primitive's own buffer.
+- **Update:** a later version of either crate must keep this feature, and a review must confirm that the feature still wipes the same state.
+
 ## Native dependencies
 
 SQLCipher/OpenSSL/FFmpeg/libheif-like dependencies require:

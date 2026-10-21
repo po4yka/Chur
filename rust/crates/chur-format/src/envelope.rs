@@ -375,13 +375,16 @@ impl ObjectKeyEnvelope {
             &self.object_id,
         )?;
         let plaintext = aead::open(&wrapping, &self.nonce, &self.wrapped_object_key, &aad)?;
-        let bytes: [u8; 32] = plaintext.as_slice().try_into().map_err(|_| {
-            Error::new(
-                ChurStatus::ObjectCorrupt,
-                "unwrapped object key is not 32 bytes",
-            )
-        })?;
-        Ok(Key::new(bytes))
+        ensure!(
+            plaintext.len() == 32,
+            ObjectCorrupt,
+            "unwrapped object key is not 32 bytes"
+        );
+        // The bytes go straight into a key that wipes on drop. A bare array
+        // between the AEAD buffer and the key would stay on the stack.
+        let mut key = Key::zeroed();
+        key.expose_mut().copy_from_slice(&plaintext);
+        Ok(key)
     }
 
     /// The §3 AAD of this envelope.

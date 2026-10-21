@@ -105,24 +105,44 @@ pub fn unlock_with_recovery(root: &Path) -> Result<Session> {
 }
 
 /// The work every unlock does before the caller sees the session.
+///
+/// It runs the same startup work as `chur_vault_unlock`, except the
+/// sync-staging sweep, which belongs to the native host's sync surface and
+/// which the command line does not use. A failure locks the session before it
+/// returns, as the native unlock does, so the lock path still removes the
+/// scratch directory and closes the catalog.
 fn after_unlock(mut session: Session) -> Result<Session> {
+    match startup_work(&mut session) {
+        Ok(()) => Ok(session),
+        Err(error) => {
+            let _ = session.lock();
+            Err(error)
+        }
+    }
+}
+
+fn startup_work(session: &mut Session) -> Result<()> {
     // `CATALOG_SCHEMA_V1.md` §14.1: garbage collection runs at the first unlock
-    // of a session, and `OBJECT_CONTAINER_V1.md` §14.4 reconciles the journal.
-    // Both run here rather than at each call site, so no unlock path can skip
-    // them.
-    let killed = import::reconcile(&mut session, now_ms())?;
-    let swept = collect_deletions(&mut session)?;
+    // of a session, and `OBJECT_CONTAINER_V1.md` §14.4 reconciles the journal
+    // and deletes temporary containers that no journal record names. They run
+    // here rather than at each call site, so no unlock path can skip them.
+    let killed = import::reconcile(session, now_ms())?;
+    let orphans = import::sweep_orphan_temporaries(session)?;
+    // `PLAINTEXT_LIFECYCLE.md` §5, and the catalog snapshot of a killed backup.
+    export::clear_scratch(session)?;
+    chur_media::backup::clear_snapshot(session)?;
+    let swept = collect_deletions(session)?;
     let expired = chur_catalog::trash::pending(session.catalog_ref()?, Some(now_ms()))?;
     for id in &expired {
-        purge(&mut session, id)?;
+        purge(session, id)?;
     }
-    if killed > 0 || swept > 0 || !expired.is_empty() {
+    if killed > 0 || orphans > 0 || swept > 0 || !expired.is_empty() {
         println!(
-            "recovered: {killed} dead import(s), {swept} pending deletion(s), {} expired trash item(s)",
+            "recovered: {killed} dead import(s), {orphans} orphan temporary container(s), {swept} pending deletion(s), {} expired trash item(s)",
             expired.len()
         );
     }
-    Ok(session)
+    Ok(())
 }
 
 /// Completes every deletion left half-finished, §14.1.

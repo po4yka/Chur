@@ -345,6 +345,48 @@ pub fn create(
     })
 }
 
+/// The name of the catalog snapshot directory under `incoming/`.
+///
+/// The name is fixed, so a snapshot that a killed process left behind is found
+/// and removed: at the next unlock by [`clear_snapshot`], and at the next
+/// backup before the new copy is written. It is not a hexadecimal identifier,
+/// so it cannot be read as the name of a temporary container.
+pub const SNAPSHOT_DIRECTORY: &str = "backup-snapshot";
+
+/// Removes the catalog snapshot a killed backup left behind.
+///
+/// The snapshot is an encrypted copy of the whole catalog. `Drop` removes it
+/// when a backup ends in this process, but a process that is killed keeps no
+/// `Drop`, and each kept copy holds rows the user may delete later. It runs at
+/// unlock, before the session becomes a handle, so no backup of this session
+/// can be in progress. It returns whether a snapshot was removed.
+///
+/// # Errors
+///
+/// Returns [`ChurStatus::IoFailure`] when the directory exists and cannot be
+/// removed.
+pub fn clear_snapshot(session: &Session) -> Result<bool> {
+    remove_snapshot(&snapshot_directory(session))
+}
+
+fn snapshot_directory(session: &Session) -> PathBuf {
+    session
+        .root_dir()
+        .incoming(&session.object_store_id())
+        .join(SNAPSHOT_DIRECTORY)
+}
+
+fn remove_snapshot(directory: &Path) -> Result<bool> {
+    match std::fs::remove_dir_all(directory) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(_) => Err(chur_core::err!(
+            IoFailure,
+            "a stale backup snapshot could not be removed"
+        )),
+    }
+}
+
 /// Owns the encrypted catalog copy, including any SQLite sidecar files.
 struct CatalogSnapshot {
     directory: PathBuf,
@@ -352,10 +394,8 @@ struct CatalogSnapshot {
 
 impl CatalogSnapshot {
     fn create(session: &Session, progress: &impl Progress) -> Result<Self> {
-        let directory = session
-            .root_dir()
-            .incoming(&session.object_store_id())
-            .join(random::id()?.to_hex());
+        let directory = snapshot_directory(session);
+        remove_snapshot(&directory)?;
         std::fs::create_dir(&directory).map_err(|_| {
             chur_core::err!(
                 IoFailure,
@@ -764,6 +804,22 @@ fn restore_inner(
                 "the archive verification was cancelled",
             ));
         }
+        // §8 step 6: the catalog is the one the sealed manifest describes. The
+        // header commitment above is the file's salt, which every copy of the
+        // same catalog shares, so it cannot tell this package's catalog from
+        // an older package's. The generation can: the manifest records the
+        // snapshot's generation under the manifest key, and the final commit
+        // binds the manifest to this package. The descriptor records the
+        // generation of the source's last lock, which the snapshot can only
+        // equal or pass. Both are checked before migration changes the value.
+        let restored_generation = schema::generation(&catalog)
+            .map_err(|_| chur_core::err!(VaultCorrupt, "the backup catalog has no generation"))?;
+        ensure!(
+            restored_generation == manifest.catalog_generation
+                && restored_generation >= descriptor.catalog.catalog_generation,
+            VaultCorrupt,
+            "the package's catalog is not the one its manifest describes"
+        );
         if vault::prepare_restored_catalog(&mut catalog, &local)? {
             let target = chur_format::constants::CATALOG_FORMAT_VERSION_V15;
             let migration_steps = target - local.catalog.catalog_format_version;
@@ -882,7 +938,8 @@ fn restore_inner(
             VaultCorrupt,
             "the package carries containers the restored catalog does not name"
         );
-        catalog.close()
+        catalog.close()?;
+        sync_restored_tree(root_dir, &store_id)
     })();
     if let Err(error) = installed {
         // Nothing openable was created, so removal is the whole recovery — the
@@ -1180,6 +1237,39 @@ fn hash_range(
         remaining -= take as u64;
     }
     Ok(())
+}
+
+/// Makes every directory entry the restore created durable.
+///
+/// Each restored file is synced when it is written, but its directory entry is
+/// durable only after its directory is synced. The descriptor install that
+/// follows is what makes the vault openable, so a crash after the install must
+/// not find a descriptor whose containers or catalog have no directory entry.
+/// The order is bottom-up: each shard directory, `objects/`, the vault
+/// directory that holds the catalog and `objects/`, and the directory that
+/// holds the vault directory.
+fn sync_restored_tree(root_dir: &VaultRoot, store_id: &Id) -> Result<()> {
+    let objects = root_dir.objects(store_id);
+    match std::fs::read_dir(&objects) {
+        Ok(listing) => {
+            for entry in listing {
+                let entry = entry.map_err(|_| {
+                    chur_core::err!(IoFailure, "a restored directory could not be listed")
+                })?;
+                let is_directory = entry.file_type().map_err(|_| {
+                    chur_core::err!(IoFailure, "a restored directory could not be listed")
+                })?;
+                if is_directory.is_dir() {
+                    chur_catalog::paths::sync_directory(&entry.path())?;
+                }
+            }
+            chur_catalog::paths::sync_directory(&objects)?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => bail!(IoFailure, "a restored directory could not be listed"),
+    }
+    chur_catalog::paths::sync_directory(&root_dir.vault(store_id))?;
+    chur_catalog::paths::sync_directory(&root_dir.vaults())
 }
 
 /// Writes one record's payload out to a file.
