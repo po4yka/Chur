@@ -885,9 +885,12 @@ class ChurController(
      * [deviceSlotStrict] comes from the slots that survive, not from the
      * request. A cancelled prompt or a failed removal therefore never shows a
      * policy that is not in force. The platform binding reads the new policy
-     * from the setting during the swap, so the setting is written first; a
-     * process that dies inside the swap skips the read-back and can keep the
-     * new policy in the setting until the next toggle replaces the slot.
+     * through [DeviceSlotPolicySetting.enrollingUnder], so nothing is stored
+     * for it. Before the swap the setting is stored as convenient, the weaker
+     * of the two policies involved, and only the read-back after the swap
+     * stores what is in force. A process that dies inside the swap therefore
+     * never shows strict while a convenient slot may exist; at worst it shows
+     * convenient over a strict slot, which the next toggle corrects.
      */
     fun toggleDeviceSlotPolicy() = guarded(copy = ::deviceSlotCopy) {
         val previous = _deviceSlotStrict.value
@@ -900,10 +903,14 @@ class ChurController(
         try {
             withContext(Dispatchers.Default) {
                 val before = repository.slots().filter { it.slotType == family }
-                deviceSlotPolicy.write(next)
+                // One of `previous` and `next` is convenient, and so is the
+                // vault while the swap runs.
+                deviceSlotPolicy.write(false)
                 try {
                     if (before.isNotEmpty()) {
-                        if (family == 3) addAppleSlot() else addKeystoreSlot()
+                        deviceSlotPolicy.enrollingUnder(next) {
+                            if (family == 3) addAppleSlot() else addKeystoreSlot()
+                        }
                         // Every old slot goes even when one fails: a removal
                         // can fail after the descriptor dropped the slot, and
                         // stopping there would keep the next old slot.
