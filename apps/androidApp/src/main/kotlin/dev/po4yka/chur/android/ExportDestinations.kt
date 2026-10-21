@@ -1,11 +1,14 @@
 package dev.po4yka.chur.android
 
 import android.content.ContentResolver
+import android.content.ContentUris
 import android.content.ContentValues
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
@@ -42,6 +45,43 @@ class ExportDestinations(
     init {
         ExportLeases.clearScratch(context) // A previous process cannot have a live share sheet.
         scratch.mkdirs()
+        // ChurHost builds this once per process, so no export of this process is
+        // in flight yet: every pending row that is still ours is a partial export.
+        deleteAbandonedMediaExports()
+    }
+
+    /**
+     * Delete the pending MediaStore rows that this app owns. A process that dies
+     * during a MediaStore export leaves a partial plaintext file in shared storage,
+     * and only the owner can see or delete a pending row.
+     */
+    internal fun deleteAbandonedMediaExports(): Int = MEDIA_COLLECTIONS.sumOf { collection ->
+        try {
+            deletePendingRows(collection)
+        } catch (_: RuntimeException) {
+            0 // A volume that is not mounted has no rows to delete; the next start tries again.
+        }
+    }
+
+    private fun deletePendingRows(collection: Uri): Int {
+        val owner = "${MediaStore.MediaColumns.OWNER_PACKAGE_NAME} = ? AND ${MediaStore.MediaColumns.IS_PENDING} = 1"
+        val ids = mutableListOf<Long>()
+        val cursor = if (Build.VERSION.SDK_INT >= 30) {
+            resolver.query(collection, arrayOf(MediaStore.MediaColumns._ID), Bundle().apply {
+                putString(ContentResolver.QUERY_ARG_SQL_SELECTION, owner)
+                putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, arrayOf(context.packageName))
+                putInt(MediaStore.QUERY_ARG_MATCH_PENDING, MediaStore.MATCH_ONLY)
+            }, null)
+        } else {
+            @Suppress("DEPRECATION")
+            resolver.query(MediaStore.setIncludePending(collection), arrayOf(MediaStore.MediaColumns._ID),
+                owner, arrayOf(context.packageName), null)
+        }
+        cursor?.use { while (it.moveToNext()) ids += it.getLong(0) }
+        return ids.sumOf { id ->
+            val row = ContentUris.withAppendedId(collection, id)
+            resolver.delete(row, null, null)
+        }
     }
 
     override fun cancelPending() {
@@ -261,3 +301,9 @@ class ExportDestinations(
         return Destination(handle, publish, discard)
     }
 }
+
+private val MEDIA_COLLECTIONS: List<Uri> = listOf(
+    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+    MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+)

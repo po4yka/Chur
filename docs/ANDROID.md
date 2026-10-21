@@ -790,6 +790,8 @@ commit or delete partial destination
 
 If integrity fails, Chur must close and remove or invalidate the partial destination where the provider permits it.
 
+A MediaStore export inserts its row with `IS_PENDING = 1` and clears it only at publish. MediaStore gives each pending row a `DATE_EXPIRES` of seven days and replaces a shorter value that the app writes at insert or update. When the process stops during the write, the partial row stays pending. At the next process start, `ExportDestinations` deletes every pending row that Chur owns in the Images, Video, and Downloads collections. If Chur does not start again, MediaStore deletes the row after the seven days. A SAF document has no such cleanup: the document grant ends with the process, so a partial SAF document stays where the user put it.
+
 Album export uses one native folder selection and writes the complete selected album tree through this same verified descriptor path. Output names do not overwrite existing files; incomplete documents are renamed only after successful export. Cancellation removes the current incomplete document where the provider permits it and retains completed copies. The folder URI is session-local and is not persisted. [`product/ALBUM_EXPORT.md`](product/ALBUM_EXPORT.md) owns the batch and partial-result contract.
 
 ### 18.2 Share-sheet scratch
