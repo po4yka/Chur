@@ -98,16 +98,16 @@ pub fn open(session: &Session, object_id: &Id, stream_kind: StreamKind) -> Resul
     let inner = StreamReader::open(file, &object_key, &identity)?;
     Ok(ObjectReader {
         inner,
-        content_type: if stream_kind == StreamKind::CompatibleVideo {
-            "video/mp4".to_owned()
-        } else {
-            metadata.content_type
+        content_type: match stream_kind {
+            StreamKind::CompatibleVideo => "video/mp4".to_owned(),
+            StreamKind::VideoStoryboard => "image/jpeg".to_owned(),
+            _ => metadata.content_type,
         },
-        media_kind: if stream_kind == StreamKind::CompatibleVideo {
-            u16::from(chur_format::constants::MediaClass::Video.value())
-        } else {
-            u16::from(object.media_kind.value())
-        },
+        media_kind: u16::from(match stream_kind {
+            StreamKind::CompatibleVideo => chur_format::constants::MediaClass::Video.value(),
+            StreamKind::VideoStoryboard => chur_format::constants::MediaClass::Image.value(),
+            _ => object.media_kind.value(),
+        }),
         cached_index: None,
         cached_chunk: Zeroizing::new(Vec::new()),
     })

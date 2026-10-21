@@ -984,6 +984,20 @@ pub(crate) fn recorded_version(connection: &Connection) -> Result<Option<u16>> {
 
 /// Installs the current schema and its single `vault_state` row.
 fn install(db: &mut CatalogDb, now_ms: u64) -> Result<()> {
+    install_export_version(db, CATALOG_FORMAT_VERSION_V17, now_ms)
+}
+
+/// Installs the exact known schema declared by a portable catalog export.
+/// Restore performs authenticated migrations only after it verifies these rows.
+pub(crate) fn install_export_version(db: &mut CatalogDb, version: u16, now_ms: u64) -> Result<()> {
+    ensure!(
+        matches!(
+            version,
+            CATALOG_FORMAT_VERSION_V15 | CATALOG_FORMAT_VERSION_V16 | CATALOG_FORMAT_VERSION_V17
+        ),
+        UnsupportedVersion,
+        "the portable catalog schema is unsupported"
+    );
     let checkpoint = as_sqlite_integer(now_ms, "the install time is out of range")?;
     db.transaction(|transaction| {
         transaction
@@ -1031,9 +1045,11 @@ fn install(db: &mut CatalogDb, now_ms: u64) -> Result<()> {
         transaction
             .execute_batch(V14_DDL)
             .map_err(|e| map_sqlite(e, "the note workspace schema could not be created"))?;
-        transaction.execute_batch(V17_DDL).map_err(|error| {
-            map_sqlite(error, "the playback position schema could not be created")
-        })?;
+        if version == CATALOG_FORMAT_VERSION_V17 {
+            transaction.execute_batch(V17_DDL).map_err(|error| {
+                map_sqlite(error, "the playback position schema could not be created")
+            })?;
+        }
         transaction
             .execute(
                 "INSERT INTO vault_state (
@@ -1041,7 +1057,7 @@ fn install(db: &mut CatalogDb, now_ms: u64) -> Result<()> {
                      active_migration_target, object_store_checkpoint,
                      integrity_checkpoint_ms, capability_flags
                  ) VALUES (1, ?1, 1, NULL, 0, ?2, 0)",
-                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V17), checkpoint],
+                rusqlite::params![i64::from(version), checkpoint],
             )
             .map_err(|error| map_sqlite(error, "the catalog state row could not be written"))?;
         Ok(())

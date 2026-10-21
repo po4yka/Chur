@@ -1451,6 +1451,135 @@ fn a_version_two_package_restores_every_catalog_row() {
     opened.lock().expect("lock");
 }
 
+/// Portable backup preserves real video originals, derived streams and resume rows.
+#[test]
+fn a_version_two_package_preserves_video_resume_and_derived_streams() {
+    let (_root, mut session) = new_vault();
+    let cases = [
+        (
+            include_bytes!("../../../../tests/media/hevc-main10/sdr10-hvc1.mp4").as_slice(),
+            192,
+            96,
+            1250,
+            500,
+            StreamKind::CompatibleVideo,
+            include_bytes!("../../../../tests/media/video-compatibility/reference-sdr.mp4")
+                .as_slice(),
+            192,
+            96,
+            "video/mp4",
+        ),
+        (
+            include_bytes!("../../../../tests/media/video-acceptance/main10-long-gop-vfr.mp4")
+                .as_slice(),
+            320,
+            180,
+            64_000,
+            31_000,
+            StreamKind::VideoStoryboard,
+            include_bytes!("../../../../tests/media/video-timeline/reference-storyboard.jpg")
+                .as_slice(),
+            640,
+            270,
+            "image/jpeg",
+        ),
+    ];
+    let mut objects = Vec::new();
+    for (
+        original,
+        width,
+        height,
+        duration,
+        position,
+        kind,
+        derived,
+        derived_width,
+        derived_height,
+        _,
+    ) in &cases
+    {
+        let object_id = import::import_bytes(
+            &mut session,
+            SourceCapability {
+                requested_object_id: None,
+                seekable: true,
+                known_length: Some(original.len() as u64),
+                content_type_hint: "video/mp4".into(),
+                original_filename: Some("video.mp4".into()),
+                capture_time_ms: None,
+            },
+            CanonicalMedia {
+                media_class: MediaClass::Video,
+                width: *width,
+                height: *height,
+                duration_ms: *duration,
+            },
+            "video/mp4",
+            &Zeroizing::new(original.to_vec()),
+            NOW,
+        )
+        .expect("import actual video");
+        chur_media::derived::put(
+            &mut session,
+            &object_id,
+            *kind,
+            *derived_width,
+            *derived_height,
+            &Zeroizing::new(derived.to_vec()),
+            NOW,
+        )
+        .expect("store actual derived stream");
+        chur_catalog::playback::put(session.catalog().unwrap(), &object_id, *position, *duration)
+            .expect("save resume position");
+        objects.push(object_id);
+    }
+    let mut package = Cursor::new(Vec::new());
+    backup::create(&mut session, &mut package, NOW, &mut Uninterrupted).expect("create");
+    let source_rows = logical_catalog(session.catalog_ref().unwrap());
+    session.lock().expect("lock source");
+    let destination = scratch_root();
+    backup::restore(
+        &destination,
+        &mut Cursor::new(package.into_inner()),
+        PASSWORD,
+        &mut Uninterrupted,
+    )
+    .expect("restore video catalog");
+    let mut opened =
+        vault::unlock_with_password(&destination, PASSWORD, NOW + 2000).expect("unlock");
+    assert_eq!(logical_catalog(opened.catalog_ref().unwrap()), source_rows);
+    for (object_id, (original, _, _, _, position, kind, derived, width, height, content_type)) in
+        objects.iter().zip(&cases)
+    {
+        assert_eq!(
+            chur_catalog::playback::get(opened.catalog_ref().unwrap(), object_id).unwrap(),
+            *position
+        );
+        assert_eq!(exported(&opened, object_id), *original);
+        let mut reader = chur_media::reader::open(&opened, object_id, *kind)
+            .expect("open restored derived stream");
+        let info = reader.content_info().unwrap();
+        assert_eq!(info.content_type, *content_type);
+        assert_eq!(
+            info.media_kind,
+            u16::from(match kind {
+                StreamKind::VideoStoryboard => MediaClass::Image.value(),
+                StreamKind::CompatibleVideo => MediaClass::Video.value(),
+                _ => panic!("unexpected derived fixture"),
+            })
+        );
+        assert_eq!(reader.dimensions(), (*width, *height));
+        assert_eq!(
+            reader
+                .read_range(0, info.plaintext_size)
+                .unwrap()
+                .as_slice(),
+            *derived
+        );
+    }
+    opened.lock().expect("lock restored vault");
+}
+
 /// ADR-0068: the catalog export records are bound to their place. Two records
 /// swapped, the last record removed, a record from another package of the same
 /// vault, or a changed descriptor each fail before anything is installed.
