@@ -77,6 +77,10 @@ pub fn put(db: &mut CatalogDb, object: &Id, position_ms: u64, duration_ms: u64) 
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "These tests must fail immediately when fixture setup or an asserted failure is unexpected."
+)]
 mod tests {
     use super::*;
     use crate::{
