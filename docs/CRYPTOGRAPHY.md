@@ -147,7 +147,8 @@ Chur does not claim to prevent:
 - plaintext observation after unlock by a compromised OS, kernel, root/jailbreak tooling, debugger, runtime instrumentation, or memory inspection;
 - malicious accessibility services, keyboards, clipboard managers, or screen-capture malware from observing user input or displayed content;
 - photography of the screen by an external camera;
-- traffic analysis, object-count leakage, ciphertext-size leakage, or access-pattern leakage without optional padding and batching;
+- traffic analysis, object-count leakage, or access-pattern leakage without optional batching;
+- ciphertext-size leakage beyond the size bucket: a container of version `0x0002` stores each object in a size bucket ([`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §18, [ADR-0066](adr/0066-pad-object-containers-to-size-buckets.md)), so its file length discloses the bucket, the chunk size, and an empty object, but not the exact object size; a v1 container written before that version discloses its exact size;
 - physical secure overwrite on flash storage with wear levelling, copy-on-write, snapshots, or cloud backups;
 - retention of plaintext or keys by an authorized sharing recipient;
 - rollback to an old user-controlled backup unless the user compares trusted generations or device log heads;
@@ -1850,6 +1851,8 @@ Oblivious RAM, traffic-mixing networks, and cryptographically hidden volumes are
 
 Padding is optional because it costs storage, bandwidth, battery, and complexity.
 
+Object bucket padding is enabled for every new object container. `container_version` `0x0002` pads the chunk stream with zero bytes to the bucket of [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §18.1: a power of two of at least 4 KiB up to 1 MiB, a whole number of MiB up to 32 MiB, and 16 buckets per power-of-two interval above that. The cost is less than 1 MiB or less than one sixteenth of the object. The version is bound into every chunk AAD, the padding is inside the chunk AEAD and the ordered commitment, the true length is inside the authenticated final commit, and a reader refuses a padding byte other than zero and a stream that is not exactly the bucket. [ADR-0066](adr/0066-pad-object-containers-to-size-buckets.md) records the decision and its cost. Record padding and network batch padding remain unimplemented.
+
 Potential profiles:
 
 ```text
@@ -2524,4 +2527,4 @@ The design remains provisional until canonical encodings, parameters, vectors, f
 
 ## Direct peer session keys
 
-The foreground peer transport has a separate `CHURP2P1` namespace. A one-use 256-bit invitation secret and two fresh 32-byte challenges derive direction-separated 32-byte keys with HKDF-SHA-256. The transcript hash, info labels, nonce construction, frame bound, and sequence AAD are specified in [SYNC_PROTOCOL_V1.md](sync/SYNC_PROTOCOL_V1.md). These keys are never used for vault, collection, or object encryption and never enter a portable backup. Disclosure of an invitation permits decryption of recorded transport traffic; this PSK transport does not claim forward secrecy. Object and operation encryption retain their independent native keys and verification requirements.
+The foreground peer transport has a separate `CHURP2P2` namespace; version-1 `CHURP2P1` hellos are refused. A one-use 256-bit invitation secret, two fresh 32-byte challenges, and an ephemeral X25519 exchange derive direction-separated 32-byte keys and a session binding with HKDF-SHA-256 under the registered `chur/v1/peer/*` labels. Each device signs the transcript hash and the binding with its enrolled Ed25519 device key, and Rust verifies that signature against the enrolled key before any synchronization data moves. The transcript hash, info labels, nonce construction, frame bound, and sequence AAD are specified in [SYNC_PROTOCOL_V1.md](sync/SYNC_PROTOCOL_V1.md). These keys are never used for vault, collection, or object encryption and never enter a portable backup. The ephemeral private keys are erased after the handshake, so disclosure of an invitation after a session does not permit decryption of its recorded traffic. Object and operation encryption retain their independent native keys and verification requirements.

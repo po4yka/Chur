@@ -29,6 +29,8 @@ pub const SUITE_V1: u16 = 0x0001;
 pub const ENCODING_PROFILE_V1: u16 = 0x0001;
 /// §15.2: `container_version` of `ChurObjectV1`.
 pub const CONTAINER_VERSION_V1: u16 = 0x0001;
+/// §15.2: `container_version` of the bucket-padded container of ADR-0066.
+pub const CONTAINER_VERSION_V2: u16 = 0x0002;
 /// §15.2: `record_version` of every container record.
 pub const RECORD_VERSION_V1: u8 = 0x01;
 /// §15.2: `descriptor_version` of `VaultDescriptorV1`.

@@ -16,9 +16,17 @@
   incoming, quarantine, and scratch directory below them. Section 13.4 makes a
   path under vaults/ or registry/ here a release blocker, and
   scripts/check-backup-rules.py is what fails the build on one.
+
+  The security settings (device-slot policy, app lock, auto-lock) are not in
+  public/. They live in noBackupFilesDir, because each one is written only from
+  an open vault, so its presence in a backup showed that a vault was set up.
+
+  A cloud backup runs only when the transport encrypts it end to end
+  (disableIfNoEncryptionCapabilities), so the public shell does not reach a
+  server in a form the server can read.
 -->
 <data-extraction-rules>
-    <cloud-backup>
+    <cloud-backup disableIfNoEncryptionCapabilities="true">
         <include domain="file" path="public/" />
         <include domain="sharedpref" path="public_shell.xml" />
     </cloud-backup>

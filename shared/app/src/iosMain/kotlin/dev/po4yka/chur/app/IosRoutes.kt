@@ -1044,6 +1044,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         }
         PrivateNotesRoute(
             vault = controller.vault, generation = generation,
+            lockOwner = controller,
             onClose = { focusManager.clearFocus(); showingPrivateNotes = false; initialCreateRequest = null },
             onLock = { controller.lock() }, onPanic = controller::panic,
             onTouch = { controller.recordPrivateNoteActivity(generation) },

@@ -61,6 +61,8 @@ The optional whole-app gate controls access through the interface. It does not e
 
 Public-shell storage is included in the ordinary platform backup and private-vault storage is excluded from it without exception. Both halves are deliberate: a Notes surface that loses its content on device transfer is not functional, and an object store carried by a transport that chooses what to copy is not restorable. The two rules apply to disjoint directories and are implemented by [`../ANDROID.md`](../ANDROID.md) §13.4 and [`../IOS.md`](../IOS.md) §14.1. A change that places a vault path in a backup include set is a release blocker, and no public-shell backup rule may be widened to a path outside public storage.
 
+Settings that only an open vault can write (the device-slot policy, the whole-app lock and the auto-lock time) are not public-shell content. Their presence would show that a vault was set up, so Android keeps them in `noBackupFilesDir` and not in `public/`. A device that restores a backup starts with their defaults. Android cloud backup also requires end-to-end encryption by the transport (`disableIfNoEncryptionCapabilities`), so the public shell is not sent to a server that can read it.
+
 The settings statement carries both halves: public-shell content is backed up by the platform, and vault content is excluded from ordinary platform backup. Explicit full/selective archives use [`../format/BACKUP_FORMAT_V1.md`](../format/BACKUP_FORMAT_V1.md). Configured sync and collection sharing transfer encrypted content; explicit plaintext export leaves the vault boundary under its own disclosure.
 
 ## Session gate
@@ -108,6 +110,8 @@ Locking must:
 Panic lock performs the same security transition immediately. It is not a data deletion command.
 
 Both ordinary and panic lock conceal private content and clear feature projections before waiting for native work to drain. Pending creation, recovery, and private metadata results belong to the session epoch that requested them and must not restore a phrase, private route, or projection after that epoch ends. Native lock completion remains necessary before another session may be used.
+
+After the concealment, an ordinary lock saves an open private note with unsaved text before the native close. The save must start within 2 seconds; a native call that already started finishes first ([Private notes](PRIVATE_NOTES.md)). Panic lock does not wait for a save: it ends the save wait of an earlier lock, starts no save, and the unsaved text is lost. Only a native call that is already in progress delays the panic close.
 
 ### The panic gesture
 

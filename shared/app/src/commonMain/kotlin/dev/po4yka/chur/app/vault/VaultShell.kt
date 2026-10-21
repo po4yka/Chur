@@ -1441,7 +1441,7 @@ private fun ChangePasswordDialog(
     var confirmation by remember { mutableStateOf("") }
     var usePin by remember { mutableStateOf(false) }
     val matching = password.isNotEmpty() && password == confirmation &&
-        (!usePin || isValidVaultPin(password))
+        (if (usePin) isValidVaultPin(password) else isAcceptableNewPassword(password))
     PrivateAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Change password or PIN") },

@@ -2,7 +2,7 @@ package dev.po4yka.chur.app
 
 import dev.po4yka.chur.app.vault.PresentedState
 import dev.po4yka.chur.app.vault.ThumbnailCache
-import dev.po4yka.chur.app.vault.isValidVaultPin
+import dev.po4yka.chur.app.vault.isAcceptableNewPassword
 import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.AlbumSummary
 import dev.po4yka.chur.ffi.ChurFailure
@@ -394,6 +394,9 @@ class ChurController(
     /** The repository, for a host flow that drives operations itself. */
     val vault: VaultRepository get() = repository
 
+    /** Unsaved private-note text that an ordinary lock saves first, `PRIVATE_NOTES.md`. */
+    internal val lockDrafts = LockDrafts()
+
     /**
      * Opens the runtime, loads the public shell, and starts the idle timer.
      *
@@ -581,9 +584,8 @@ class ChurController(
 
     /** Creates a vault, `PROVISIONING.md` §3. */
     fun create(password: String, offerRecovery: Boolean) = requestPhrase {
-        if (password.isNotEmpty() && password.all { it in '0'..'9' } &&
-            password.length <= 20 && !isValidVaultPin(password)) {
-            say("Use at least 12 digits for a vault PIN.")
+        if (!isAcceptableNewPassword(password)) {
+            say(NEW_PASSWORD_RULE)
             return@requestPhrase
         }
         val epoch = endOpenSession()
@@ -683,7 +685,12 @@ class ChurController(
         val epoch = endOpenSession()
         if (epoch != lockEpoch) return@attempt
         val target = _route.value
-        nativeEntry(epoch) { repository.unlockWithRecovery(phrase.trim()) }
+        val bytes = phrase.trim().encodeToByteArray()
+        try {
+            nativeEntry(epoch) { repository.unlockWithRecovery(bytes) }
+        } finally {
+            bytes.fill(0)
+        }
         completeUnlock(target, epoch)
     }
 
@@ -702,24 +709,36 @@ class ChurController(
         // Not `firstNotNullOfOrNull`: the unwrap suspends now, because the
         // platform asks the user to authorize it first.
         var root: ByteArray? = null
+        var worst: ChurFailure? = null
         val hostEpoch = promptEpoch
         beginHostActivity()
         try {
             withContext(Dispatchers.Default) {
                 for (entry in material) {
-                    root = deviceUnlock.unwrap(
-                        entry.alias,
-                        entry.aad,
-                        entry.gcmNonce,
-                        entry.wrappedRootSecret,
-                    )
+                    // One invalidated or malformed slot must not stop the
+                    // others: every entry is tried, and the most severe
+                    // failure is reported only when none opened. A cancel is
+                    // the user's answer and ends the walk.
+                    root = try {
+                        deviceUnlock.unwrap(
+                            entry.alias,
+                            entry.aad,
+                            entry.gcmNonce,
+                            entry.wrappedRootSecret,
+                        )
+                    } catch (failure: ChurFailure) {
+                        if (failure.status == ChurStatus.CANCELLED) throw failure
+                        worst = moreSevere(worst, failure)
+                        null
+                    }
                     if (root != null) break
                 }
             }
         } finally {
             if (hostEpoch == promptEpoch) endHostActivity()
         }
-        val opened = root ?: throw ChurFailure(ChurStatus.AUTHENTICATION_FAILED, "no device slot opened")
+        val opened = root
+            ?: throw worst ?: ChurFailure(ChurStatus.AUTHENTICATION_FAILED, "no device slot opened")
         try {
             if (epoch != lockEpoch || _route.value != target) return@attempt
             nativeEntry(epoch) { repository.unlockWithKeystoreRoot(opened) }
@@ -782,8 +801,12 @@ class ChurController(
      * The enrolment is bracketed the way an import is: authorizing the platform
      * key can put a system credential screen in front of this one, and the
      * background lock would otherwise close the session the enrolment needs.
+     *
+     * Rust refuses the enrolment when another identity already holds a device
+     * slot, `DECOY_VAULT.md` §10, and [deviceSlotCopy] gives that refusal the
+     * sentence of any device unlock that is not available.
      */
-    fun enrollDeviceSlot() = guarded {
+    fun enrollDeviceSlot() = guarded(copy = ::deviceSlotCopy) {
         beginHostActivity()
         try {
             // The only guarded action that used to stay on the main dispatcher,
@@ -801,7 +824,7 @@ class ChurController(
     }
 
     /** Stores a random Rust device secret under Keychain authorization. */
-    fun enrollAppleDeviceSlot() = guarded {
+    fun enrollAppleDeviceSlot() = guarded(copy = ::deviceSlotCopy) {
         beginHostActivity()
         try {
             withContext(Dispatchers.Default) { addAppleSlot() }
@@ -869,11 +892,14 @@ class ChurController(
      * [deviceSlotStrict] comes from the slots that survive, not from the
      * request. A cancelled prompt or a failed removal therefore never shows a
      * policy that is not in force. The platform binding reads the new policy
-     * from the setting during the swap, so the setting is written first; a
-     * process that dies inside the swap skips the read-back and can keep the
-     * new policy in the setting until the next toggle replaces the slot.
+     * through [DeviceSlotPolicySetting.enrollingUnder], so nothing is stored
+     * for it. Before the swap the setting is stored as convenient, the weaker
+     * of the two policies involved, and only the read-back after the swap
+     * stores what is in force. A process that dies inside the swap therefore
+     * never shows strict while a convenient slot may exist; at worst it shows
+     * convenient over a strict slot, which the next toggle corrects.
      */
-    fun toggleDeviceSlotPolicy() = guarded {
+    fun toggleDeviceSlotPolicy() = guarded(copy = ::deviceSlotCopy) {
         val previous = _deviceSlotStrict.value
         val next = !previous
         // The slot types [SlotSummary.familyName] gives: 2 is the Android
@@ -884,10 +910,14 @@ class ChurController(
         try {
             withContext(Dispatchers.Default) {
                 val before = repository.slots().filter { it.slotType == family }
-                deviceSlotPolicy.write(next)
+                // One of `previous` and `next` is convenient, and so is the
+                // vault while the swap runs.
+                deviceSlotPolicy.write(false)
                 try {
                     if (before.isNotEmpty()) {
-                        if (family == 3) addAppleSlot() else addKeystoreSlot()
+                        deviceSlotPolicy.enrollingUnder(next) {
+                            if (family == 3) addAppleSlot() else addKeystoreSlot()
+                        }
                         // Every old slot goes even when one fails: a removal
                         // can fail after the descriptor dropped the slot, and
                         // stopping there would keep the next old slot.
@@ -961,11 +991,24 @@ class ChurController(
         null
     }
 
-    /** Conceals on the caller's UI turn; native cleanup must never delay the public screen. */
+    /**
+     * Conceals on the caller's UI turn; native cleanup must never delay the
+     * public screen. An open private note with unsaved text is captured
+     * before the concealment and saved after it, before the native close,
+     * within the bound of [LockDrafts]. The panic reason captures nothing
+     * and ends the save wait of an earlier lock, so it never waits for a
+     * save that has not started, `DISCREET_MODE.md`.
+     */
     fun lock(reason: LockReason = LockReason.USER) {
+        val drafts = if (reason == LockReason.PANIC) {
+            lockDrafts.abort()
+            emptyList()
+        } else {
+            lockDrafts.capture()
+        }
         concealPrivateSession()
         enablePrivacyCover()
-        queueNativeLock(reason)
+        queueNativeLock(reason, drafts)
     }
 
     /** The same immediate concealment, recorded by Rust with the panic reason. */
@@ -989,7 +1032,7 @@ class ChurController(
         setRoute(if (_appLockEnabled.value) AppRoute.AppUnlock else AppRoute.PublicShell)
     }
 
-    private fun queueNativeLock(reason: LockReason) {
+    private fun queueNativeLock(reason: LockReason, drafts: List<LockDrafts.Save> = emptyList()) {
         val previous = pendingLock
         val epoch = lockEpoch
         val token = ++cleanupToken
@@ -999,13 +1042,24 @@ class ChurController(
             // Native calls are synchronous and cannot be cancelled. Their
             // tickets end before teardown; public masking already happened.
             entriesBeforeLock.forEach { it.await() }
+            // The session is still open for the captured saves. No save
+            // starts after their bound; one native call that started in it
+            // ends before the close can take the repository mutex.
+            val interrupted = try {
+                lockDrafts.save(drafts)
+                null
+            } catch (failure: Throwable) {
+                failure
+            }
             // Provider or filesystem revocation can fail. The native session
             // must still close; a failure keeps the cover enabled and is
-            // reported by the controller's exception handler.
-            try {
-                exports.cancelPending()
-            } finally {
-                closeNativeSession(reason)
+            // reported by the controller's exception handler. An interrupted
+            // save wait still closes, and its failure follows the close.
+            if (interrupted == null) {
+                closeAfterLockSaves(reason)
+            } else {
+                withContext(NonCancellable) { closeAfterLockSaves(reason) }
+                throw interrupted
             }
             // An earlier cleanup may finish after another lock, but must
             // never remove the newer transition's privacy cover. A failed
@@ -1014,6 +1068,14 @@ class ChurController(
                 privacy.setEnabled(needsPrivacyCover(repository.state.value, _route.value, _recoveryPhrase.value != null))
                 launcherLocking = false
             }
+        }
+    }
+
+    private suspend fun closeAfterLockSaves(reason: LockReason) {
+        try {
+            exports.cancelPending()
+        } finally {
+            closeNativeSession(reason)
         }
     }
 
@@ -1214,15 +1276,26 @@ class ChurController(
      * also works on the host: the iOS fetch of an iCloud original, the
      * opening of each picked item, and its previews. Under the 30-second
      * choice such a phase locked the vault and dropped the rest of the pick.
+     *
+     * Unsaved private-note text is captured after the idle decision, and
+     * saved after the concealment and before the close, within the bound of
+     * [LockDrafts], as at every ordinary lock.
      */
     suspend fun checkIdle() {
         withContext(NonCancellable) {
             var concealedEpoch: Long? = null
             var concealedRoute: AppRoute? = null
+            var drafts = emptyList<LockDrafts.Save>()
+            // An open private editor moves the concealment out of the
+            // repository mutex, so its save can run after it and before the close.
+            val beforeClose: (suspend () -> Unit)? = if (!lockDrafts.active) null else {
+                { withContext(NonCancellable + Dispatchers.Main) { lockDrafts.save(drafts) } }
+            }
             if (withContext(Dispatchers.Default) {
                 if (_activeOperation.value?.let { !it.cancelling && it.name != "external-archive" } == true) repository.noteActivity()
-                repository.lockIfIdle {
+                repository.lockIfIdle(beforeClose) {
                     withContext(NonCancellable + Dispatchers.Main) {
+                        drafts = lockDrafts.capture()
                         concealPrivateSession()
                         concealedEpoch = lockEpoch
                         concealedRoute = _route.value
@@ -1730,9 +1803,8 @@ class ChurController(
 
     /** Replaces the password slot with a password or a long numeric PIN. */
     fun changePassword(password: String) = guarded {
-        if (password.isEmpty() ||
-            (password.all { it in '0'..'9' } && password.length <= 20 && !isValidVaultPin(password))) {
-            say("Use a password or a PIN of at least 12 digits.")
+        if (!isAcceptableNewPassword(password)) {
+            say(NEW_PASSWORD_RULE)
             return@guarded
         }
         val bytes = password.encodeToByteArray()
@@ -3219,6 +3291,9 @@ class ChurController(
         /** The confirmation of `DESIGN.md` §17.1 step 6. */
         const val PHRASE_SAVED = "Recovery phrase saved."
 
+        /** The rule a new or changed credential meets, `PASSWORD_PROFILE.md` §3. */
+        const val NEW_PASSWORD_RULE = "Use at least 12 characters, or a PIN of at least 12 digits."
+
         /** The routes whose screen is a credential form, which reads [formError]. */
         val FORM_ROUTES: Set<AppRoute> = setOf(
             AppRoute.CreateVault,
@@ -3462,4 +3537,23 @@ data class Notice(
         securityHapticDelivered = true
         return true
     }
+}
+
+/**
+ * The failure a device unlock reports when no slot opened.
+ *
+ * An invalidated key needs the user to re-enroll, `ANDROID.md` §9.4, so it
+ * outranks a factor that is only unavailable now, which outranks any other
+ * refusal. A tag that does not verify ranks last, because it is what every
+ * slot that is not the right one answers.
+ */
+internal fun moreSevere(current: ChurFailure?, next: ChurFailure): ChurFailure {
+    if (current == null) return next
+    fun rank(failure: ChurFailure): Int = when (failure.status) {
+        ChurStatus.PLATFORM_KEY_INVALIDATED -> 3
+        ChurStatus.PLATFORM_KEY_UNAVAILABLE -> 2
+        ChurStatus.AUTHENTICATION_FAILED -> 0
+        else -> 1
+    }
+    return if (rank(next) > rank(current)) next else current
 }

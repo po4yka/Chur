@@ -85,7 +85,8 @@ data class PrivateNotesUiState(
 /** Every storage method must validate [generation] while holding the repository mutex. */
 internal interface PrivateNotesAccess {
     suspend fun load(generation: Long, id: ByteArray): PrivateNote
-    suspend fun save(generation: Long, saved: PrivateNote?, title: String, body: String, pinned: Boolean, format: PrivateNoteFormat): PrivateNote
+    /** [proceed] is checked under the repository mutex just before the native call. */
+    suspend fun save(generation: Long, saved: PrivateNote?, title: String, body: String, pinned: Boolean, format: PrivateNoteFormat, proceed: () -> Boolean = { true }): PrivateNote
     suspend fun change(generation: Long, id: ByteArray, revision: Long, action: PrivateNoteAction): PrivateNote?
     suspend fun attachments(generation: Long, id: ByteArray): List<PrivateNoteAttachment>
     suspend fun readAttachment(generation: Long, id: ByteArray, attachmentId: ByteArray): ByteArray
@@ -111,9 +112,9 @@ private class VaultPrivateNotesAccess(private val vault: VaultRepository) : Priv
     override suspend fun restoreRevision(generation: Long, saved: PrivateNote, revision: Long) =
         vault.restorePrivateNoteRevision(generation, saved.noteId, saved.revision, revision)
     override suspend fun load(generation: Long, id: ByteArray) = vault.privateNote(generation, id)
-    override suspend fun save(generation: Long, saved: PrivateNote?, title: String, body: String, pinned: Boolean, format: PrivateNoteFormat) =
+    override suspend fun save(generation: Long, saved: PrivateNote?, title: String, body: String, pinned: Boolean, format: PrivateNoteFormat, proceed: () -> Boolean) =
         vault.savePrivateNote(generation, id = saved?.noteId, expectedRevision = saved?.revision ?: 0,
-            title = title, body = body, pinned = pinned, format = format)
+            title = title, body = body, pinned = pinned, format = format, proceed = proceed)
     override suspend fun change(generation: Long, id: ByteArray, revision: Long, action: PrivateNoteAction) =
         vault.changePrivateNote(generation, id, revision, action)
     override suspend fun attachments(generation: Long, id: ByteArray) = vault.privateNoteAttachments(generation, id)
@@ -127,8 +128,11 @@ private class VaultPrivateNotesAccess(private val vault: VaultRepository) : Priv
 }
 
 /**
- * Explicit saves only. Lock or disposal cancels work and drops UI text; it never
- * writes a draft. Native generation and revision guards are the write boundary.
+ * Saves are explicit, with one exception: an ordinary lock saves unsaved text
+ * as a new revision through [captureForLock] and [LockDrafts], with the same
+ * expected-revision check. Panic, disposal, and identity change cancel work
+ * and drop UI text; they never write. Native generation and revision guards
+ * are the write boundary.
  */
 class PrivateNotesController internal constructor(
     private val generation: Long,
@@ -153,6 +157,8 @@ class PrivateNotesController internal constructor(
     private val mutableState = MutableStateFlow(PrivateNotesUiState())
     val state: StateFlow<PrivateNotesUiState> = mutableState.asStateFlow()
     private var closed = false
+    /** Set by [captureForLock]: the capture is the editor's last action. */
+    private var lockCaptured = false
     private var request = 0L
     private var listing: Job? = null
     private var cursor: ByteArray? = null
@@ -166,7 +172,7 @@ class PrivateNotesController internal constructor(
         refresh()
     }
 
-    private fun current(): Boolean = !closed && (vaultState.value as? VaultState.Unlocked)?.generation == generation
+    private fun current(): Boolean = !closed && !lockCaptured && (vaultState.value as? VaultState.Unlocked)?.generation == generation
     override fun activity() { if (current()) onActivity() }
     private fun update(change: (PrivateNotesUiState) -> PrivateNotesUiState) {
         if (current()) mutableState.value = change(mutableState.value)
@@ -412,6 +418,26 @@ class PrivateNotesController internal constructor(
         // A saved or trashed note changes the native cursor generation.
         loadPage(reset = true)
     }
+    /**
+     * The save that a lock runs before the session closes, or `null` when
+     * nothing is unsaved. The lock conceals the editor next, so the capture
+     * is its last action: no later edit, Save, or capture follows, and a
+     * never-saved note gets one save with one owner, never a copy. An action
+     * in flight owns its write, so a busy editor captures nothing. A stale
+     * revision fails as a conflict and the newer revision stays.
+     */
+    internal fun captureForLock(): LockDrafts.Save? {
+        if (!current()) return null
+        lockCaptured = true
+        val snapshot = state.value
+        if (snapshot.busy) return null
+        val editor = snapshot.editor ?: return null
+        if (!editor.canSave) return null
+        return LockDrafts.Save { proceed ->
+            withContext(dispatcher) { access.save(generation, editor.saved, editor.title, editor.body, editor.pinned, editor.format, proceed) }
+        }
+    }
+
     override fun save() = saveThen()
     override fun saveAndBack() = saveThen(leave = true)
     override fun saveAndExport() = saveThen(export = true,

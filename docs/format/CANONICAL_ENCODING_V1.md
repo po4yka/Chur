@@ -275,6 +275,7 @@ Each format version field has its own namespace:
 | Field | Value | Format | Owner |
 | --- | --- | --- | --- |
 | `container_version` | `0x0001` | `ChurObjectV1` | [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §3 |
+| `container_version` | `0x0002` | `ChurObjectV1` with bucket padding, [ADR-0066](../adr/0066-pad-object-containers-to-size-buckets.md) | [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §18 |
 | `record_version` | `0x01` | container chunk and final-commit records | [`OBJECT_CONTAINER_V1.md`](OBJECT_CONTAINER_V1.md) §8, §11 |
 | `descriptor_version` | `0x0001` | `VaultDescriptorV1` | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §2 |
 | `format_version` | `0x0001` | `ObjectKeyEnvelopeV1` | [`OBJECT_KEY_ENVELOPE_V1.md`](OBJECT_KEY_ENVELOPE_V1.md) §1 |
@@ -300,7 +301,7 @@ Each format version field has its own namespace:
 | `object_store_format_version` | `0x0001` | object store layout v1 | [`VAULT_DESCRIPTOR_V1.md`](VAULT_DESCRIPTOR_V1.md) §6 |
 | `slot_version` | `0x0001` | v1 key-slot families | [`../security/KEY_SLOTS.md`](../security/KEY_SLOTS.md) §1 |
 
-`container_version_floor` and `container_version_ceiling` carry values of the `container_version` namespace; a vault that supports only v1 containers records `0x0001` in both.
+`container_version_floor` and `container_version_ceiling` carry values of the `container_version` namespace; a vault that supports only v1 containers records `0x0001` in both, and a vault that also holds bucket-padded containers records `0x0001` and `0x0002`.
 
 Profile and policy identifiers:
 

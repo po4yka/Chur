@@ -99,13 +99,18 @@ object ChurVault {
         password: ByteArray,
     ): Long = handleOf("unlock") { out -> ChurNative.vaultUnlock(runtime, FACTOR_PASSWORD, password, out) }
 
-    /** Unlocks with a recovery phrase. */
+    /**
+     * Unlocks with a recovery phrase, as UTF-8 bytes.
+     *
+     * The phrase arrives as bytes so the caller can zero them after the call,
+     * which a `String` does not allow.
+     */
     fun unlockWithRecovery(
         runtime: Long,
-        phrase: String,
+        phrase: ByteArray,
     ): Long =
         handleOf("recover") { out ->
-            ChurNative.vaultUnlock(runtime, FACTOR_RECOVERY, phrase.encodeToByteArray(), out)
+            ChurNative.vaultUnlock(runtime, FACTOR_RECOVERY, phrase, out)
         }
 
     /** Unlocks with a `DeviceUnlockSecret` the platform keystore returned. */
@@ -280,29 +285,6 @@ object ChurVault {
         }
     }
 
-    /** Reads and hashes at most 1 MiB of one committed source ciphertext. */
-    fun sharedSourceRange(
-        session: Long,
-        objectId: ByteArray,
-        offset: ULong,
-        maxBytes: Int,
-    ): SharedSourceRange {
-        require(objectId.size == 16) { "invalid source object ID" }
-        require(offset <= Long.MAX_VALUE.toULong()) { "source range offset exceeds the ABI" }
-        require(maxBytes in 1..1024 * 1024) { "source range exceeds 1 MiB" }
-        return withChurBuffer(maxBytes) { output ->
-            val written = IntArray(1)
-            val sha256 = ByteArray(32)
-            ChurFailure.check(
-                ChurNative.sharingObjectRead(
-                    session, objectId, offset.toLong(), maxBytes, output, written, sha256,
-                ),
-                "sharing object read",
-            )
-            SharedSourceRange(output.copyOut(written[0]), sha256)
-        }
-    }
-
     /** Returns null if the object key is ready, otherwise its signed one-use request. */
     fun objectKeyRequest(session: Long, collectionId: ByteArray, objectId: ByteArray): ByteArray? {
         require(collectionId.size == 16 && objectId.size == 16)
@@ -313,8 +295,6 @@ object ChurVault {
         return result.copyOfRange(1, result.size)
     }
 
-    fun objectKeyIssue(session: Long, prekey: ByteArray): ByteArray =
-        objectKeyCall(session, prekey, ChurNative::objectKeyIssue)
 
     fun objectKeyAccept(session: Long, packageBytes: ByteArray, grant: ByteArray) {
         require(packageBytes.size <= 16_776_000 && grant.size == 346)
@@ -476,7 +456,10 @@ object ChurVault {
             1 -> 34
             5 -> 4 * 1024 * 1024 + 1
             8 -> 512 * 1024
+            9 -> 16
             10 -> 8_192
+            11 -> 346
+            12 -> 1024 * 1024
             else -> 1
         })
 
@@ -1435,6 +1418,23 @@ object ChurVault {
         length: Int,
     ): ByteArray {
         val out = ByteArray(length)
+        try {
+            fillRange(reader, offset, length, out)
+        } catch (failure: Throwable) {
+            // A read that fails part way leaves plaintext in `out`, and the
+            // caller never receives it to wipe.
+            out.fill(0)
+            throw failure
+        }
+        return out
+    }
+
+    private fun fillRange(
+        reader: Long,
+        offset: Long,
+        length: Int,
+        out: ByteArray,
+    ) {
         withChurBuffer(length) { buffer ->
             val written = IntArray(1)
             var at = 0
@@ -1451,14 +1451,19 @@ object ChurVault {
                 // next iteration re-reads from the authenticated container, so
                 // dropping it costs one chunk decrypt on the last step only.
                 val take = minOf(written[0], length - at)
-                buffer.copyOut(take).copyInto(out, at)
+                val chunk = buffer.copyOut(take)
+                try {
+                    chunk.copyInto(out, at)
+                } finally {
+                    // The intermediate copy is plaintext nothing else holds.
+                    chunk.fill(0)
+                }
                 at += take
             }
             if (at < length) {
                 throw ChurFailure(ChurStatus.OBJECT_INCOMPLETE, "the range ended early")
             }
         }
-        return out
     }
 
     /**

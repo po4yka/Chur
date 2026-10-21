@@ -16,7 +16,7 @@ use crate::panic::guard_status_for;
 use crate::registry::{self, Entry, Handle, Kind};
 
 const RECORD_VERSION: u16 = 1;
-const RANGE_MAX: u32 = 1_048_576;
+pub(crate) const RANGE_MAX: u32 = 1_048_576;
 const SNAPSHOT_MAX: usize = 8 * 1_024;
 
 const VERIFICATION_CACHE_MAX: usize = 1_024;
@@ -440,11 +440,6 @@ pub unsafe extern "C" fn chur_sharing_object_read(
     guard_status_for(session, || {
         // SAFETY: the caller guarantees these ranges and out-parameters.
         unsafe { write_out(bytes_written, 0usize)? };
-        ensure!(
-            max_bytes != 0 && max_bytes <= RANGE_MAX,
-            InvalidInput,
-            "ciphertext range exceeds the 1 MiB bound"
-        );
         let object_id = Id::from_slice(unsafe { borrow_bytes(object_id, 16)? })?;
         let entry = registry::get(session, Kind::Session)?;
         let Entry::Session { session, .. } = entry.as_ref() else {
@@ -453,40 +448,7 @@ pub unsafe extern "C" fn chur_sharing_object_read(
                 "handle is not a session",
             ));
         };
-        let bytes = {
-            let session = registry::lock(session);
-            let object = chur_catalog::store::object(session.catalog_ref()?, &object_id)?;
-            let item = sharing_publication::candidate(
-                session.catalog_ref()?,
-                &object.collection_id,
-                &object_id,
-            )?;
-            ensure!(
-                offset <= item.container_length,
-                InvalidInput,
-                "ciphertext offset is past the container"
-            );
-            // The snapshot verifies all chunks. Upload checks its full SHA-256,
-            // and the recipient verifies the final committed container.
-            let _reader = authenticated_container(&session, &item)?;
-            let mut file = chur_media::store::ContainerFile::open(
-                session.root_dir(),
-                &session.object_store_id(),
-                &item.store_id,
-            )?;
-            ensure!(
-                file.length() == item.container_length,
-                ObjectCorrupt,
-                "container length contradicts the committed catalog row"
-            );
-            let take = u64::from(max_bytes).min(item.container_length - offset);
-            file.read_at(
-                offset,
-                usize::try_from(take).map_err(|_| {
-                    Error::new(ChurStatus::ResourceLimitExceeded, "range exceeds usize")
-                })?,
-            )?
-        };
+        let bytes = object_range(&registry::lock(session), &object_id, offset, max_bytes)?;
         // SAFETY: the caller guarantees the writable output ranges.
         let buffer = unsafe { borrow_bytes_mut(destination, capacity)? };
         ensure!(
@@ -551,6 +513,38 @@ pub(crate) fn full_sha256(
         "container changed during publication"
     );
     Ok(digest.finalize().into())
+}
+
+/// Reads at most 1 MiB from one active object's committed original ciphertext.
+pub(crate) fn object_range(
+    session: &chur_catalog::vault::Session,
+    object_id: &Id,
+    offset: u64,
+    max_bytes: u32,
+) -> Result<Vec<u8>> {
+    ensure!(
+        max_bytes != 0 && max_bytes <= RANGE_MAX,
+        InvalidInput,
+        "ciphertext range exceeds the 1 MiB bound"
+    );
+    let object = chur_catalog::store::object(session.catalog_ref()?, object_id)?;
+    let item =
+        sharing_publication::candidate(session.catalog_ref()?, &object.collection_id, object_id)?;
+    ensure!(
+        offset <= item.container_length,
+        InvalidInput,
+        "ciphertext offset is past the container"
+    );
+    // Opening authenticates the manifest and the final commit, which reads only the
+    // container head and its fixed-size tail. The range is read from that same
+    // handle. The recipient verifies every chunk of the final committed container.
+    let mut file = authenticated_container(session, &item)?.into_source();
+    let take = u64::from(max_bytes).min(item.container_length - offset);
+    file.read_at(
+        offset,
+        usize::try_from(take)
+            .map_err(|_| Error::new(ChurStatus::ResourceLimitExceeded, "range exceeds usize"))?,
+    )
 }
 
 fn authenticated_container(

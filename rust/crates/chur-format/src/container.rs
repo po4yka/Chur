@@ -10,6 +10,11 @@
 //! header. And every non-final chunk carries exactly `chunk_size` plaintext,
 //! which gives one plaintext under one chunk size exactly one valid chunking
 //! and makes the §12 seek a computation rather than a scan.
+//!
+//! Version 2 of ADR-0066 keeps every v1 byte layout and adds bucket padding:
+//! the chunk stream carries zero bytes after the object up to the bucket of
+//! [`padded_length`], and the final commit keeps the true object length. A
+//! reader accepts both versions; a writer produces [`ContainerVersion::CURRENT`].
 
 use std::io::Write;
 
@@ -17,7 +22,7 @@ use zeroize::Zeroizing;
 
 use chur_core::limits::{COMMITMENT_LEN, ID_LEN, NONCE_LEN, TAG_LEN, container as bounds};
 use chur_core::status::ChurStatus;
-use chur_core::{Error, Id, Result, ensure};
+use chur_core::{Error, Id, Result, bail, ensure};
 use chur_crypto::aead::{self, Nonce};
 use chur_crypto::commit::{self, Commitment, Committer};
 use chur_crypto::kdf::{self, Context, Label};
@@ -26,9 +31,9 @@ use chur_crypto::tuple::{Tuple, tag};
 
 use crate::codec::{Reader, Writer};
 use crate::constants::{
-    CHUNK_RECORD_PROFILE_V1, COMMITMENT_PROFILE_V1, CONTAINER_VERSION_V1, ContainerRecordType,
-    ENCODING_PROFILE_V1, FLAGS_V1, MAGIC_OBJECT, MediaClass, RECORD_VERSION_V1, RESERVED_V1,
-    SUITE_V1, StreamKind,
+    CHUNK_RECORD_PROFILE_V1, COMMITMENT_PROFILE_V1, CONTAINER_VERSION_V1, CONTAINER_VERSION_V2,
+    ContainerRecordType, ENCODING_PROFILE_V1, FLAGS_V1, MAGIC_OBJECT, MediaClass,
+    RECORD_VERSION_V1, RESERVED_V1, SUITE_V1, StreamKind,
 };
 
 /// Length of the per-stream-revision chunk nonce prefix, §7.
@@ -51,15 +56,148 @@ fn record_id(bytes: [u8; ID_LEN]) -> Result<Id> {
 }
 
 // ---------------------------------------------------------------------------
+// Container versions and bucket padding
+// ---------------------------------------------------------------------------
+
+/// The `container_version` values this build reads.
+///
+/// Both versions share every record layout. Version 2 adds the bucket padding
+/// of ADR-0066, and every chunk AAD binds the version, so a chunk sealed under
+/// one version never opens under the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerVersion {
+    /// `0x0001`: the chunk stream ends with the last object byte.
+    V1,
+    /// `0x0002`: the chunk stream carries zero padding up to the bucket.
+    V2,
+}
+
+impl ContainerVersion {
+    /// The version every writer produces.
+    pub const CURRENT: Self = Self::V2;
+
+    /// The `container_version` value.
+    #[must_use]
+    pub const fn value(self) -> u16 {
+        match self {
+            Self::V1 => CONTAINER_VERSION_V1,
+            Self::V2 => CONTAINER_VERSION_V2,
+        }
+    }
+
+    /// The version a `container_version` value names, if this build reads it.
+    #[must_use]
+    pub const fn from_value(value: u16) -> Option<Self> {
+        match value {
+            CONTAINER_VERSION_V1 => Some(Self::V1),
+            CONTAINER_VERSION_V2 => Some(Self::V2),
+            _ => None,
+        }
+    }
+
+    /// Whether the chunk stream is padded to the bucket of [`padded_length`].
+    #[must_use]
+    pub const fn is_padded(self) -> bool {
+        matches!(self, Self::V2)
+    }
+}
+
+/// The smallest non-empty bucket, 4 KiB.
+pub const PADDING_BUCKET_MIN: u64 = 4_096;
+
+/// Buckets up to this length are powers of two, 1 MiB.
+pub const PADDING_POWER_LIMIT: u64 = 1_048_576;
+
+/// The stored length of an object of `plaintext_length` bytes in a v2
+/// container, ADR-0066.
+///
+/// With `e` the smallest exponent such that `2^e >= plaintext_length`:
+///
+/// ```text
+/// 0                     -> 0
+/// 1 ..= 1 MiB           -> max(4 KiB, 2^e)
+/// above 1 MiB           -> plaintext_length rounded up to a multiple of
+///                          2^max(20, e - 5)
+/// ```
+///
+/// Below 1 MiB a bucket is a power of two. From 1 MiB to 32 MiB a bucket is a
+/// whole number of MiB, and above 32 MiB each power-of-two interval holds 16
+/// buckets, so the padding is less than 1 MiB or less than one sixteenth of
+/// the object. No bucket passes the next power of two, so an object inside a
+/// power-of-two bound of §16 stays inside it when padded.
+#[must_use]
+pub const fn padded_length(plaintext_length: u64) -> u64 {
+    if plaintext_length == 0 {
+        return 0;
+    }
+    let exponent = u64::BITS - (plaintext_length - 1).leading_zeros();
+    if exponent <= PADDING_POWER_LIMIT.trailing_zeros() {
+        let power = 1u64 << exponent;
+        return if power < PADDING_BUCKET_MIN {
+            PADDING_BUCKET_MIN
+        } else {
+            power
+        };
+    }
+    let mut step_exponent = exponent - 5;
+    if step_exponent < PADDING_POWER_LIMIT.trailing_zeros() {
+        step_exponent = PADDING_POWER_LIMIT.trailing_zeros();
+    }
+    let step = 1u64 << step_exponent;
+    plaintext_length.div_ceil(step).saturating_mul(step)
+}
+
+/// The number of chunk records a v2 stream of an object of `plaintext_length`
+/// bytes takes under `chunk_size`.
+///
+/// §16 bounds the record count of the padded stream, and with a chunk size
+/// that is not a power of two the bucket can pass that bound while the object
+/// does not, so a writer compares this value rather than the object length.
+#[must_use]
+pub const fn padded_chunk_count(plaintext_length: u64, chunk_size: u32) -> u64 {
+    padded_length(plaintext_length).div_ceil(chunk_size as u64)
+}
+
+/// Checks that the bytes of a chunk past the object are the canonical zero
+/// padding, and returns how many leading bytes belong to the object.
+///
+/// `chunk_start` is the stream offset of the chunk and `object_length` the
+/// authenticated object length. In a v1 container the object fills every
+/// chunk, so the check passes over no byte.
+fn check_padding(plaintext: &[u8], chunk_start: u64, object_length: u64) -> Result<usize> {
+    let object_bytes = usize::try_from(object_length.saturating_sub(chunk_start))
+        .map_or(plaintext.len(), |value| value.min(plaintext.len()));
+    let padding = &plaintext[object_bytes..];
+    ensure!(
+        padding.iter().fold(0u8, |acc, byte| acc | byte) == 0,
+        ObjectCorrupt,
+        "the bucket padding is not the canonical zero bytes"
+    );
+    Ok(object_bytes)
+}
+
+/// The stream length a final commit declares through its chunk fields.
+fn stored_length(commit: &CanonicalFinalCommit, chunk_size: u32) -> Result<u64> {
+    if commit.chunk_count == 0 {
+        return Ok(0);
+    }
+    (commit.chunk_count - 1)
+        .checked_mul(u64::from(chunk_size))
+        .and_then(|full| full.checked_add(u64::from(commit.last_chunk_plaintext_length)))
+        .ok_or_else(|| corrupt("stored stream length overflows u64"))
+}
+
+// ---------------------------------------------------------------------------
 // Public preamble
 // ---------------------------------------------------------------------------
 
 /// `PublicPreambleV1`, the 28 bytes at file offset 0.
 ///
-/// Every field except `manifest_record_length` is a constant compared byte for
-/// byte, so the struct carries only the one variable value.
+/// Every field except `container_version` and `manifest_record_length` is a
+/// constant compared byte for byte, so the struct carries only those two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PublicPreamble {
+    container_version: ContainerVersion,
     manifest_record_length: u32,
 }
 
@@ -73,7 +211,7 @@ impl PublicPreamble {
     ///
     /// Returns [`ChurStatus::ObjectCorrupt`] when the length is outside the 40
     /// to 65536 bound of §3.
-    pub fn new(manifest_record_length: u32) -> Result<Self> {
+    pub fn new(container_version: ContainerVersion, manifest_record_length: u32) -> Result<Self> {
         ensure!(
             (bounds::MANIFEST_RECORD_MIN..=bounds::MANIFEST_RECORD_MAX)
                 .contains(&manifest_record_length),
@@ -81,8 +219,15 @@ impl PublicPreamble {
             "manifest record length is outside the v1 bound"
         );
         Ok(Self {
+            container_version,
             manifest_record_length,
         })
+    }
+
+    /// The declared container version.
+    #[must_use]
+    pub const fn container_version(&self) -> ContainerVersion {
+        self.container_version
     }
 
     /// The declared manifest record length.
@@ -97,7 +242,7 @@ impl PublicPreamble {
         let mut writer = Writer::with_capacity(Self::LEN);
         writer
             .fixed(&MAGIC_OBJECT)
-            .u16(CONTAINER_VERSION_V1)
+            .u16(self.container_version.value())
             .u16(ENCODING_PROFILE_V1)
             .u16(SUITE_V1)
             .u16(FLAGS_V1)
@@ -126,11 +271,12 @@ impl PublicPreamble {
             ChurStatus::ObjectCorrupt,
             "wrong container magic",
         )?;
-        ensure!(
-            reader.u16()? == CONTAINER_VERSION_V1,
-            UnsupportedVersion,
-            "container version is not supported"
-        );
+        let container_version = ContainerVersion::from_value(reader.u16()?).ok_or_else(|| {
+            Error::new(
+                ChurStatus::UnsupportedVersion,
+                "container version is not supported",
+            )
+        })?;
         ensure!(
             reader.u16()? == ENCODING_PROFILE_V1,
             UnsupportedVersion,
@@ -163,7 +309,7 @@ impl PublicPreamble {
             "container reserved field is not zero"
         );
         reader.finish()?;
-        Self::new(manifest_record_length)
+        Self::new(container_version, manifest_record_length)
     }
 }
 
@@ -809,13 +955,14 @@ fn final_commit_aad(
 }
 
 fn chunk_aad(
+    version: ContainerVersion,
     manifest: &CanonicalManifest,
     manifest_commitment: &Commitment,
     chunk_index: u64,
     plaintext_length: u32,
 ) -> Vec<u8> {
     Tuple::new(tag::OBJECT_CHUNK_AAD)
-        .u16(CONTAINER_VERSION_V1)
+        .u16(version.value())
         .u16(SUITE_V1)
         .id(manifest.object_id())
         .id(manifest.stream_id())
@@ -863,15 +1010,24 @@ impl StreamKeys {
 /// container, so a multi-gigabyte object stays bounded in memory. It computes
 /// the ordered chunk commitment incrementally, over the exact wire bytes it
 /// emits.
+///
+/// A v2 writer pads the stream to the bucket of [`padded_length`]. A short
+/// chunk ends the object, so the writer pads that chunk itself; the padding
+/// chunks after it are separate records that the caller writes through
+/// [`ContainerWriter::write_padding_chunk`], one index at a time, so the
+/// import journal reserves each of them as it reserves an object chunk.
 pub struct ContainerWriter<W: Write> {
     sink: W,
+    version: ContainerVersion,
     manifest: CanonicalManifest,
     manifest_commitment: Commitment,
     keys: StreamKeys,
     committer: Committer,
     chunk_count: u64,
     total_plaintext_length: u64,
+    stored_length: u64,
     last_chunk_plaintext_length: u32,
+    object_ended: bool,
     finished: bool,
 }
 
@@ -884,10 +1040,34 @@ impl<W: Write> ContainerWriter<W> {
     /// Returns [`ChurStatus::IoFailure`] when the sink rejects a write, and an
     /// AEAD or derivation error otherwise.
     pub fn start(
+        sink: W,
+        object_key: &Key,
+        manifest: CanonicalManifest,
+        manifest_nonce: Nonce,
+    ) -> Result<Self> {
+        Self::start_with_version(
+            sink,
+            object_key,
+            manifest,
+            manifest_nonce,
+            ContainerVersion::CURRENT,
+        )
+    }
+
+    /// As [`ContainerWriter::start`], for a named container version.
+    ///
+    /// Only vectors and compatibility tests write v1; every production writer
+    /// goes through [`ContainerWriter::start`].
+    ///
+    /// # Errors
+    ///
+    /// As [`ContainerWriter::start`].
+    pub fn start_with_version(
         mut sink: W,
         object_key: &Key,
         manifest: CanonicalManifest,
         manifest_nonce: Nonce,
+        version: ContainerVersion,
     ) -> Result<Self> {
         let keys = StreamKeys::derive(object_key, &manifest)?;
         let sealed = aead::seal(
@@ -898,20 +1078,23 @@ impl<W: Write> ContainerWriter<W> {
         )?;
         let manifest_record_length = u32::try_from(NONCE_LEN + sealed.len())
             .map_err(|_| corrupt("manifest record length overflows u32"))?;
-        let preamble = PublicPreamble::new(manifest_record_length)?;
+        let preamble = PublicPreamble::new(version, manifest_record_length)?;
         write_all(&mut sink, &preamble.encode())?;
         write_all(&mut sink, manifest_nonce.as_bytes())?;
         write_all(&mut sink, &sealed)?;
         let manifest_commitment = manifest_commitment(&manifest_nonce, &sealed);
         Ok(Self {
             sink,
+            version,
             manifest,
             manifest_commitment,
             keys,
             committer: Committer::new(tag::OBJECT_ORDERED_COMMITMENT),
             chunk_count: 0,
             total_plaintext_length: 0,
+            stored_length: 0,
             last_chunk_plaintext_length: 0,
+            object_ended: false,
             finished: false,
         })
     }
@@ -941,13 +1124,27 @@ impl<W: Write> ContainerWriter<W> {
         self.chunk_count
     }
 
-    /// The plaintext length written so far.
+    /// The object length written so far, without padding.
     #[must_use]
     pub const fn total_plaintext_length(&self) -> u64 {
         self.total_plaintext_length
     }
 
-    /// The length of the last chunk written, zero before the first.
+    /// The container version this writer produces.
+    #[must_use]
+    pub const fn version(&self) -> ContainerVersion {
+        self.version
+    }
+
+    /// Whether the stream still needs a padding chunk before
+    /// [`ContainerWriter::finish`], on the assumption that the object ends
+    /// with the bytes written so far.
+    #[must_use]
+    pub const fn padding_pending(&self) -> bool {
+        self.version.is_padded() && padded_length(self.total_plaintext_length) > self.stored_length
+    }
+
+    /// The stored length of the last chunk written, zero before the first.
     #[must_use]
     pub const fn last_chunk_plaintext_length(&self) -> u32 {
         self.last_chunk_plaintext_length
@@ -958,7 +1155,9 @@ impl<W: Write> ContainerWriter<W> {
     /// Every chunk except the last carries exactly `chunk_size` plaintext, so
     /// the caller feeds full chunks and one shorter final chunk. A short chunk
     /// followed by another chunk is rejected here rather than producing a
-    /// container no reader accepts.
+    /// container no reader accepts. In a v2 container a short chunk is padded
+    /// with zero bytes up to `chunk_size` or up to the bucket, whichever is
+    /// less.
     ///
     /// # Errors
     ///
@@ -986,14 +1185,9 @@ impl<W: Write> ContainerWriter<W> {
             "chunk plaintext exceeds the manifest chunk size"
         );
         ensure!(
-            self.last_chunk_plaintext_length == 0 || self.last_chunk_plaintext_length == chunk_size,
+            !self.object_ended,
             InvalidInput,
             "a short chunk must be the last chunk"
-        );
-        ensure!(
-            self.chunk_count < bounds::CHUNK_COUNT_MAX,
-            ResourceLimitExceeded,
-            "chunk count would exceed the v1 maximum"
         );
         let total = self
             .total_plaintext_length
@@ -1004,9 +1198,83 @@ impl<W: Write> ContainerWriter<W> {
             ResourceLimitExceeded,
             "total plaintext length would exceed the v1 maximum"
         );
+        // The bucket of the object so far only grows, so a stream whose
+        // padding cannot fit the §16 record bound fails at this chunk rather
+        // than after the whole object is encrypted.
+        ensure!(
+            !self.version.is_padded()
+                || padded_chunk_count(total, chunk_size) <= bounds::CHUNK_COUNT_MAX,
+            ResourceLimitExceeded,
+            "the padded stream would exceed the v1 chunk count maximum"
+        );
+        let short = plaintext_length < chunk_size;
+        if short && self.version.is_padded() {
+            let stored = padded_length(total)
+                .saturating_sub(self.stored_length)
+                .min(u64::from(chunk_size));
+            let stored = usize::try_from(stored).map_err(|_| corrupt("chunk exceeds a usize"))?;
+            let mut padded = Zeroizing::new(Vec::with_capacity(stored));
+            padded.extend_from_slice(plaintext);
+            padded.resize(stored, 0);
+            self.seal_chunk(&padded)?;
+        } else {
+            self.seal_chunk(plaintext)?;
+        }
+        self.total_plaintext_length = total;
+        self.object_ended = short;
+        Ok(())
+    }
 
+    /// Seals and writes the next zero padding chunk of a v2 stream.
+    ///
+    /// It ends the object at the bytes written so far. The caller reserves the
+    /// index in the import journal first, exactly as for an object chunk, and
+    /// calls this while [`ContainerWriter::padding_pending`] answers true.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ChurStatus::InvalidInput`] when the stream already fills its
+    /// bucket, and [`ChurStatus::ResourceLimitExceeded`] when a bound of §16
+    /// would be exceeded.
+    pub fn write_padding_chunk(&mut self) -> Result<()> {
+        ensure!(
+            !self.finished,
+            InvalidInput,
+            "container is already committed"
+        );
+        ensure!(
+            self.padding_pending(),
+            InvalidInput,
+            "the stream already fills its bucket"
+        );
+        let stored = (padded_length(self.total_plaintext_length) - self.stored_length)
+            .min(u64::from(self.manifest.chunk_size()));
+        let stored = usize::try_from(stored).map_err(|_| corrupt("chunk exceeds a usize"))?;
+        self.object_ended = true;
+        self.seal_chunk(&vec![0u8; stored])
+    }
+
+    /// Seals and writes one chunk record exactly as given.
+    fn seal_chunk(&mut self, plaintext: &[u8]) -> Result<()> {
+        ensure!(
+            self.chunk_count < bounds::CHUNK_COUNT_MAX,
+            ResourceLimitExceeded,
+            "chunk count would exceed the v1 maximum"
+        );
+        let plaintext_length =
+            u32::try_from(plaintext.len()).map_err(|_| corrupt("chunk exceeds u32"))?;
+        let stored_length = self
+            .stored_length
+            .checked_add(u64::from(plaintext_length))
+            .ok_or_else(|| corrupt("stored stream length overflows u64"))?;
+        ensure!(
+            stored_length <= bounds::TOTAL_PLAINTEXT_MAX,
+            ResourceLimitExceeded,
+            "stored stream length would exceed the v1 maximum"
+        );
         let index = self.chunk_count;
         let aad = chunk_aad(
+            self.version,
             &self.manifest,
             &self.manifest_commitment,
             index,
@@ -1023,7 +1291,7 @@ impl<W: Write> ContainerWriter<W> {
         write_all(&mut self.sink, &sealed)?;
 
         self.chunk_count = index + 1;
-        self.total_plaintext_length = total;
+        self.stored_length = stored_length;
         self.last_chunk_plaintext_length = plaintext_length;
         Ok(())
     }
@@ -1032,9 +1300,19 @@ impl<W: Write> ContainerWriter<W> {
     ///
     /// # Errors
     ///
-    /// Returns [`ChurStatus::IoFailure`] when the sink rejects a write, and an
-    /// AEAD error otherwise.
-    pub fn finish(mut self, commit_nonce: Nonce, commit_generation: u64) -> Result<W> {
+    /// Returns [`ChurStatus::InvalidInput`] while a padding chunk is pending,
+    /// [`ChurStatus::IoFailure`] when the sink rejects a write, and an AEAD
+    /// error otherwise.
+    pub fn finish(self, commit_nonce: Nonce, commit_generation: u64) -> Result<W> {
+        ensure!(
+            !self.padding_pending(),
+            InvalidInput,
+            "the bucket padding chunks are not written"
+        );
+        self.finish_unchecked(commit_nonce, commit_generation)
+    }
+
+    fn finish_unchecked(mut self, commit_nonce: Nonce, commit_generation: u64) -> Result<W> {
         ensure!(
             !self.finished,
             InvalidInput,
@@ -1104,12 +1382,106 @@ pub fn encode_container(
     commit_nonce: Nonce,
     commit_generation: u64,
 ) -> Result<Vec<u8>> {
+    encode_container_with_version(
+        object_key,
+        manifest,
+        manifest_nonce,
+        plaintext,
+        commit_nonce,
+        commit_generation,
+        ContainerVersion::CURRENT,
+    )
+}
+
+/// As [`encode_container`], for a named container version.
+///
+/// # Errors
+///
+/// As [`encode_container`].
+pub fn encode_container_with_version(
+    object_key: &Key,
+    manifest: CanonicalManifest,
+    manifest_nonce: Nonce,
+    plaintext: &[u8],
+    commit_nonce: Nonce,
+    commit_generation: u64,
+    version: ContainerVersion,
+) -> Result<Vec<u8>> {
     let chunk_size = manifest.chunk_size() as usize;
-    let mut writer = ContainerWriter::start(Vec::new(), object_key, manifest, manifest_nonce)?;
+    let mut writer = ContainerWriter::start_with_version(
+        Vec::new(),
+        object_key,
+        manifest,
+        manifest_nonce,
+        version,
+    )?;
     for chunk in plaintext.chunks(chunk_size) {
         writer.write_chunk(chunk)?;
     }
+    while writer.padding_pending() {
+        writer.write_padding_chunk()?;
+    }
     writer.finish(commit_nonce, commit_generation)
+}
+
+/// A departure from canonical bucket padding, for negative vectors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaddingDeviation {
+    /// The last stored byte holds this value rather than zero.
+    PaddingByte(u8),
+    /// The stream stops one byte short of the bucket.
+    ShortOfBucket,
+    /// The stream carries one zero byte past the bucket.
+    PastBucket,
+}
+
+/// Encodes a v2 container whose padding departs from the canonical rule.
+///
+/// Every record is sealed and committed correctly, so only the padding rule
+/// of ADR-0066 can refuse the result. It exists for negative vectors and tests
+/// and is never a production path.
+///
+/// # Errors
+///
+/// Returns [`ChurStatus::InvalidInput`] when the deviation cannot apply to
+/// this plaintext, and the errors of [`encode_container`] otherwise.
+pub fn encode_deviant_container(
+    object_key: &Key,
+    manifest: CanonicalManifest,
+    manifest_nonce: Nonce,
+    plaintext: &[u8],
+    commit_nonce: Nonce,
+    deviation: PaddingDeviation,
+) -> Result<Vec<u8>> {
+    let length = plaintext.len() as u64;
+    let bucket = padded_length(length);
+    let stored = match deviation {
+        PaddingDeviation::PaddingByte(_) | PaddingDeviation::ShortOfBucket if bucket <= length => {
+            bail!(InvalidInput, "the object has no padding to depart from")
+        }
+        PaddingDeviation::PaddingByte(_) => bucket,
+        PaddingDeviation::ShortOfBucket => bucket - 1,
+        PaddingDeviation::PastBucket => bucket + 1,
+    };
+    let stored = usize::try_from(stored).map_err(|_| corrupt("stream exceeds a usize"))?;
+    let mut stream = plaintext.to_vec();
+    stream.resize(stored, 0);
+    if let (PaddingDeviation::PaddingByte(value), Some(last)) = (deviation, stream.last_mut()) {
+        *last = value;
+    }
+    let chunk_size = manifest.chunk_size() as usize;
+    let mut writer = ContainerWriter::start_with_version(
+        Vec::new(),
+        object_key,
+        manifest,
+        manifest_nonce,
+        ContainerVersion::V2,
+    )?;
+    for chunk in stream.chunks(chunk_size) {
+        writer.seal_chunk(chunk)?;
+    }
+    writer.total_plaintext_length = length;
+    writer.finish_unchecked(commit_nonce, 1)
 }
 
 // ---------------------------------------------------------------------------
@@ -1181,6 +1553,7 @@ impl StreamIdentity {
 /// need no key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Layout {
+    container_version: ContainerVersion,
     manifest_record_length: u32,
     first_chunk_offset: u64,
     chunk_count: u64,
@@ -1204,6 +1577,7 @@ impl Layout {
                 .ok_or_else(|| corrupt("container is shorter than its preamble"))?,
         )?;
         let manifest_record_length = preamble.manifest_record_length();
+        let container_version = preamble.container_version();
         let first_chunk_offset = AFTER_PREAMBLE + u64::from(manifest_record_length);
         ensure!(
             first_chunk_offset <= bytes.len() as u64,
@@ -1259,6 +1633,7 @@ impl Layout {
         }
 
         Ok(Self {
+            container_version,
             manifest_record_length,
             first_chunk_offset,
             chunk_count,
@@ -1275,6 +1650,12 @@ impl Layout {
         self.manifest_record_length
     }
 
+    /// The declared container version.
+    #[must_use]
+    pub const fn container_version(&self) -> ContainerVersion {
+        self.container_version
+    }
+
     /// The offset of chunk record 0.
     #[must_use]
     pub const fn first_chunk_offset(&self) -> u64 {
@@ -1288,6 +1669,10 @@ impl Layout {
     }
 
     /// The sum of the plaintext lengths the chunk headers declare.
+    ///
+    /// In a v2 container it includes the bucket padding, so it is the stored
+    /// stream length and never the object size; only the final commit carries
+    /// the object size.
     #[must_use]
     pub const fn declared_plaintext_length(&self) -> u64 {
         self.declared_plaintext_length
@@ -1457,6 +1842,7 @@ impl<'a> ContainerReader<'a> {
             body_start + u64::from(header.ciphertext_length()),
         )?;
         let aad = chunk_aad(
+            self.layout.container_version,
             &self.manifest,
             &self.manifest_commitment,
             chunk_index,
@@ -1501,12 +1887,18 @@ impl<'a> ContainerReader<'a> {
         );
         let plaintext = aead::open(&self.keys.final_commit, &nonce, body, &aad)?;
         let commit = CanonicalFinalCommit::decode(&plaintext)?;
-        check_final_commit(&commit, &self.manifest, &self.manifest_commitment)?;
+        check_final_commit(
+            &commit,
+            &self.manifest,
+            &self.manifest_commitment,
+            self.layout.container_version,
+        )?;
         Ok(commit)
     }
 
-    /// Authenticates the manifest, every chunk, both commitments, and the final
-    /// commit, and returns the authenticated plaintext length.
+    /// Authenticates the manifest, every chunk, both commitments, the bucket
+    /// padding, and the final commit, and returns the authenticated object
+    /// length.
     ///
     /// # Errors
     ///
@@ -1521,7 +1913,8 @@ impl<'a> ContainerReader<'a> {
             "chunk record count disagrees with the final commit"
         );
         ensure!(
-            self.layout.declared_plaintext_length == commit.total_plaintext_length,
+            self.layout.declared_plaintext_length
+                == stored_length(&commit, self.manifest.chunk_size())?,
             ObjectCorrupt,
             "declared plaintext lengths disagree with the final commit"
         );
@@ -1549,6 +1942,11 @@ impl<'a> ContainerReader<'a> {
                 ObjectCorrupt,
                 "an authenticated chunk is not the declared length"
             );
+            check_padding(
+                &plaintext,
+                index * chunk_size,
+                commit.total_plaintext_length,
+            )?;
         }
         Ok(commit.total_plaintext_length)
     }
@@ -1585,6 +1983,7 @@ impl<'a> ContainerReader<'a> {
         for index in first..=last {
             let plaintext = self.read_chunk(index)?;
             let chunk_start = index * chunk_size;
+            check_padding(&plaintext, chunk_start, commit.total_plaintext_length)?;
             let from = usize::try_from(offset.saturating_sub(chunk_start))
                 .map_err(|_| corrupt("range offset overflows the address space"))?;
             let to = usize::try_from((end - chunk_start).min(plaintext.len() as u64))
@@ -1652,6 +2051,7 @@ fn check_final_commit(
     commit: &CanonicalFinalCommit,
     manifest: &CanonicalManifest,
     manifest_commitment: &Commitment,
+    version: ContainerVersion,
 ) -> Result<()> {
     ensure!(
         commit.object_id == *manifest.object_id()
@@ -1678,15 +2078,23 @@ fn check_final_commit(
             ObjectCorrupt,
             "last chunk plaintext length is outside the canonical chunking"
         );
-        let expected = (commit.chunk_count - 1)
-            .checked_mul(u64::from(manifest.chunk_size()))
-            .and_then(|full| full.checked_add(u64::from(commit.last_chunk_plaintext_length)))
-            .ok_or_else(|| corrupt("total plaintext length overflows u64"))?;
-        ensure!(
-            expected == commit.total_plaintext_length,
-            ObjectCorrupt,
-            "total plaintext length disagrees with the canonical chunking"
-        );
+        let stored = stored_length(commit, manifest.chunk_size())?;
+        if version.is_padded() {
+            // ADR-0066: the stream is exactly the bucket of the object, so a
+            // missing padding byte and an extra one both fail here.
+            ensure!(
+                commit.total_plaintext_length >= 1
+                    && padded_length(commit.total_plaintext_length) == stored,
+                ObjectCorrupt,
+                "stored stream length is not the bucket of the object length"
+            );
+        } else {
+            ensure!(
+                stored == commit.total_plaintext_length,
+                ObjectCorrupt,
+                "total plaintext length disagrees with the canonical chunking"
+            );
+        }
     }
     Ok(())
 }
@@ -1913,7 +2321,7 @@ pub struct Geometry {
     chunk_size: u32,
     chunk_count: u64,
     last_chunk_plaintext_length: u32,
-    total_plaintext_length: u64,
+    stored_length: u64,
     final_commit_offset: u64,
 }
 
@@ -1963,7 +2371,7 @@ impl Geometry {
                 chunk_size,
                 chunk_count: 0,
                 last_chunk_plaintext_length: 0,
-                total_plaintext_length: 0,
+                stored_length: 0,
                 final_commit_offset: file_length - FINAL_COMMIT_RECORD_LEN,
             });
         }
@@ -1981,7 +2389,7 @@ impl Geometry {
         );
         let last_chunk_plaintext_length =
             u32::try_from(last).map_err(|_| corrupt("the last chunk exceeds a u32"))?;
-        let total_plaintext_length = (chunk_count - 1)
+        let stored_length = (chunk_count - 1)
             .checked_mul(u64::from(chunk_size))
             .and_then(|value| value.checked_add(last))
             .ok_or_else(|| corrupt("the plaintext length overflows u64"))?;
@@ -1991,7 +2399,7 @@ impl Geometry {
             "the chunk count exceeds the §16 bound"
         );
         ensure!(
-            total_plaintext_length <= bounds::TOTAL_PLAINTEXT_MAX,
+            stored_length <= bounds::TOTAL_PLAINTEXT_MAX,
             ResourceLimitExceeded,
             "the plaintext length exceeds the §16 bound"
         );
@@ -2000,7 +2408,7 @@ impl Geometry {
             chunk_size,
             chunk_count,
             last_chunk_plaintext_length,
-            total_plaintext_length,
+            stored_length,
             final_commit_offset: file_length - FINAL_COMMIT_RECORD_LEN,
         })
     }
@@ -2011,13 +2419,21 @@ impl Geometry {
         self.chunk_count
     }
 
-    /// The plaintext length the layout implies.
+    /// The stored stream length the layout implies.
     ///
     /// It is a computation over the file length, so it stays a claim until the
-    /// final commit record authenticates the same value.
+    /// final commit record authenticates the same value. In a v2 container it
+    /// is the padding bucket, not the object size: the object size comes only
+    /// from the final commit, through [`StreamReader::size`].
     #[must_use]
-    pub const fn total_plaintext_length(&self) -> u64 {
-        self.total_plaintext_length
+    pub const fn stored_length(&self) -> u64 {
+        self.stored_length
+    }
+
+    /// The plaintext length of the last chunk record, zero when there is none.
+    #[must_use]
+    pub const fn last_chunk_plaintext_length(&self) -> u32 {
+        self.last_chunk_plaintext_length
     }
 
     /// The plaintext length of chunk `index`.
@@ -2071,6 +2487,7 @@ impl Geometry {
 /// costs one chunk of memory rather than a terabyte.
 pub struct StreamReader<R: ReadAt> {
     source: R,
+    version: ContainerVersion,
     manifest: CanonicalManifest,
     manifest_commitment: Commitment,
     keys: StreamKeys,
@@ -2127,6 +2544,7 @@ impl<R: ReadAt> StreamReader<R> {
 
         let mut reader = Self {
             source,
+            version: preamble.container_version(),
             manifest,
             manifest_commitment,
             keys,
@@ -2139,8 +2557,8 @@ impl<R: ReadAt> StreamReader<R> {
         // length that suggested it.
         let commit = reader.read_final_commit()?;
         ensure!(
-            commit.total_plaintext_length == geometry.total_plaintext_length
-                && commit.chunk_count == geometry.chunk_count,
+            commit.chunk_count == geometry.chunk_count
+                && commit.last_chunk_plaintext_length == geometry.last_chunk_plaintext_length,
             ObjectCorrupt,
             "the final commit disagrees with the container layout"
         );
@@ -2148,10 +2566,23 @@ impl<R: ReadAt> StreamReader<R> {
         Ok(reader)
     }
 
-    /// The authenticated plaintext size.
+    /// The authenticated object size, without padding.
     #[must_use]
     pub const fn size(&self) -> u64 {
         self.size
+    }
+
+    /// Returns the source whose manifest and final commit this reader authenticated,
+    /// so a caller reads raw ciphertext from the same handle.
+    #[must_use]
+    pub fn into_source(self) -> R {
+        self.source
+    }
+
+    /// The container version of the preamble.
+    #[must_use]
+    pub const fn version(&self) -> ContainerVersion {
+        self.version
     }
 
     /// The computed layout.
@@ -2172,18 +2603,29 @@ impl<R: ReadAt> StreamReader<R> {
         &self.manifest
     }
 
-    /// Reads and authenticates one chunk.
+    /// Reads and authenticates one chunk, and returns its object bytes.
+    ///
+    /// The bucket padding of a v2 container is checked and removed, so the
+    /// result is shorter than the record for the chunk that holds the end of
+    /// the object, and empty for a chunk that holds only padding.
     ///
     /// # Errors
     ///
     /// Returns [`ChurStatus::ObjectCorrupt`] when the record does not verify
-    /// and [`ChurStatus::ObjectIncomplete`] when it is absent or short.
+    /// or its padding is not canonical, and [`ChurStatus::ObjectIncomplete`]
+    /// when it is absent or short.
     pub fn read_chunk(&mut self, index: u64) -> Result<Zeroizing<Vec<u8>>> {
         let offset = self.geometry.chunk_record_offset(index)?;
         let length = self.geometry.chunk_record_length(index)?;
         let mut record = vec![0u8; length];
         self.source.read_at(offset, &mut record)?;
-        self.open_record(&record, index)
+        let mut plaintext = self.open_record(&record, index)?;
+        let chunk_start = index
+            .checked_mul(u64::from(self.manifest.chunk_size()))
+            .ok_or_else(|| corrupt("a chunk offset overflows u64"))?;
+        let object_bytes = check_padding(&plaintext, chunk_start, self.size)?;
+        plaintext.truncate(object_bytes);
+        Ok(plaintext)
     }
 
     /// Reads and authenticates the final commit record.
@@ -2216,7 +2658,12 @@ impl<R: ReadAt> StreamReader<R> {
             &aad,
         )?;
         let commit = CanonicalFinalCommit::decode(&plaintext)?;
-        check_final_commit(&commit, &self.manifest, &self.manifest_commitment)?;
+        check_final_commit(
+            &commit,
+            &self.manifest,
+            &self.manifest_commitment,
+            self.version,
+        )?;
         Ok(commit)
     }
 
@@ -2290,7 +2737,12 @@ impl<R: ReadAt> StreamReader<R> {
             // Authenticating before committing is the point: the commitment
             // must cover records that verify, not whatever bytes are at the
             // offsets.
-            let _ = self.open_record(&record, index)?;
+            let plaintext = self.open_record(&record, index)?;
+            check_padding(
+                &plaintext,
+                index * u64::from(self.manifest.chunk_size()),
+                self.size,
+            )?;
             committer.update(&record);
         }
         let commit = self.read_final_commit()?;
@@ -2319,6 +2771,7 @@ impl<R: ReadAt> StreamReader<R> {
             "the chunk record contradicts the canonical chunking"
         );
         let aad = chunk_aad(
+            self.version,
             &self.manifest,
             &self.manifest_commitment,
             index,
@@ -2371,14 +2824,21 @@ mod tests {
         Key::new([0x44; 32])
     }
 
+    /// A v1 container: the frozen-layout tests below fix v1 bytes, and every
+    /// v1 container already written must keep reading.
     fn build(plaintext: &[u8]) -> Vec<u8> {
-        encode_container(
+        build_version(plaintext, ContainerVersion::V1)
+    }
+
+    fn build_version(plaintext: &[u8], version: ContainerVersion) -> Vec<u8> {
+        encode_container_with_version(
             &object_key(),
             manifest(),
             Nonce::new([0x55; NONCE_LEN]),
             plaintext,
             Nonce::new([0x66; NONCE_LEN]),
             1,
+            version,
         )
         .unwrap()
     }
@@ -2456,7 +2916,14 @@ mod tests {
         let manifest = manifest();
         assert_eq!(manifest.aad().len(), 66);
         assert_eq!(
-            chunk_aad(&manifest, &[0u8; COMMITMENT_LEN], 0, CHUNK).len(),
+            chunk_aad(
+                ContainerVersion::V2,
+                &manifest,
+                &[0u8; COMMITMENT_LEN],
+                0,
+                CHUNK
+            )
+            .len(),
             109
         );
         assert_eq!(
@@ -2535,7 +3002,7 @@ mod tests {
         let geometry =
             Geometry::derive(bytes.len() as u64, preamble.manifest_record_length(), CHUNK).unwrap();
         assert_eq!(geometry.chunk_count(), 0);
-        assert_eq!(geometry.total_plaintext_length(), 0);
+        assert_eq!(geometry.stored_length(), 0);
         assert!(geometry.chunk_plaintext_length(0).is_err());
 
         let mut source = InMemory(bytes);
@@ -2695,7 +3162,8 @@ mod tests {
             (0x19, ChurStatus::UnsupportedVersion),
         ] {
             let mut bytes = build(b"");
-            bytes[offset] = 0x02;
+            // 0x0002 is the v2 container version, so the probe uses 0x0003.
+            bytes[offset] = 0x03;
             assert_eq!(
                 Layout::parse(&bytes).unwrap_err().status(),
                 expected,
@@ -3075,6 +3543,324 @@ mod tests {
         assert_eq!(
             CanonicalManifest::decode(&encoded).unwrap_err().status(),
             ChurStatus::NonCanonicalEncoding
+        );
+    }
+
+    // -- v2 bucket padding, ADR-0066 -----------------------------------------
+
+    fn build_v2(plaintext: &[u8]) -> Vec<u8> {
+        build_version(plaintext, ContainerVersion::V2)
+    }
+
+    fn deviant(plaintext: &[u8], deviation: PaddingDeviation) -> Vec<u8> {
+        encode_deviant_container(
+            &object_key(),
+            manifest(),
+            Nonce::new([0x55; NONCE_LEN]),
+            plaintext,
+            Nonce::new([0x66; NONCE_LEN]),
+            deviation,
+        )
+        .unwrap()
+    }
+
+    fn stream_open(bytes: Vec<u8>) -> Result<StreamReader<InMemory>> {
+        StreamReader::open(InMemory(bytes), &object_key(), &identity())
+    }
+
+    #[test]
+    fn the_bucket_rule_holds_at_its_edges() {
+        const MIB: u64 = 1 << 20;
+        let cases = [
+            (0, 0),
+            (1, 4_096),
+            (4_096, 4_096),
+            (4_097, 8_192),
+            (65_536, 65_536),
+            (65_537, 131_072),
+            (MIB - 1, MIB),
+            (MIB, MIB),
+            (MIB + 1, 2 * MIB),
+            (3 * MIB + 1, 4 * MIB),
+            (32 * MIB, 32 * MIB),
+            (32 * MIB + 1, 34 * MIB),
+            (64 * MIB + 1, 68 * MIB),
+            (bounds::TOTAL_PLAINTEXT_MAX - 1, bounds::TOTAL_PLAINTEXT_MAX),
+            (bounds::TOTAL_PLAINTEXT_MAX, bounds::TOTAL_PLAINTEXT_MAX),
+        ];
+        for (length, bucket) in cases {
+            assert_eq!(padded_length(length), bucket, "length {length}");
+        }
+        // The cost bound of ADR-0066: under 1 MiB of padding, or under one
+        // sixteenth of the object.
+        for length in [MIB + 1, 5 * MIB + 3, 33 * MIB, 100 * MIB + 7, 3 << 30] {
+            let padding = padded_length(length) - length;
+            assert!(padding < MIB || padding < length / 16, "length {length}");
+        }
+    }
+
+    #[test]
+    fn the_padded_chunk_count_can_pass_the_bound_the_object_meets() {
+        // 33 * 4096 is not a power of two, so 2^20 records of it end between
+        // two 8 GiB-step buckets.
+        let chunk_size = 33 * 4_096;
+        let capacity = u64::from(chunk_size) * bounds::CHUNK_COUNT_MAX;
+        let object = capacity - 1;
+        assert_eq!(
+            object.div_ceil(u64::from(chunk_size)),
+            bounds::CHUNK_COUNT_MAX
+        );
+        assert!(padded_chunk_count(object, chunk_size) > bounds::CHUNK_COUNT_MAX);
+        assert_eq!(
+            padded_chunk_count(32 << 32, chunk_size),
+            (32u64 << 32).div_ceil(u64::from(chunk_size))
+        );
+        assert_eq!(padded_chunk_count(0, chunk_size), 0);
+        assert_eq!(padded_chunk_count(1, CHUNK), 1);
+    }
+
+    #[test]
+    fn a_v2_container_round_trips_at_the_bucket_edges() {
+        // 4096 fills the smallest bucket exactly, 4097 opens the next one, and
+        // CHUNK + 1 needs a padding-only record after a padded chunk.
+        for length in [
+            1usize,
+            1000,
+            4_096,
+            4_097,
+            CHUNK as usize,
+            CHUNK as usize + 1,
+        ] {
+            let plaintext = pattern(length);
+            let bytes = build_v2(&plaintext);
+            assert_eq!(&bytes[0x08..0x0a], &[0, 2]);
+            let reader = open(&bytes);
+            let commit = reader.read_final_commit().unwrap();
+            assert_eq!(commit.total_plaintext_length(), length as u64);
+            assert_eq!(
+                stored_length(&commit, CHUNK).unwrap(),
+                padded_length(length as u64)
+            );
+            assert_eq!(reader.verify_complete().unwrap(), length as u64);
+            assert_eq!(
+                reader.read_range(0, length as u64).unwrap().as_slice(),
+                &plaintext[..]
+            );
+            assert_eq!(
+                reader.read_range(length as u64, 1).unwrap_err().status(),
+                ChurStatus::InvalidInput
+            );
+
+            let mut stream = stream_open(bytes).unwrap();
+            assert_eq!(stream.size(), length as u64);
+            assert_eq!(stream.verify_complete().unwrap(), length as u64);
+            assert_eq!(
+                stream.read_range(0, length as u64).unwrap().as_slice(),
+                &plaintext[..]
+            );
+            let mut joined = Vec::new();
+            for index in 0..stream.geometry().chunk_count() {
+                joined.extend_from_slice(&stream.read_chunk(index).unwrap());
+            }
+            assert_eq!(joined, plaintext, "length {length}");
+        }
+    }
+
+    #[test]
+    fn a_v2_zero_byte_stream_has_no_chunk_records() {
+        let bytes = build_v2(b"");
+        let reader = open(&bytes);
+        assert_eq!(reader.verify_complete().unwrap(), 0);
+        assert_eq!(stream_open(bytes).unwrap().size(), 0);
+    }
+
+    #[test]
+    fn objects_in_one_bucket_have_equal_container_lengths() {
+        let lengths = [
+            CHUNK as usize + 1,
+            CHUNK as usize + 2_000,
+            2 * CHUNK as usize,
+        ];
+        let sizes: Vec<usize> = lengths
+            .iter()
+            .map(|length| build_v2(&pattern(*length)).len())
+            .collect();
+        assert!(sizes.windows(2).all(|pair| pair[0] == pair[1]), "{sizes:?}");
+        let small: Vec<usize> = [1usize, 100, 4_096]
+            .iter()
+            .map(|length| build_v2(&pattern(*length)).len())
+            .collect();
+        assert!(small.windows(2).all(|pair| pair[0] == pair[1]), "{small:?}");
+        // The next bucket is a different length.
+        assert_ne!(build_v2(&pattern(4_097)).len(), small[0]);
+    }
+
+    #[test]
+    fn a_v1_container_still_reads_beside_v2() {
+        let plaintext = pattern(2 * CHUNK as usize + 17);
+        let bytes = build(&plaintext);
+        assert_eq!(&bytes[0x08..0x0a], &[0, 1]);
+        let mut stream = stream_open(bytes).unwrap();
+        assert_eq!(stream.version(), ContainerVersion::V1);
+        assert_eq!(stream.size(), plaintext.len() as u64);
+        assert_eq!(stream.verify_complete().unwrap(), plaintext.len() as u64);
+        assert_eq!(
+            stream
+                .read_range(0, plaintext.len() as u64)
+                .unwrap()
+                .as_slice(),
+            &plaintext[..]
+        );
+    }
+
+    #[test]
+    fn a_non_zero_padding_byte_is_refused() {
+        let plaintext = pattern(1000);
+        let bytes = deviant(&plaintext, PaddingDeviation::PaddingByte(0x01));
+        let reader = open(&bytes);
+        assert_eq!(
+            reader.verify_complete().unwrap_err().status(),
+            ChurStatus::ObjectCorrupt
+        );
+        assert_eq!(
+            reader.read_range(0, 10).unwrap_err().status(),
+            ChurStatus::ObjectCorrupt
+        );
+        let mut stream = stream_open(bytes).unwrap();
+        assert_eq!(
+            stream.verify_complete().unwrap_err().status(),
+            ChurStatus::ObjectCorrupt
+        );
+        assert_eq!(
+            stream.read_chunk(0).unwrap_err().status(),
+            ChurStatus::ObjectCorrupt
+        );
+    }
+
+    #[test]
+    fn a_padding_only_chunk_with_a_non_zero_byte_is_refused() {
+        // The object fills chunk 0 exactly and the bad byte sits in the
+        // padding-only chunk 1, which no range read touches.
+        let bytes = deviant(
+            &pattern(CHUNK as usize + 1),
+            PaddingDeviation::PaddingByte(0x80),
+        );
+        let reader = open(&bytes);
+        assert!(reader.read_range(0, 10).is_ok());
+        assert_eq!(
+            reader.verify_complete().unwrap_err().status(),
+            ChurStatus::ObjectCorrupt
+        );
+    }
+
+    #[test]
+    fn a_stream_short_of_or_past_its_bucket_is_refused() {
+        for deviation in [
+            PaddingDeviation::ShortOfBucket,
+            PaddingDeviation::PastBucket,
+        ] {
+            let bytes = deviant(&pattern(1000), deviation);
+            assert_eq!(
+                ContainerReader::open(&bytes, &object_key(), &identity())
+                    .unwrap()
+                    .verify_complete()
+                    .unwrap_err()
+                    .status(),
+                ChurStatus::ObjectCorrupt,
+                "{deviation:?}"
+            );
+            assert_eq!(
+                stream_open(bytes).err().map(|error| error.status()),
+                Some(ChurStatus::ObjectCorrupt),
+                "{deviation:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_truncated_or_extended_v2_container_is_refused() {
+        let bytes = build_v2(&pattern(CHUNK as usize + 1));
+        // Cut the padding-only record and its final commit.
+        let cut = Layout::parse(&bytes).unwrap().first_chunk_offset() as usize
+            + ChunkHeader::LEN
+            + CHUNK as usize
+            + TAG_LEN;
+        assert!(stream_open(bytes[..cut].to_vec()).is_err());
+        assert!(
+            ContainerReader::open(&bytes[..cut], &object_key(), &identity())
+                .unwrap()
+                .verify_complete()
+                .is_err()
+        );
+        let mut longer = bytes.clone();
+        longer.push(0);
+        assert!(stream_open(longer.clone()).is_err());
+        assert!(ContainerReader::open(&longer, &object_key(), &identity()).is_err());
+    }
+
+    #[test]
+    fn a_version_relabel_fails_authentication() {
+        for (bytes, version) in [
+            (build_v2(&pattern(4_096)), 1u8),
+            (build(&pattern(4_096)), 2u8),
+        ] {
+            // 4096 bytes fill their bucket, so both labels agree on every
+            // length and only the chunk AAD tells them apart.
+            let mut relabelled = bytes;
+            relabelled[0x09] = version;
+            let reader = open(&relabelled);
+            assert_eq!(
+                reader.verify_complete().unwrap_err().status(),
+                ChurStatus::ObjectCorrupt
+            );
+        }
+    }
+
+    #[test]
+    fn a_v2_writer_refuses_to_finish_before_its_padding() {
+        let mut writer = ContainerWriter::start(
+            Vec::new(),
+            &object_key(),
+            manifest(),
+            Nonce::new([1; NONCE_LEN]),
+        )
+        .unwrap();
+        // Three full chunks fill 192 KiB of a 256 KiB bucket, so one
+        // padding-only record follows.
+        for _ in 0..3 {
+            writer.write_chunk(&pattern(CHUNK as usize)).unwrap();
+        }
+        assert!(writer.padding_pending());
+        writer.write_padding_chunk().unwrap();
+        assert!(!writer.padding_pending());
+        assert_eq!(
+            writer.write_padding_chunk().unwrap_err().status(),
+            ChurStatus::InvalidInput
+        );
+        assert_eq!(
+            writer.write_chunk(&pattern(1)).unwrap_err().status(),
+            ChurStatus::InvalidInput
+        );
+        assert_eq!(writer.total_plaintext_length(), 3 * u64::from(CHUNK));
+        assert_eq!(writer.chunk_count(), 4);
+        assert!(writer.finish(Nonce::new([2; NONCE_LEN]), 1).is_ok());
+
+        let mut pending = ContainerWriter::start(
+            Vec::new(),
+            &object_key(),
+            manifest(),
+            Nonce::new([1; NONCE_LEN]),
+        )
+        .unwrap();
+        for _ in 0..3 {
+            pending.write_chunk(&pattern(CHUNK as usize)).unwrap();
+        }
+        assert_eq!(
+            pending
+                .finish(Nonce::new([2; NONCE_LEN]), 1)
+                .err()
+                .map(|error| error.status()),
+            Some(ChurStatus::InvalidInput)
         );
     }
 }

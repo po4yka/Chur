@@ -358,8 +358,13 @@ fn a_second_identity_cannot_take_a_credential_that_already_opens_one() {
     );
 }
 
-/// §1: platform aliases are not shared, and invalidating one identity's device
-/// slot affects only that identity.
+/// §1 and §10: one identity at a time holds a device slot, and a device slot
+/// opens only the identity that holds it.
+///
+/// A device unlock names no identity and opens the first entry whose slot
+/// authenticates, so a second device slot would let the registry order decide
+/// which vault the platform factor opens. The refusal reads as any device
+/// unlock that is not available.
 #[test]
 fn a_device_slot_belongs_to_one_identity() {
     let (root, mut real, mut decoy) = two_identities();
@@ -368,37 +373,57 @@ fn a_device_slot_belongs_to_one_identity() {
     let real_secret = real
         .add_apple_keychain_slot(real_item)
         .expect("real keychain");
-    let decoy_secret = decoy
-        .add_apple_keychain_slot(decoy_item)
-        .expect("decoy keychain");
-    assert_ne!(real_secret.expose(), decoy_secret.expose());
     let real_id = real.vault_id();
-    let decoy_slot = decoy
+    let real_slot = real
         .slots()
         .into_iter()
         .find(|(_, kind, _)| *kind == SlotType::AppleKeychain)
         .map(|(id, _, _)| id)
-        .expect("the decoy has a keychain slot");
+        .expect("the real identity has a keychain slot");
+    assert_eq!(
+        rejection(decoy.add_apple_keychain_slot(decoy_item)),
+        ChurStatus::PlatformKeyUnavailable
+    );
+    assert_eq!(
+        rejection(decoy.begin_android_keystore_slot()),
+        ChurStatus::PlatformKeyUnavailable
+    );
+    assert!(
+        decoy
+            .slots()
+            .into_iter()
+            .all(|(_, kind, _)| kind != SlotType::AppleKeychain)
+    );
     real.lock().expect("lock");
 
     // The real identity's Keychain secret opens the real identity and nothing
-    // else, and removing the decoy's slot does not disturb it.
+    // else.
     assert_eq!(
         vault::unlock_with_apple_keychain(&root, &real_secret, NOW)
             .expect("real")
             .vault_id(),
         real_id
     );
-    decoy.remove_slot(&decoy_slot).expect("remove");
+
+    // Once the real identity gives its slot up, the other identity may enroll,
+    // and the old secret opens nothing.
+    let mut real = vault::unlock_with_password(&root, REAL, NOW).expect("real again");
+    real.remove_slot(&real_slot).expect("remove");
+    real.lock().expect("lock");
+    let decoy_secret = decoy
+        .add_apple_keychain_slot(decoy_item)
+        .expect("decoy keychain");
+    assert_ne!(real_secret.expose(), decoy_secret.expose());
+    let decoy_id = decoy.vault_id();
     decoy.lock().expect("lock");
     assert_eq!(
-        vault::unlock_with_apple_keychain(&root, &real_secret, NOW)
-            .expect("real again")
+        vault::unlock_with_apple_keychain(&root, &decoy_secret, NOW)
+            .expect("decoy")
             .vault_id(),
-        real_id
+        decoy_id
     );
     assert_eq!(
-        rejection(vault::unlock_with_apple_keychain(&root, &decoy_secret, NOW)),
+        rejection(vault::unlock_with_apple_keychain(&root, &real_secret, NOW)),
         ChurStatus::AuthenticationFailed
     );
 }

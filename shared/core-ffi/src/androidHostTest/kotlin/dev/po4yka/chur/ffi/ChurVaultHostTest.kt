@@ -248,7 +248,7 @@ class ChurVaultHostTest {
         assertEquals(7, handshake.major)
         assertEquals(2, handshake.minor, "encrypted playback positions use ABI 7.2")
         assertEquals(1, handshake.objectFormatMin)
-        assertEquals(1, handshake.objectFormatMax)
+        assertEquals(2, handshake.objectFormatMax)
         assertTrue(handshake.capabilities and 0b0000_0010L != 0L, "the reader is declared")
         assertTrue(
             handshake.capabilities and 0b0001_0000L != 0L,

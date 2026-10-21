@@ -20,12 +20,10 @@ use chur_core::{
     limits::{container as container_bounds, media as media_bounds},
 };
 use chur_crypto::{Key, Nonce, random};
-use chur_format::constants::{
-    CONTAINER_VERSION_V1, IntegritySummary, MediaClass, ObjectState, SUITE_V1, StreamKind,
-};
+use chur_format::constants::{IntegritySummary, MediaClass, ObjectState, SUITE_V1, StreamKind};
 use chur_format::container::{
-    CanonicalManifest, ContainerWriter, Layout, MediaProperties, ReadAt, StreamIdentity,
-    StreamReader,
+    CanonicalManifest, ContainerVersion, ContainerWriter, Layout, MediaProperties, ReadAt,
+    StreamIdentity, StreamReader,
 };
 use zeroize::Zeroizing;
 
@@ -223,13 +221,19 @@ pub fn begin(
         // source can satisfy the second bound and fail the first. Refusing it
         // here rather than at the last chunk is the difference between a
         // rejected import and hours of encryption thrown away.
+        // The bucket padding of ADR-0066 adds records, so the count bound
+        // applies to the padded stream rather than to the source.
         ensure!(
-            length.div_ceil(u64::from(chunk_size)) <= container_bounds::CHUNK_COUNT_MAX,
+            chur_format::container::padded_chunk_count(length, chunk_size)
+                <= container_bounds::CHUNK_COUNT_MAX,
             ResourceLimitExceeded,
             "the source needs more chunk records than container §16 admits"
         );
     }
 
+    // The descriptor names the container versions the store holds before a
+    // container of a new version exists, ADR-0066.
+    session.admit_container_version(ContainerVersion::CURRENT.value())?;
     let collection_id = keys::ensure_default_collection(session)?;
     let collection = store::collection(session.catalog_ref()?, &collection_id)?;
     let collection_key = keys::collection_key(session, &collection_id, collection.current_epoch)?;
@@ -422,7 +426,7 @@ impl Import {
 
     /// Commits a copied original while observing cancellation during complete verification.
     pub fn commit_with_display_checked(
-        self,
+        mut self,
         session: &mut Session,
         content_type: &str,
         now_ms: u64,
@@ -458,9 +462,19 @@ impl Import {
             InvalidInput,
             "a media object carries at least one chunk"
         );
+        // ADR-0066: the padding chunks after the object are records like any
+        // other, so each index is reserved and made durable before it is
+        // sealed, exactly as `write` does for an object chunk.
+        while self.writer.padding_pending() {
+            let index = self.writer.chunk_count();
+            journal::reserve_chunk(session.catalog()?, &self.transaction_id, index)?;
+            self.writer.write_padding_chunk()?;
+            self.writer.sink_mut().sync()?;
+        }
         journal::mark_committing(session.catalog()?, &self.transaction_id)?;
 
         let total_plaintext = self.writer.total_plaintext_length();
+        let container_version = self.writer.version().value();
         let mut container = self.writer.finish(Nonce::random()?, 1)?;
         container.sync()?;
         let ciphertext_size = container.length()?;
@@ -526,7 +540,7 @@ impl Import {
                     stream_revision: 1,
                     source_content_revision: 0,
                     container_path_id: self.container_path_id,
-                    container_version: CONTAINER_VERSION_V1,
+                    container_version,
                     suite_id: SUITE_V1,
                     ciphertext_size,
                     plaintext_size: total_plaintext,
@@ -741,7 +755,9 @@ fn finish_abandonment(
 ///
 /// It returns `None` when the transaction is dead, in which case the container
 /// is discarded rather than rewritten: the reserved index has already consumed
-/// its nonce and §8 forbids a gap in the sequence.
+/// its nonce and §8 forbids a gap in the sequence. A transaction whose reserved
+/// record may hold bucket padding is dead too: only a known source length can
+/// show that the record holds object bytes alone.
 pub fn resume_offset(
     session: &Session,
     transaction_id: &Id,
@@ -751,7 +767,21 @@ pub fn resume_offset(
     Ok(
         match journal::resume_decision(&record, reserved_record_valid) {
             Resume::RestartFromManifest => Some(0),
-            Resume::ContinueAfter(index) => Some((index + 1) * u64::from(record.chunk_size)),
+            Resume::ContinueAfter(index) => {
+                // ADR-0066: a reserved index past the object holds bucket
+                // padding, and the journal does not record where the object
+                // ended. A resume continues only when a known source length
+                // proves the reserved record is all object bytes; otherwise
+                // the offset would count padding as object, so the
+                // transaction is dead.
+                let next = (index + 1)
+                    .checked_mul(u64::from(record.chunk_size))
+                    .ok_or_else(|| chur_core::err!(ObjectCorrupt, "the resume offset overflows"))?;
+                match record.expected_length {
+                    Some(length) if next <= length => Some(next),
+                    _ => None,
+                }
+            }
             Resume::Dead => None,
         },
     )

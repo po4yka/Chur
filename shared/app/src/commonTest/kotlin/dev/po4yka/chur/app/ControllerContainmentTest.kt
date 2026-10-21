@@ -215,7 +215,7 @@ class ControllerContainmentTest {
         controller.create("123", offerRecovery = false)
         advanceUntilIdle()
 
-        assertEquals("Use at least 12 digits for a vault PIN.", controller.formError.value)
+        assertEquals("Use at least 12 characters, or a PIN of at least 12 digits.", controller.formError.value)
         assertEquals(null, controller.notice.value)
     }
 

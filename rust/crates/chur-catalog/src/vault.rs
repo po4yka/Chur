@@ -275,6 +275,7 @@ pub fn create_with_params(
     // not write a slot.
     password::check_memory_available(params)?;
     let canonical = password::canonical_bytes(password)?;
+    check_new_password(&canonical)?;
 
     // §11: the registry holds at most two entries.
     let existing = root_dir.registry_names()?;
@@ -334,7 +335,7 @@ pub fn create_with_params(
             catalog_generation,
             catalog_header_commitment: header_commitment,
         },
-        object_store: ObjectStoreDescriptor::v1(object_store_id),
+        object_store: ObjectStoreDescriptor::current(object_store_id),
         key_slots: vec![slot],
         migration: None,
     };
@@ -692,10 +693,18 @@ pub fn android_keystore_material(root_dir: &VaultRoot) -> Result<Vec<KeystoreUnl
             .iter()
             .filter(|entry| entry.slot_type == SlotType::AndroidKeystore)
         {
-            let body = AndroidKeystoreSlotBody::decode(&entry.slot_body)?;
+            // A malformed body is skipped rather than returned as an error,
+            // as an entry that fails the parser is: one bad slot must not
+            // stop device unlock for every other slot on the device.
+            let Ok(body) = AndroidKeystoreSlotBody::decode(&entry.slot_body) else {
+                continue;
+            };
             let binding = entry.binding(descriptor.vault_id);
+            let Ok(aad) = AndroidKeystoreSlotBody::aad(&binding, body.alias()) else {
+                continue;
+            };
             material.push(KeystoreUnlockMaterial {
-                aad: AndroidKeystoreSlotBody::aad(&binding, body.alias())?,
+                aad,
                 alias: body.alias().to_vec(),
                 gcm_nonce: *body.gcm_nonce(),
                 wrapped_root_secret: *body.wrapped_root_secret(),
@@ -1246,6 +1255,8 @@ impl Session {
     /// under a KEK derived from it, so the Keychain never holds vault
     /// ciphertext and the envelope stays test-vectorable at the Rust layer.
     pub fn add_apple_keychain_slot(&mut self, keychain_item_id: Id) -> Result<Key> {
+        self.root_secret()?;
+        self.refuse_device_slot_of_another_identity()?;
         let secret: Key = random::secret::<32>()?;
         let generation = self.next_slot_generation(SlotType::AppleKeychain);
         let slot_id = random::id()?;
@@ -1285,6 +1296,7 @@ impl Session {
         // recorded: a locked session must neither release the root nor leave a
         // half-opened enrollment behind.
         let root_secret = self.root_secret()?.duplicate();
+        self.refuse_device_slot_of_another_identity()?;
         let slot_id = random::id()?;
         let generation = self.next_slot_generation(SlotType::AndroidKeystore);
         let alias = random::array::<KEYSTORE_ALIAS_LEN>()?.to_vec();
@@ -1381,6 +1393,7 @@ impl Session {
         let root = self.root_secret()?;
         password::check_memory_available(params)?;
         let canonical = password::canonical_bytes(password)?;
+        check_new_password(&canonical)?;
         let generation = self.next_slot_generation(SlotType::Password);
         let slot = seal_password_slot(
             &self.descriptor.vault_id,
@@ -1536,6 +1549,45 @@ impl Session {
             .map_or(1, |current| current + 1)
     }
 
+    /// Refuses a device slot when another identity already holds one.
+    ///
+    /// `DECOY_VAULT.md` §10 admits one device-slot identity per install. A
+    /// device unlock names no identity: it opens the first registry entry whose
+    /// slot authenticates, so a device slot in each of two identities would let
+    /// the filename order decide which vault a fingerprint opens. The refusal
+    /// is [`ChurStatus::PlatformKeyUnavailable`], the status of any device
+    /// unlock that is not available, so the message a host shows is the same
+    /// as for a device without the factor.
+    ///
+    /// An identity that already holds a device slot may always add another,
+    /// which is what a policy change does. That also keeps the policy change
+    /// working on an install where both identities enrolled before this rule.
+    /// An entry that cannot be read or does not parse is skipped, as every
+    /// unlock skips it.
+    fn refuse_device_slot_of_another_identity(&self) -> Result<()> {
+        if self.descriptor.key_slots.iter().any(is_device_slot) {
+            return Ok(());
+        }
+        for name in self.root_dir.registry_names()? {
+            if name == self.entry_name {
+                continue;
+            }
+            let Ok(bytes) = read_entry(&self.root_dir, &name) else {
+                continue;
+            };
+            let Ok(descriptor) = VaultDescriptor::parse(&bytes) else {
+                continue;
+            };
+            if descriptor.key_slots.iter().any(is_device_slot) {
+                bail!(
+                    PlatformKeyUnavailable,
+                    "device unlock is not available for this vault"
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Runs the slot transaction of `KEY_SLOTS.md` §9.
     ///
     /// Write the new descriptor to a temporary name, fsync it, read it back and
@@ -1566,6 +1618,30 @@ impl Session {
         let mut candidate = self.descriptor.clone();
         candidate.descriptor_generation = next_descriptor_generation(&self.descriptor)?;
         candidate.catalog.catalog_generation = generation;
+        self.commit_descriptor(candidate, sync_directory)
+    }
+
+    /// Raises the container-version ceiling of the object store, ADR-0066.
+    ///
+    /// `VAULT_DESCRIPTOR_V1.md` §6 has the descriptor name the highest
+    /// container version its store holds, so a build that cannot read a v2
+    /// container refuses the vault as a whole rather than one object at a
+    /// time. A writer calls this before the first byte of a container of
+    /// `version`; a store whose ceiling already admits it is left alone, so
+    /// the rewrite happens once per vault.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ChurStatus::VaultLocked`] once the session is locked, and the
+    /// descriptor-installation errors otherwise.
+    pub fn admit_container_version(&mut self, version: u16) -> Result<()> {
+        if self.descriptor.object_store.container_version_ceiling >= version {
+            return Ok(());
+        }
+        self.root_secret()?;
+        let mut candidate = self.descriptor.clone();
+        candidate.descriptor_generation = next_descriptor_generation(&self.descriptor)?;
+        candidate.object_store.container_version_ceiling = version;
         self.commit_descriptor(candidate, sync_directory)
     }
 
@@ -1621,6 +1697,36 @@ fn password_candidates(root_dir: &VaultRoot) -> Result<Vec<PasswordCandidate>> {
         });
     }
     Ok(candidates)
+}
+
+/// Whether a slot belongs to a device family, `KEY_SLOTS.md` §4 and §5.
+fn is_device_slot(entry: &KeySlotDescriptor) -> bool {
+    matches!(
+        entry.slot_type,
+        SlotType::AndroidKeystore | SlotType::AppleKeychain
+    )
+}
+
+/// Refuses a new or changed password shorter than
+/// `docs/security/PASSWORD_PROFILE.md` §3 allows.
+///
+/// Only a slot that is being created is checked. An unlock never is, so a
+/// slot made before the rule existed still opens. The count is of Unicode
+/// scalar values, so a host cannot meet it with bytes alone.
+fn check_new_password(canonical: &[u8]) -> Result<()> {
+    let characters = core::str::from_utf8(canonical)
+        .map_err(|_| {
+            Error::new(
+                ChurStatus::InvalidInput,
+                "password bytes are not valid UTF-8",
+            )
+        })?
+        .chars()
+        .count();
+    if characters < chur_core::limits::password::NEW_MIN_CHARS {
+        bail!(InvalidInput, "a new password needs at least 12 characters");
+    }
+    Ok(())
 }
 
 fn read_entry(root_dir: &VaultRoot, name: &RegistryName) -> Result<Vec<u8>> {
@@ -2720,13 +2826,13 @@ mod tests {
         let root_dir = scratch();
         drop(make(&root_dir));
         drop(
-            create(&root_dir, b"second", 1)
+            create(&root_dir, b"the second identity", 1)
                 .expect("create")
                 .activate()
                 .expect("activate"),
         );
         assert_eq!(
-            rejection(create(&root_dir, b"third", 1)),
+            rejection(create(&root_dir, b"the third identity", 1)),
             ChurStatus::ResourceLimitExceeded
         );
     }
@@ -2984,6 +3090,203 @@ mod tests {
     }
 
     #[test]
+    fn only_one_identity_can_hold_a_device_slot() {
+        let root_dir = scratch();
+        let mut first = make(&root_dir);
+        let enrollment = first.begin_android_keystore_slot().expect("begin");
+        let (nonce, wrapped) = keystore_wrap(&enrollment.aad, enrollment.root_secret.expose());
+        first
+            .finish_android_keystore_slot(nonce, wrapped)
+            .expect("finish");
+        // The identity that holds the slot can still replace it, which is what
+        // a policy change does.
+        let enrollment = first.begin_android_keystore_slot().expect("replace");
+        let (nonce, wrapped) = keystore_wrap(&enrollment.aad, enrollment.root_secret.expose());
+        first
+            .finish_android_keystore_slot(nonce, wrapped)
+            .expect("finish the replacement");
+        drop(first);
+
+        let mut second = create(&root_dir, b"the other identity", 1)
+            .expect("create")
+            .activate()
+            .expect("activate");
+        let before = second.slots().len();
+        assert_eq!(
+            rejection(second.begin_android_keystore_slot().map(|_| ())),
+            ChurStatus::PlatformKeyUnavailable
+        );
+        let item = random::id().expect("id");
+        assert_eq!(
+            rejection(second.add_apple_keychain_slot(item).map(|_| ())),
+            ChurStatus::PlatformKeyUnavailable
+        );
+        assert_eq!(second.slots().len(), before);
+        drop(second);
+
+        // Every device slot in the registry belongs to the first identity.
+        let material = android_keystore_material(&root_dir).expect("material");
+        assert_eq!(material.len(), 2);
+    }
+
+    #[test]
+    fn a_legacy_install_with_two_device_slots_can_still_replace_each() {
+        let root_dir = scratch();
+        let mut first = make(&root_dir);
+        let enrollment = first.begin_android_keystore_slot().expect("begin");
+        let (nonce, wrapped) = keystore_wrap(&enrollment.aad, enrollment.root_secret.expose());
+        first
+            .finish_android_keystore_slot(nonce, wrapped)
+            .expect("finish");
+
+        // An install from before the rule: the second identity committed its
+        // own device slot while the first already held one.
+        let mut second = create(&root_dir, b"the other identity", 1)
+            .expect("create")
+            .activate()
+            .expect("activate");
+        let slot_id = random::id().expect("id");
+        let generation = second.next_slot_generation(SlotType::AndroidKeystore);
+        let binding = SlotBinding::v1(
+            second.vault_id(),
+            slot_id,
+            SlotType::AndroidKeystore,
+            generation,
+        );
+        let alias = random::array::<KEYSTORE_ALIAS_LEN>()
+            .expect("alias")
+            .to_vec();
+        let body =
+            AndroidKeystoreSlotBody::new(&binding, alias, [1; GCM_NONCE_LEN], [2; WRAPPED_KEY_LEN])
+                .expect("body");
+        let legacy = KeySlotDescriptor::v1(
+            slot_id,
+            SlotType::AndroidKeystore,
+            generation,
+            body.encode(),
+        )
+        .expect("slot");
+        second
+            .commit_slots(|slots| slots.push(legacy))
+            .expect("commit the legacy slot");
+
+        // Each identity may still replace its own slot, which a policy change
+        // needs; neither is blocked by the other.
+        second
+            .begin_android_keystore_slot()
+            .expect("the second identity replaces its slot");
+        first
+            .begin_android_keystore_slot()
+            .expect("the first identity replaces its slot");
+        second
+            .add_apple_keychain_slot(random::id().expect("id"))
+            .expect("a second family in the same identity");
+    }
+
+    #[test]
+    fn an_unreadable_entry_does_not_block_an_enrollment() {
+        let root_dir = scratch();
+        drop(make(&root_dir));
+        let mut second = create(&root_dir, b"the other identity", 1)
+            .expect("create")
+            .activate()
+            .expect("activate");
+        let other = root_dir
+            .registry_names()
+            .expect("names")
+            .into_iter()
+            .find(|name| *name != second.entry_name)
+            .expect("the first entry");
+        // A directory where the entry file was cannot be read as a file.
+        let path = root_dir.registry_entry(&other);
+        std::fs::remove_file(&path).expect("remove");
+        std::fs::create_dir(&path).expect("directory");
+        second.begin_android_keystore_slot().expect("begin");
+    }
+
+    #[test]
+    fn a_new_or_changed_password_needs_twelve_characters() {
+        let root_dir = scratch();
+        assert_eq!(
+            rejection(create(&root_dir, b"1234a", 1)),
+            ChurStatus::InvalidInput
+        );
+        // Eleven scalar values in more than twelve bytes is still too short.
+        assert_eq!(
+            rejection(create(
+                &root_dir,
+                "\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}abcde".as_bytes(),
+                1
+            )),
+            ChurStatus::InvalidInput
+        );
+        let mut session = create(&root_dir, b"123456789012", 1)
+            .expect("a 12-digit PIN")
+            .activate()
+            .expect("activate");
+        assert_eq!(
+            rejection(session.replace_password(b"short", Argon2Params::v1_default())),
+            ChurStatus::InvalidInput
+        );
+        session
+            .replace_password(b"a longer passphrase", Argon2Params::v1_default())
+            .expect("change");
+        drop(session);
+        // An unlock is never held to the rule: a short attempt is only a wrong
+        // credential, so a slot made before the rule still opens.
+        assert_eq!(
+            rejection(unlock_with_password(&root_dir, b"short", 1)),
+            ChurStatus::AuthenticationFailed
+        );
+    }
+
+    #[test]
+    fn a_malformed_keystore_slot_does_not_hide_the_others() {
+        let root_dir = scratch();
+        let mut session = make(&root_dir);
+        let vault_id = session.vault_id();
+        let generation = session.next_slot_generation(SlotType::AndroidKeystore);
+        let damaged = KeySlotDescriptor::v1(
+            random::id().expect("id"),
+            SlotType::AndroidKeystore,
+            generation,
+            vec![0xff; 96],
+        )
+        .expect("slot");
+        session
+            .commit_slots(|slots| slots.push(damaged))
+            .expect("commit the damaged slot");
+        let enrollment = session.begin_android_keystore_slot().expect("begin");
+        let (nonce, wrapped) = keystore_wrap(&enrollment.aad, enrollment.root_secret.expose());
+        session
+            .finish_android_keystore_slot(nonce, wrapped)
+            .expect("finish");
+        drop(session);
+
+        let material = android_keystore_material(&root_dir).expect("material");
+        assert_eq!(material.len(), 1, "the damaged body is skipped");
+        let root = keystore_unwrap(&material[0]).expect("the good slot unwraps");
+        assert_eq!(
+            unlock_with_android_keystore(&root_dir, &root, 1)
+                .expect("unlock")
+                .vault_id(),
+            vault_id
+        );
+    }
+
+    #[test]
+    fn an_identity_with_no_device_slot_does_not_block_another() {
+        let root_dir = scratch();
+        drop(make(&root_dir));
+        let mut second = create(&root_dir, b"the other identity", 1)
+            .expect("create")
+            .activate()
+            .expect("activate");
+        let item = random::id().expect("id");
+        second.add_apple_keychain_slot(item).expect("slot");
+    }
+
+    #[test]
     fn an_abandoned_enrollment_leaves_the_descriptor_alone() {
         let root_dir = scratch();
         let mut session = make(&root_dir);
@@ -3046,6 +3349,41 @@ mod tests {
         assert_eq!(session.descriptor.descriptor_generation, 1);
         session.add_recovery_slot().expect("recovery");
         assert_eq!(session.descriptor.descriptor_generation, 2);
+    }
+
+    #[test]
+    fn a_v1_store_raises_its_container_ceiling_once_and_keeps_it() {
+        let root_dir = scratch();
+        let mut session = make(&root_dir);
+        assert_eq!(session.descriptor.object_store.container_version_ceiling, 2);
+
+        // A vault created before ADR-0066 records a ceiling of 1.
+        let mut old = session.descriptor.clone();
+        old.descriptor_generation += 1;
+        old.object_store.container_version_ceiling = 1;
+        session
+            .commit_descriptor(old, sync_directory)
+            .expect("record a v1 ceiling");
+        let generation = session.descriptor.descriptor_generation;
+
+        session.admit_container_version(1).expect("v1 is admitted");
+        assert_eq!(session.descriptor.descriptor_generation, generation);
+        session
+            .admit_container_version(2)
+            .expect("raise the ceiling");
+        assert_eq!(session.descriptor.object_store.container_version_ceiling, 2);
+        assert_eq!(session.descriptor.descriptor_generation, generation + 1);
+        session
+            .admit_container_version(2)
+            .expect("already admitted");
+        assert_eq!(session.descriptor.descriptor_generation, generation + 1);
+        drop(session);
+
+        let reopened = unlock_with_password(&root_dir, PASSWORD, 2).expect("unlock");
+        assert_eq!(
+            reopened.descriptor.object_store.container_version_ceiling,
+            2
+        );
     }
 
     #[test]

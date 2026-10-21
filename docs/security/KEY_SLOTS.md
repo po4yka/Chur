@@ -70,8 +70,9 @@ Preferred design:
 
 - non-exportable AES-256-GCM wrapping key in Android Keystore;
 - user authentication required according to the configured policy: convenient mode accepts biometry or a device credential, so the device unlock code opens this slot; strict mode accepts biometry only and invalidates on biometric enrollment change;
-- TEE-backed by default when available;
-- StrongBox optional with explicit fallback;
+- held in secure hardware: a key that the Keystore keeps in software is deleted and the enrollment fails, [`../ANDROID.md`](../ANDROID.md) §9.2;
+- usable only while the device is unlocked;
+- StrongBox optional with explicit fallback, requested only in the maximum-security mode of [`../ANDROID.md`](../ANDROID.md) §9.5, which v1 does not have;
 - root wrapped with fresh 96-bit GCM nonce;
 - slot AAD binds the §2 field set on every wrap and unwrap: slot type and version, `vault_id`, `slot_generation`, `wrap_suite_id`, and the public parameters;
 - alias is opaque and does not reveal real/decoy identity.
@@ -147,6 +148,12 @@ An unlock attempt that uses a password runs exactly two Argon2id derivations, wh
 - the memory the profile requires is checked once, before the first candidate, under [`PASSWORD_PROFILE.md`](PASSWORD_PROFILE.md) §6; a device that cannot allocate it runs no candidate at all.
 
 The constant equalizes the derivation cost of one attempt. It does not hide the number of descriptors on the device or the Argon2 parameters they publish; the residual signals are in [`DECOY_VAULT.md`](DECOY_VAULT.md) §5.
+
+A device unlock tries the §4 and §5 slots of every identity in registry order and opens the first one that authenticates. Each slot has its own key or Keychain item, so a slot of any identity authenticates, and the order alone would choose the identity. Therefore at most one identity on a device holds a device slot:
+
+- `begin_android_keystore_slot` and `add_apple_keychain_slot` return `PLATFORM_KEY_UNAVAILABLE` when the session's identity holds no device slot and another registry entry that can be read and parsed holds a slot of either device family. They check this before they draw a slot identity or release the root, so a refused enrollment changes nothing;
+- an identity that holds a device slot can always add a replacement, which is what a device-slot policy change does under §9. This also keeps the policy change working on an install where both identities enrolled before this rule;
+- the residual signal this leaves is in [`DECOY_VAULT.md`](DECOY_VAULT.md) §5.
 
 ## 9. Transactions
 

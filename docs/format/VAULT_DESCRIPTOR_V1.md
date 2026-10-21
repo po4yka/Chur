@@ -127,7 +127,7 @@ Conceptual fields:
 
 ```text
 offset  size  field                          v1 value
-0x00     2    catalog_format_version:u16     0x0001 through 0x000a
+0x00     2    catalog_format_version:u16     0x0001 through 0x0011
 0x02     2    catalog_crypto_suite:u16       0x0001
 0x04    16    opaque_catalog_path_id         random, never all zero
 0x14     8    catalog_generation:u64
@@ -161,11 +161,11 @@ offset  size  field                            v1 value
 0x02    16    opaque_root_path_id              random, never all zero
 0x12     2    naming_profile_id:u16            0x0001
 0x14     2    container_version_floor:u16      0x0001
-0x16     2    container_version_ceiling:u16    0x0001
+0x16     2    container_version_ceiling:u16    0x0001 or 0x0002
 0x18          end of object-store descriptor
 ```
 
-The structure is exactly 24 bytes and carries no variable field. `container_version_floor` must be less than or equal to `container_version_ceiling`, and both carry values of the `container_version` namespace of [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.2.
+The structure is exactly 24 bytes and carries no variable field. `container_version_floor` must be less than or equal to `container_version_ceiling`, and both carry values of the `container_version` namespace of [`CANONICAL_ENCODING_V1.md`](CANONICAL_ENCODING_V1.md) §15.2. The floor is `0x0001`. The ceiling is `0x0001` or `0x0002`, and a reader refuses any other value as `UNSUPPORTED_VERSION`. A new vault records `0x0002`. Before the first container of version `0x0002` is written into a vault whose ceiling is `0x0001`, the writer raises the ceiling in one new descriptor generation, per [ADR-0066](../adr/0066-pad-object-containers-to-size-buckets.md). A build that reads only v1 containers therefore refuses the vault as a whole rather than one object at a time.
 
 Physical paths are app-internal and resolved by the platform/storage adapter from opaque IDs.
 

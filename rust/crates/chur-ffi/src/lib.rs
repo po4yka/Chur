@@ -54,7 +54,7 @@ mod registry;
 mod runtime;
 
 use chur_core::ChurStatus;
-use chur_format::constants::{CONTAINER_VERSION_V1, SLOT_VERSION_V1};
+use chur_format::constants::{CONTAINER_VERSION_V1, CONTAINER_VERSION_V2, SLOT_VERSION_V1};
 
 use crate::panic::guard;
 
@@ -216,7 +216,8 @@ pub extern "C" fn chur_object_format_min() -> u16 {
     guard(PANIC_FORMAT_MIN, || CONTAINER_VERSION_V1)
 }
 
-/// Highest `container_version` this build reads.
+/// Highest `container_version` this build reads: the bucket-padded v2 of
+/// ADR-0066.
 // SAFETY: the function takes no pointer, reads no caller memory, and returns a
 // scalar by value, so the only unsafe property is the unmangled symbol name. It
 // is unique to this library and is declared in include/chur.h.
@@ -226,7 +227,7 @@ pub extern "C" fn chur_object_format_min() -> u16 {
 )]
 #[unsafe(no_mangle)]
 pub extern "C" fn chur_object_format_max() -> u16 {
-    guard(PANIC_FORMAT_MAX, || CONTAINER_VERSION_V1)
+    guard(PANIC_FORMAT_MAX, || CONTAINER_VERSION_V2)
 }
 
 /// Lowest key-slot format version this build reads.
@@ -311,7 +312,7 @@ mod tests {
         assert_eq!(chur_abi_version_major(), 7);
         assert_eq!(chur_abi_version_minor(), 2);
         assert_eq!(chur_object_format_min(), 1);
-        assert_eq!(chur_object_format_max(), 1);
+        assert_eq!(chur_object_format_max(), 2);
         assert_eq!(chur_key_slot_format_min(), 1);
         assert_eq!(chur_key_slot_format_max(), 1);
     }

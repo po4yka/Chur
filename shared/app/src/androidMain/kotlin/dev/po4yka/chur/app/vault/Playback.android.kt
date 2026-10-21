@@ -608,10 +608,16 @@ private class ChurDataSource(private val source: PlaybackSource) : DataSource {
             throw DataSourceException(java.io.IOException(failure), failure.status.value)
         }
         if (bytes.isEmpty()) return androidx.media3.common.C.RESULT_END_OF_INPUT
-        bytes.copyInto(target, offset)
-        position += bytes.size
-        remaining -= bytes.size
-        return bytes.size
+        val count = bytes.size
+        try {
+            bytes.copyInto(target, offset)
+        } finally {
+            // The intermediate copy is plaintext the player never sees again.
+            bytes.fill(0)
+        }
+        position += count
+        remaining -= count
+        return count
     }
 
     override fun getUri(): Uri? = if (opened) URI else null

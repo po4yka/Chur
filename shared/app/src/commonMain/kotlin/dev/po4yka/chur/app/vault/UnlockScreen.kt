@@ -17,6 +17,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -79,8 +80,17 @@ fun UnlockScreen(
     onReturnToPublic: (() -> Unit)? = null,
 ) {
     var password by remember { mutableStateOf("") }
+    // The field state holds the credential as a String, which no code can
+    // wipe. Dropping the reference at submit and at dispose shortens how long
+    // it is reachable; `PLAINTEXT_LIFECYCLE.md` records what stays.
+    DisposableEffect(Unit) { onDispose { password = "" } }
     var usePin by remember { mutableStateOf(false) }
     val canUnlock = !busy && password.isNotEmpty() && (!usePin || isValidVaultPin(password))
+    val submit = {
+        val entered = password
+        password = ""
+        onUnlock(entered)
+    }
     // §14.1: one message for every credential failure. It names no slot, no
     // identity, and no count.
     val message = error.takeUnless { busy }
@@ -134,13 +144,13 @@ fun UnlockScreen(
                     label = { Text(if (usePin) "PIN" else "Password") },
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = secretKeyboardOptions(pin = usePin, imeAction = ImeAction.Go),
-                    keyboardActions = KeyboardActions(onGo = { if (canUnlock) onUnlock(password) }),
+                    keyboardActions = KeyboardActions(onGo = { if (canUnlock) submit() }),
                     isError = message != null,
                     modifier = Modifier.fillMaxWidth().semantics { if (message != null) error(message) },
                 )
                 FormMessage(message)
                 Button(
-                    onClick = { onUnlock(password) },
+                    onClick = { submit() },
                     enabled = canUnlock,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
@@ -185,7 +195,15 @@ fun RecoveryScreen(
     onReturnToPublic: (() -> Unit)? = null,
 ) {
     var phrase by remember { mutableStateOf("") }
+    // The phrase is a credential, so it is dropped at submit and at dispose
+    // like the password of [UnlockScreen].
+    DisposableEffect(Unit) { onDispose { phrase = "" } }
     val canRecover = !busy && phrase.isNotBlank()
+    val submit = {
+        val entered = phrase
+        phrase = ""
+        onRecover(entered)
+    }
     val message = error.takeUnless { busy }
     val colors = LocalChurColors.current
     Surface(color = colors.canvas, modifier = Modifier.fillMaxSize()) {
@@ -217,13 +235,13 @@ fun RecoveryScreen(
                     label = { Text("Recovery phrase") },
                     // PASSWORD_PROFILE.md §2: the phrase opens the vault as a password does.
                     keyboardOptions = secretKeyboardOptions(imeAction = ImeAction.Go),
-                    keyboardActions = KeyboardActions(onGo = { if (canRecover) onRecover(phrase) }),
+                    keyboardActions = KeyboardActions(onGo = { if (canRecover) submit() }),
                     isError = message != null,
                     modifier = Modifier.fillMaxWidth().semantics { if (message != null) error(message) },
                 )
                 FormMessage(message)
                 Button(
-                    onClick = { onRecover(phrase) },
+                    onClick = { submit() },
                     enabled = canRecover,
                     modifier = Modifier.fillMaxWidth(),
                 ) {

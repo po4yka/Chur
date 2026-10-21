@@ -15,7 +15,7 @@ Potential plaintext locations:
 | JNI/direct buffers | Yes | bounded call; explicit ownership |
 | Kotlin `ByteArray` | Bounded | control data, authenticated document/OCR ranges, extracted UTF-8 text, and bounded private note attachments; clear best-effort |
 | decoded document text | Yes | at most a 1 MiB UTF-8 prefix; current viewer/session only; drop references on disposal or lock |
-| private note text | Yes | bounded open editor and list previews; explicit save to SQLCipher only; drop UI references on lock/disposal |
+| private note text | Yes | bounded open editor and list previews; explicit save, or the bounded save of an ordinary lock, to SQLCipher only; drop UI references on lock/disposal |
 | OCR text and page pixels | Bounded | extraction only; clear owned arrays and rasters after custody drains; persist text only in SQLCipher |
 | Swift `Data` | Bounded | interop, incoming authenticated chunks, and bounded PDF input; clear owned bytes after consumer custody drains |
 | decoded image surfaces | Yes | session-scoped cache; clear on lock |
@@ -38,6 +38,14 @@ During unlock:
 - failed candidates are cleared;
 - platform APIs receive only the bytes required for their key-slot operation;
 - feature state receives only an opaque session handle.
+
+The application layer keeps credential copies short:
+
+- the unlock form and the recovery form drop their text when the user submits it and when the form leaves the screen;
+- the password and the recovery phrase cross the FFI as byte arrays that the caller zeroes after the call;
+- an intermediate array that a ranged read or a player read copies plaintext through is zeroed after the copy, and a ranged read that fails part way zeroes what it already filled.
+
+Residual: Compose holds the field text as a `String`, and the input method, the text layout and the IME connection keep their own copies. A `String` cannot be zeroed, and those copies stay in the managed heap until the garbage collector reuses the memory. §9 applies to all of them.
 
 ## 3. Import
 
@@ -85,7 +93,7 @@ PDF preview is optional and limited to 32 MiB of encoded data and one raster pag
 
 ### 4.1 Private note editing
 
-A private note title has at most 256 UTF-8 bytes and its body at most 256 KiB. List pages contain at most 100 bounded previews. Private editing uses a separate controller, no public NoteStore, and a null saveable-state registry. Markdown preview renders locally in Compose without HTML/script execution or resource fetching. External HTTP/HTTPS/mail links require confirmation. Source, undo, find/replace and outline remain route-owned. Save is explicit; errors retain session edits for retry. Lock and disposal drop text, identifiers, previews, and search state without a final save. Only real input refreshes the idle timer.
+A private note title has at most 256 UTF-8 bytes and its body at most 256 KiB. List pages contain at most 100 bounded previews. Private editing uses a separate controller, no public NoteStore, and a null saveable-state registry. Markdown preview renders locally in Compose without HTML/script execution or resource fetching. External HTTP/HTTPS/mail links require confirmation. Source, undo, find/replace and outline remain route-owned. Save is explicit; errors retain session edits for retry. An ordinary lock (control, background, or idle timeout) captures dirty editor text, conceals the screen at once, and then saves the text as a new revision to SQLCipher with the expected-revision check before the native close. A save that has not started its native call within 2 seconds, or before a panic, does not start. A native call already in progress cannot be interrupted; the close waits for it as for any other native call. A conflict keeps the newer revision and drops the text. Panic lock, disposal, and identity change save nothing. Every lock then drops text, identifiers, previews, and search state. Only real input refreshes the idle timer.
 
 Modern and legacy clipboard write guards, context-action filtering, hardware shortcuts, and accessibility action guards prevent Copy/Cut. Cut must not delete editor text. Paste is an explicit user action and uses the existing clipboard without clearing it. Keyboard settings request no personalized learning on Android and disable autocorrection; they do not establish a trusted input method. Managed text and platform layout/input copies have no secure-erasure guarantee.
 

@@ -72,6 +72,8 @@ This table is the only registry of HKDF domain labels. [`../CRYPTOGRAPHY.md`](..
 | `chur/v1/object/final-commit` | `FinalCommitKey` | `ObjectKey` | 32 bytes |
 | `chur/v1/recovery/root-envelope` | `RecoveryKEK` | `RecoverySecret` | 32 bytes |
 | `chur/v1/slot/apple-device-kek` | `AppleDeviceKEK` | `DeviceUnlockSecret` | 32 bytes |
+| `chur/v1/peer/session` | `PeerDirectionKey[direction]` | `PeerHandshakeSecret` | 32 bytes |
+| `chur/v1/peer/transcript-binding` | `PeerTranscriptBinding` | `PeerHandshakeSecret` | 32 bytes |
 
 Labels are ASCII protocol constants and every row is covered by test vectors. The label alone does not fix the key: each derivation also binds the context fields required by [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) §13, so `CollectionEnvelopeKey` is per vault, collection, and epoch, and an object-domain key is per object.
 
@@ -112,6 +114,8 @@ A context binds the scope over which the derived key must be unique. Every root 
 | `chur/v1/object/embedding` | `object_id:bytes[16]`, `stream_kind:u8`, `source_content_revision:u32`, `stream_revision:u32` |
 | `chur/v1/recovery/root-envelope` | `vault_id:bytes[16]`, `slot_id:bytes[16]`, `slot_generation:u64` |
 | `chur/v1/slot/apple-device-kek` | `vault_id:bytes[16]`, `slot_id:bytes[16]`, `slot_generation:u64` |
+| `chur/v1/peer/session` | `transcript_hash:bytes[32]`, `direction:u8` |
+| `chur/v1/peer/transcript-binding` | `transcript_hash:bytes[32]` |
 
 Four rules read out of the table:
 
@@ -125,7 +129,7 @@ A change to any element list is a new label plus the migration the change rule b
 ### Label rules
 
 - a label is lowercase ASCII with the segments `chur` / protocol version / tier / purpose, separated by `/`;
-- the tier segment names the input key: `root` for `VaultRootSecret`, `collection` for a security-collection key, `object` for an `ObjectKey`, `recovery` for a `RecoverySecret`, and `slot` for a secret a key slot holds outside the root chain, such as the Keychain-held `DeviceUnlockSecret` of [`KEY_SLOTS.md`](KEY_SLOTS.md) §5. `RecoverySecret` is also slot-held and keeps the `recovery` tier it was registered under, because a label is never redefined. A root-derived label always keeps the `/root/` segment; a form such as `chur/v1/search` is not a valid label;
+- the tier segment names the input key: `root` for `VaultRootSecret`, `collection` for a security-collection key, `object` for an `ObjectKey`, `recovery` for a `RecoverySecret`, `peer` for the `PeerHandshakeSecret` of one direct peer session (the invitation secret followed by the X25519 shared secret, see [`../sync/SYNC_PROTOCOL_V1.md`](../sync/SYNC_PROTOCOL_V1.md) §3.1), and `slot` for a secret a key slot holds outside the root chain, such as the Keychain-held `DeviceUnlockSecret` of [`KEY_SLOTS.md`](KEY_SLOTS.md) §5. `RecoverySecret` is also slot-held and keeps the `recovery` tier it was registered under, because a label is never redefined. A root-derived label always keeps the `/root/` segment; a form such as `chur/v1/search` is not a valid label;
 - the purpose segment is plural when the key covers a class of records (`catalog-records`, `identifiers`, `private-settings`) and singular when it covers one named artifact or stream (`catalog-database`, `backup-manifest`, `manifest`, `content`);
 - the purpose segment names the protected artifact, not the media type it comes from: `poster-frame` and `waveform`, not `video-poster` or `audio-waveform`;
 - a label enters this table before it is implemented, and no derivation uses a label that is absent from it;

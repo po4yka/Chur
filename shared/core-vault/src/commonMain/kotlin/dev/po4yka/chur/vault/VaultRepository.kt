@@ -30,7 +30,6 @@ import dev.po4yka.chur.ffi.SharingPermission
 import dev.po4yka.chur.ffi.SharingRecipient
 import dev.po4yka.chur.ffi.SharedReceivePlan
 import dev.po4yka.chur.ffi.SharedSourceObject
-import dev.po4yka.chur.ffi.SharedSourceRange
 import dev.po4yka.chur.ffi.PreparedShare
 import dev.po4yka.chur.ffi.PreparedShareRevocation
 import dev.po4yka.chur.ffi.SlotSummary
@@ -39,11 +38,13 @@ import dev.po4yka.chur.ffi.TagSummary
 import dev.po4yka.chur.ffi.SyncForkState
 import dev.po4yka.chur.ffi.SyncProcessReport
 import dev.po4yka.chur.ffi.SyncRecordKind
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * The one owner of the runtime and session handles.
@@ -225,7 +226,7 @@ class VaultRepository(
     }
 
     /** Unlocks with the recovery phrase, `RECOVERY.md`. */
-    suspend fun unlockWithRecovery(phrase: String) = mutex.withLock {
+    suspend fun unlockWithRecovery(phrase: ByteArray) = mutex.withLock {
         requireRuntime()
         openSession { ChurVault.unlockWithRecovery(runtime, phrase) }
     }
@@ -274,24 +275,58 @@ class VaultRepository(
      * refreshed the idle clock since: copying it outlasts the default, and
      * `DESIGN.md` §17.2 bounds how long a full credential stays on a screen
      * that is kept awake. A waiting creation holds a root too.
+     *
+     * Without [beforeClose], the decision, [beforeLock], and the close hold
+     * the mutex together. With it, [beforeLock] runs after the decision and
+     * [beforeClose] after [beforeLock], both outside the mutex, because
+     * [beforeClose] writes through this repository: a save takes the mutex
+     * and refreshes the idle clock. The close then keeps the decision when
+     * the same session is still open, and it runs whatever [beforeClose]
+     * does. The result is `true` when [beforeLock] ran.
      */
-    suspend fun lockIfIdle(beforeLock: suspend () -> Unit = {}): Boolean {
+    suspend fun lockIfIdle(
+        beforeClose: (suspend () -> Unit)? = null,
+        beforeLock: suspend () -> Unit = {},
+    ): Boolean {
+        if (beforeClose != null) {
+            val decided = mutex.withLock { if (idleDue()) generation else null } ?: return false
+            beforeLock()
+            val interrupted = try {
+                beforeClose()
+                null
+            } catch (failure: Throwable) {
+                failure
+            }
+            withContext(NonCancellable) {
+                mutex.withLock {
+                    if (generation == decided && (session != 0L || creation != 0L)) lockSession(LockReason.TIMEOUT)
+                }
+            }
+            interrupted?.let { throw it }
+            return true
+        }
         mutex.lock()
         try {
-            val decision = if (creation != 0L || recoveryStaged) {
-                idleDecision(LockPolicy(LockPolicy.RECOVERY_PHRASE_TIMEOUT_MS), phraseShownAtMs, clock())
-            } else {
-                idleDecision(policy, lastUsedMs, clock())
-            }
-            if ((session == 0L && creation == 0L) || decision != LockDecision.LOCK) {
-                return false
-            }
-            beforeLock()
-            lockSession(LockReason.TIMEOUT)
-            return true
+            return idleDue() && lockIdle(beforeLock)
         } finally {
             mutex.unlock()
         }
+    }
+
+    private fun idleDue(): Boolean {
+        val decision = if (creation != 0L || recoveryStaged) {
+            idleDecision(LockPolicy(LockPolicy.RECOVERY_PHRASE_TIMEOUT_MS), phraseShownAtMs, clock())
+        } else {
+            idleDecision(policy, lastUsedMs, clock())
+        }
+        return (session != 0L || creation != 0L) && decision == LockDecision.LOCK
+    }
+
+    private suspend fun lockIdle(beforeLock: suspend () -> Unit): Boolean {
+        if (session == 0L && creation == 0L) return false
+        beforeLock()
+        lockSession(LockReason.TIMEOUT)
+        return true
     }
 
     /**
@@ -370,7 +405,15 @@ class VaultRepository(
     /** A stale editor must not access a later unlocked identity. */
     suspend fun privateNotes(generation: Long, terms: String = "", trashed: Boolean = false, limit: Int = 50, cursor: ByteArray? = null): PrivateNotePage = withNoteSession(generation) { ChurVault.privateNotes(it, terms, trashed, limit, cursor) }
     suspend fun privateNote(generation: Long, id: ByteArray): PrivateNote = withNoteSession(generation) { ChurVault.privateNote(it, id) }
-    suspend fun savePrivateNote(generation: Long, id: ByteArray? = null, expectedRevision: Long = 0, title: String, body: String, pinned: Boolean = false, format: PrivateNoteFormat = PrivateNoteFormat.PLAIN_TEXT): PrivateNote = withNoteSession(generation) { ChurVault.savePrivateNote(it, id, expectedRevision, title, body, pinned, format) }
+    /**
+     * A lock-time save passes [proceed]. It is checked under the mutex just
+     * before the native call, so a save the lock no longer waits for never
+     * starts.
+     */
+    suspend fun savePrivateNote(generation: Long, id: ByteArray? = null, expectedRevision: Long = 0, title: String, body: String, pinned: Boolean = false, format: PrivateNoteFormat = PrivateNoteFormat.PLAIN_TEXT, proceed: () -> Boolean = { true }): PrivateNote = withNoteSession(generation) {
+        if (!proceed()) throw ChurFailure(ChurStatus.VAULT_LOCKED, "the lock no longer waits for this save")
+        ChurVault.savePrivateNote(it, id, expectedRevision, title, body, pinned, format)
+    }
     suspend fun changePrivateNote(generation: Long, id: ByteArray, expectedRevision: Long, action: PrivateNoteAction): PrivateNote? = withNoteSession(generation) { ChurVault.changePrivateNote(it, id, expectedRevision, action) }
     suspend fun beginPrivateNoteExport(generation: Long, id: ByteArray, expectedRevision: Long, destinationFd: Int): Long = withNoteSession(generation) { ChurVault.beginPrivateNoteExport(it, id, expectedRevision, destinationFd) }
     suspend fun privateNoteAttachments(generation: Long, id: ByteArray): List<PrivateNoteAttachment> = withNoteSession(generation) { ChurVault.privateNoteAttachments(it,id) }
@@ -969,10 +1012,6 @@ class VaultRepository(
         ChurVault.objectKeyRequest(session, collectionId, objectId)
     }
 
-    suspend fun objectKeyIssue(prekey: ByteArray): ByteArray? = mutex.withLock {
-        if (session == 0L) null else ChurVault.objectKeyIssue(session, prekey)
-    }
-
     suspend fun objectKeyAccept(packageBytes: ByteArray, grant: ByteArray): Boolean = mutex.withLock {
         if (session == 0L) false else {
             ChurVault.objectKeyAccept(session, packageBytes, grant)
@@ -998,10 +1037,6 @@ class VaultRepository(
 
     suspend fun sourcePage(collectionId: ByteArray, afterObjectId: ByteArray): List<SharedSourceObject>? = mutex.withLock {
         if (session == 0L) null else ChurVault.sharedSourcePage(session, collectionId, afterObjectId)
-    }
-
-    suspend fun sourceRange(objectId: ByteArray, offset: ULong, maxBytes: Int): SharedSourceRange? = mutex.withLock {
-        if (session == 0L) null else ChurVault.sharedSourceRange(session, objectId, offset, maxBytes)
     }
 
     suspend fun sourceAuthor(source: SharedSourceObject): SharedSourceObject? = mutex.withLock {

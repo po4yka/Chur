@@ -27,8 +27,9 @@ use chur_crypto::tuple::{Tuple, tag};
 use chur_format::codec::Writer;
 use chur_format::constants::{MediaClass, SlotType, StreamKind, VaultState};
 use chur_format::container::{
-    CanonicalManifest, MediaProperties, NONCE_PREFIX_LEN, PublicPreamble, StreamIdentity,
-    encode_container,
+    CanonicalManifest, ContainerReader, ContainerVersion, MediaProperties, NONCE_PREFIX_LEN,
+    PaddingDeviation, PublicPreamble, StreamIdentity, encode_container_with_version,
+    encode_deviant_container, padded_length,
 };
 use chur_format::descriptor::{
     CatalogDescriptor, KeySlotDescriptor, MigrationDescriptor, ObjectStoreDescriptor,
@@ -296,6 +297,8 @@ fn sample_context(shape: ContextShape) -> Result<Context> {
         }
         ContextShape::ObjectMetadata => Context::object_metadata(&id(0x33)?, 1),
         ContextShape::Slot => Context::slot(&id(0x11)?, &id(0x55)?, 1),
+        ContextShape::PeerSession => Context::peer_session(&[0x66; 32], 1),
+        ContextShape::PeerTranscript => Context::peer_transcript(&[0x66; 32]),
     })
 }
 
@@ -849,19 +852,51 @@ fn container_case(
     purpose: &str,
     plaintext: &[u8],
 ) -> Result<Vec<u8>> {
+    container_case_with_version(
+        out,
+        vector_id,
+        CONTAINER_SPEC,
+        section,
+        purpose,
+        plaintext,
+        ContainerVersion::V1,
+    )
+}
+
+fn container_case_with_version(
+    out: &mut Vec<Vector>,
+    vector_id: &str,
+    spec: &str,
+    section: &str,
+    purpose: &str,
+    plaintext: &[u8],
+    version: ContainerVersion,
+) -> Result<Vec<u8>> {
     let object_key = key(0x77);
-    let encoded = encode_container(
+    let encoded = encode_container_with_version(
         &object_key,
         container_manifest()?,
         nonce(0x36),
         plaintext,
         nonce(0x37),
         1,
+        version,
     )?;
     let preamble = PublicPreamble::decode(&encoded[..PublicPreamble::LEN])?;
-    let chunk_count = plaintext.len().div_ceil(VECTOR_CHUNK_SIZE as usize);
+    let stored = if version.is_padded() {
+        padded_length(plaintext.len() as u64)
+    } else {
+        plaintext.len() as u64
+    };
+    let chunk_count = stored.div_ceil(u64::from(VECTOR_CHUNK_SIZE));
+    let mut builder = VectorBuilder::accept("object", vector_id, spec, section, purpose);
+    if version.is_padded() {
+        builder = builder
+            .input("container_version", json!(version.value()))
+            .decoded("stored_length", number(stored));
+    }
     out.push(
-        VectorBuilder::accept("object", vector_id, CONTAINER_SPEC, section, purpose)
+        builder
             .input_bytes("object_key", object_key.expose())
             .input_bytes("object_id", id(0x33)?.as_bytes())
             .input_bytes("stream_id", id(0x34)?.as_bytes())
@@ -879,7 +914,7 @@ fn container_case(
                 "manifest_record_length",
                 json!(preamble.manifest_record_length()),
             )
-            .decoded("chunk_count", number(chunk_count as u64))
+            .decoded("chunk_count", number(chunk_count))
             .decoded("total_plaintext_length", number(plaintext.len() as u64))
             .note(TEST_ONLY)
             .build(),
@@ -1012,6 +1047,80 @@ fn object_containers(out: &mut Vec<Vector>) -> Result<()> {
         .input_bytes("container", &wrong_suite)
         .build(),
     );
+    padded_containers(out)
+}
+
+/// The bucket-padded container of ADR-0066.
+fn padded_containers(out: &mut Vec<Vector>) -> Result<()> {
+    container_case_with_version(
+        out,
+        "object-v2-one-padded-chunk",
+        CONTAINER_SPEC,
+        "18",
+        "A 1000-byte object stored in the 4096-byte bucket: one record whose zero padding follows the object.",
+        &pattern(1000),
+        ContainerVersion::V2,
+    )?;
+    container_case_with_version(
+        out,
+        "object-v2-padding-only-record",
+        CONTAINER_SPEC,
+        "18",
+        "One byte past the chunk size: the 131072-byte bucket fills a padded first chunk and a padding-only second record.",
+        &pattern(VECTOR_CHUNK_SIZE as usize + 1),
+        ContainerVersion::V2,
+    )?;
+
+    let cases = [
+        (
+            "object-v2-non-zero-padding-byte",
+            "A padding byte other than zero is refused even though its record authenticates.",
+            PaddingDeviation::PaddingByte(0x01),
+        ),
+        (
+            "object-v2-padding-short-of-bucket",
+            "A stream that stops one byte before the bucket of its object length is refused.",
+            PaddingDeviation::ShortOfBucket,
+        ),
+        (
+            "object-v2-padding-past-bucket",
+            "A stream that carries one byte past the bucket of its object length is refused.",
+            PaddingDeviation::PastBucket,
+        ),
+    ];
+    for (vector_id, purpose, deviation) in cases {
+        let container = encode_deviant_container(
+            &key(0x77),
+            container_manifest()?,
+            nonce(0x36),
+            &pattern(1000),
+            nonce(0x37),
+            deviation,
+        )?;
+        expect_rejection(
+            ContainerReader::open(&container, &key(0x77), &container_identity()?)
+                .and_then(|reader| reader.verify_complete()),
+            ChurStatus::ObjectCorrupt,
+        )?;
+        out.push(
+            VectorBuilder::reject(
+                "object",
+                vector_id,
+                CONTAINER_SPEC,
+                "18",
+                purpose,
+                "OBJECT_CORRUPT",
+            )
+            .input_bytes("container", &container)
+            .input_bytes("object_key", key(0x77).expose())
+            .input_bytes("object_id", id(0x33)?.as_bytes())
+            .input_bytes("stream_id", id(0x34)?.as_bytes())
+            .input("stream_kind", json!(StreamKind::Original.value()))
+            .input("stream_revision", json!(1))
+            .note(TEST_ONLY)
+            .build(),
+        );
+    }
     Ok(())
 }
 

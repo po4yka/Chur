@@ -141,7 +141,13 @@ pub mod slot {
 /// `docs/security/PASSWORD_PROFILE.md` §4.
 pub mod password {
     /// Smallest accepted encoded password, `docs/CRYPTOGRAPHY.md` §17.
+    ///
+    /// It applies to every password a slot is opened with, so an existing
+    /// slot with a short password still opens.
     pub const ENCODED_MIN: usize = 1;
+    /// Fewest Unicode scalar values a new or changed password slot accepts,
+    /// `docs/security/PASSWORD_PROFILE.md` §3. A 12-digit PIN meets it.
+    pub const NEW_MIN_CHARS: usize = 12;
     /// Largest accepted encoded password, `docs/CRYPTOGRAPHY.md` §17.
     pub const ENCODED_MAX: usize = 1_024;
     /// Frozen memory floor in KiB, also the v1 default, `PASSWORD_PROFILE.md` §4.

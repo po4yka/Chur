@@ -6,7 +6,6 @@ import dev.po4yka.chur.ffi.SyncProcessReport
 import dev.po4yka.chur.ffi.SyncRecordKind
 import dev.po4yka.chur.ffi.SharedReceivePlan
 import dev.po4yka.chur.ffi.SharedSourceObject
-import dev.po4yka.chur.ffi.SharedSourceRange
 import dev.po4yka.chur.sync.SyncVaultBoundary
 import dev.po4yka.chur.vault.VaultRepository
 
@@ -55,8 +54,6 @@ class RepositorySyncBoundary(
     override suspend fun objectKeyRequest(collectionId: ByteArray, objectId: ByteArray): ByteArray? =
         repository.objectKeyRequest(collectionId, objectId)
 
-    override suspend fun objectKeyIssue(prekey: ByteArray): ByteArray? = repository.objectKeyIssue(prekey)
-
     override suspend fun objectKeyAccept(packageBytes: ByteArray, grant: ByteArray): Boolean =
         repository.objectKeyAccept(packageBytes, grant)
 
@@ -78,8 +75,5 @@ class RepositorySyncBoundary(
 
     override suspend fun sourcePage(collectionId: ByteArray, afterObjectId: ByteArray): List<SharedSourceObject>? =
         repository.sourcePage(collectionId, afterObjectId)
-
-    override suspend fun sourceRange(objectId: ByteArray, offset: ULong, maxBytes: Int): SharedSourceRange? =
-        repository.sourceRange(objectId, offset, maxBytes)
 
 }

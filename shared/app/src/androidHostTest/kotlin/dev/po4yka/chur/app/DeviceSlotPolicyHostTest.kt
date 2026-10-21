@@ -34,6 +34,8 @@ class DeviceSlotPolicyHostTest {
         var strict = false
         var cancel = false
         val wrappedStrict = mutableListOf<Boolean>()
+        val storedAtWrap = mutableListOf<Boolean>()
+        val setting = DeviceSlotPolicySetting({ strict }, { strict = it })
         val unlock = object : DeviceUnlock {
             override val available = true
 
@@ -43,7 +45,10 @@ class DeviceSlotPolicyHostTest {
                 rootSecret: ByteArray,
             ): Pair<ByteArray, ByteArray> {
                 if (cancel) throw ChurFailure(ChurStatus.CANCELLED, "the device slot")
-                wrappedStrict += strict
+                // The binding reads the policy through the setting, as the
+                // Android host does when it generates the key.
+                wrappedStrict += setting.read()
+                storedAtWrap += strict
                 return ByteArray(12) { 1 } to ByteArray(48) { 2 }
             }
 
@@ -59,7 +64,7 @@ class DeviceSlotPolicyHostTest {
             privacy = NoPrivacyCover,
             exports = NoExports,
             deviceUnlock = unlock,
-            deviceSlotPolicy = DeviceSlotPolicySetting({ strict }, { strict = it }),
+            deviceSlotPolicy = setting,
             clock = { 1_700_000_000_000L },
             notes = InMemoryNoteStore(),
         )
@@ -89,6 +94,10 @@ class DeviceSlotPolicyHostTest {
             // leaves is not asserted.
             val replaced = controller.vault.slots().filter { it.slotType == 2 }
             assertEquals(listOf(false, true), wrappedStrict)
+            // A kill inside the swap must not leave strict stored while the
+            // convenient slot can still exist, so nothing strict is stored
+            // until the swap is over.
+            assertEquals(listOf(false, false), storedAtWrap)
             assertEquals(1, replaced.size)
             assertNotEquals(convenient, replaced.single())
             assertTrue(strict)
