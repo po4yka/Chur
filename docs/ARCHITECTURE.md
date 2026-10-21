@@ -1091,7 +1091,7 @@ A catalog entry MUST NOT set an object's `state` to `ACTIVE` before its encrypte
 
 After a crash, Rust scans journals and incoming objects:
 
-- an open import transaction is resumed or declared dead under [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §14.3 and §14.4; a temporary object with no journal record is always dead;
+- an open import transaction is resumed or declared dead under [`format/OBJECT_CONTAINER_V1.md`](format/OBJECT_CONTAINER_V1.md) §14.3 and §14.4; a temporary object with no journal record is always dead. Every unlock deletes such a container from `incoming/` after the journal reconciliation and before the session becomes a handle. A partial download of a received object, from the own vault's sync or from a shared collection, is not dead: the receive plan wrote its dispatch ticket before the host could start it, and the ticket keeps it resumable. An entry whose name is not a container identifier is not deleted;
 - finalized orphan objects can be reconciled into the catalog;
 - an object row whose container is absent or uncommitted keeps `state` `ACTIVE` and takes `integrity_summary` `QUARANTINED`;
 - no unverified object becomes visible as successfully imported.

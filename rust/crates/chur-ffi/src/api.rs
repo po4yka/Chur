@@ -405,7 +405,7 @@ pub unsafe extern "C" fn chur_vault_unlock(
         // and it runs before the session becomes a handle, so no host call
         // reaches a vault whose journal still holds a dead transaction. The
         // other dead form of §14.4, a temporary container with no journal
-        // record, has no sweep in v1.
+        // record, is swept right after it.
         if let Err(error) = import::reconcile(&mut session, now) {
             // The session is not a handle yet, so no `chur_vault_lock` can
             // reach it, and `Session` has no `Drop`. A plain drop closes the
@@ -413,6 +413,10 @@ pub unsafe extern "C" fn chur_vault_unlock(
             // step 5 of `PLAINTEXT_LIFECYCLE.md` §8, and runs step 8 not at
             // all. The lock outcome is discarded here, because the
             // reconciliation failure is the one the host must see.
+            let _ = session.lock();
+            return Err(error);
+        }
+        if let Err(error) = import::sweep_orphan_temporaries(&session) {
             let _ = session.lock();
             return Err(error);
         }

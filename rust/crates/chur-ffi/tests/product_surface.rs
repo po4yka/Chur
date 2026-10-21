@@ -1909,3 +1909,29 @@ fn an_unlock_removes_the_catalog_snapshot_a_killed_backup_left() {
     assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// `OBJECT_CONTAINER_V1.md` §14.4: a temporary container with no journal
+/// record is dead. An import that dies after it writes the container and
+/// before it writes the record leaves one; the next unlock deletes it, and
+/// leaves an entry that is not a container name alone.
+#[test]
+fn an_unlock_deletes_a_temporary_container_with_no_journal_record() {
+    let root = scratch();
+    let runtime = open_runtime(&root);
+    let session = fresh_session(runtime);
+    assert_eq!(unsafe { chur_vault_lock(session, 1) }, OK);
+    assert_eq!(unsafe { chur_session_close(session) }, OK);
+
+    let incoming = only_vault_directory(&root).join("incoming");
+    let orphan = incoming.join(chur_crypto::random::id().unwrap().to_hex());
+    std::fs::write(&orphan, b"CHUROBJ1 and a manifest no record names").unwrap();
+    let foreign = incoming.join("not-a-container");
+    std::fs::write(&foreign, b"unknown").unwrap();
+
+    let session = unlock_with_password(runtime);
+    assert!(!orphan.exists());
+    assert!(foreign.exists());
+    assert_eq!(unsafe { chur_session_close(session) }, OK);
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+    std::fs::remove_dir_all(root).unwrap();
+}

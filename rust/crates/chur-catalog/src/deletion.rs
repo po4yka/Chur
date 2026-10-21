@@ -476,6 +476,36 @@ pub fn is_orphan_container(db: &CatalogDb, container_path_id: &Id) -> Result<boo
     Ok(streams == 0 && imports == 0)
 }
 
+/// Whether a file in the temporary container namespace is dead.
+///
+/// `OBJECT_CONTAINER_V1.md` §14.4: a temporary container with no journal record
+/// is dead. It is the [`is_orphan_container`] rule with one exception: a
+/// received object download, from the own vault's sync or from a shared
+/// collection, is staged under the object's identifier with no journal record.
+/// Both receive plans give the host an object only after they write its
+/// `object_receive_dispatch` ticket, so a download can exist only for an
+/// object with a ticket. Such a download is kept, so that it can resume. A
+/// shared object with sharing log rows is kept as well.
+///
+/// # Errors
+///
+/// Returns the engine's error when a row cannot be read.
+pub fn is_orphan_temporary(db: &CatalogDb, temp_path_id: &Id) -> Result<bool> {
+    if !is_orphan_container(db, temp_path_id)? {
+        return Ok(false);
+    }
+    let received: i64 = db
+        .connection()
+        .query_row(
+            "SELECT (SELECT count(*) FROM object_receive_dispatch WHERE object_id = ?1)
+                  + (SELECT count(*) FROM sharing_object_operations WHERE object_id = ?1)",
+            [temp_path_id.as_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .map_err(|error| map_sqlite(error, "the received objects could not be read"))?;
+    Ok(received == 0)
+}
+
 /// Removes one object from the search index.
 fn unindex_search(transaction: &Transaction<'_>, object_id: &Id) -> Result<()> {
     transaction
@@ -1212,6 +1242,23 @@ mod tests {
             vec![derived, original],
             "§14.1 unlinks the derived containers at step 3 and the original at step 4"
         );
+    }
+
+    #[test]
+    fn a_temporary_container_is_dead_only_without_a_row() {
+        let mut vault = vault();
+        let (_, container) = import(&mut vault);
+        assert!(!is_orphan_temporary(&vault.db, &container).expect("active"));
+        assert!(is_orphan_temporary(&vault.db, &random::id().expect("id")).expect("orphan"));
+
+        // A partial download of an object that a receive plan handed out, as
+        // the own vault's sync plan does for each object it returns, has no
+        // journal record and no stream yet. It stays resumable.
+        let pending = random::id().expect("id");
+        assert!(is_orphan_temporary(&vault.db, &pending).expect("before the plan"));
+        crate::receive_queue::dispatched(&mut vault.db, &vault.collection, &[pending])
+            .expect("plan");
+        assert!(!is_orphan_temporary(&vault.db, &pending).expect("planned download"));
     }
 
     #[test]
