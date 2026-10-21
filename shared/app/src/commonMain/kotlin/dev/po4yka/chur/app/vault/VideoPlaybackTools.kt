@@ -108,7 +108,7 @@ internal fun VideoPlaybackTools(
     if (confirm && generation != null) PrivateAlertDialog(
         onDismissRequest = { confirm = false },
         title = { Text("Create viewing copy?") },
-        text = { Text("Create an encrypted H.264 SDR copy for this device. It uses up to 720p and 30 fps and can use up to 32 MiB of storage. Export still gives you the original file.") },
+        text = { Text("Create an encrypted H.264 SDR copy for this device. It uses up to 720p and 30 fps and needs extra storage. Export still gives you the original file.") },
         confirmButton = {
             TextButton(onClick = {
                 confirm = false

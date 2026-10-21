@@ -260,7 +260,8 @@ Chur does not rewrite sample entries in the original to make a decoder accept it
 An explicit action can create stream kind `0x0a`, generator profile 2: an
 H.264 Main, 8-bit SDR BT.709 MP4 viewing copy with AAC audio. Its long edge is
 at most 1280 px, its short edge at most 720 px, and its frame rate at most
-30 fps. It is at most 32 MiB. Native decoders read authenticated ranges;
+30 fps. The encoded MP4 is at most 32 MiB before encryption. Its encrypted
+container can use more disk space. Native decoders read authenticated ranges;
 native encoders write a bounded memory output, then Rust encrypts it. They do
 not write a plaintext temporary video. HDR conversion must change the pixels
 through a native SDR conversion path; output color tags alone are insufficient.
