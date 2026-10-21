@@ -319,6 +319,11 @@ The platform wrapping key SHOULD use:
 - optional StrongBox request;
 - an opaque alias unrelated to `real`, `decoy`, filenames, or account names.
 
+The v1 key also MUST:
+
+- require an unlocked device (`setUnlockedDeviceRequired(true)`), so the key cannot be used while the screen is locked;
+- live in secure hardware. After generation, Chur reads `KeyInfo.getSecurityLevel()` on API 31 and later, and `KeyInfo.isInsideSecureHardware()` on earlier levels or when the level is unknown. A key that the Keystore keeps in software is deleted, and the enrollment fails with `PLATFORM_KEY_UNAVAILABLE`. If `KeyInfo` cannot be read at all, Chur also treats the key as software and refuses it. This fails closed on purpose: a slot whose hardware backing is unknown cannot claim the protection of §9.1, and the password and recovery slots still open the vault.
+
 Exact `KeyGenParameterSpec` settings require an ADR covering biometric-only, device-credential fallback, per-use authorization, and short validity windows.
 
 ### 9.3 Authentication modes
@@ -332,6 +337,8 @@ Chur may expose product modes such as:
 | Maximum | strict mode plus StrongBox when available | fallback path required |
 
 A mode change creates or replaces the platform slot. It MUST NOT re-encrypt media.
+
+On API 30 and later, both v1 modes authorize every unwrap separately. API 29 has no authenticator-type parameter, so Convenient mode there admits the device credential only through a validity window. The window is 5 seconds, which is enough for the cipher that starts as soon as the prompt returns, and the unlocked-device requirement of §9.2 closes it when the screen locks. Strict mode on API 29 authorizes every use.
 
 ### 9.4 Key invalidation
 
@@ -358,7 +365,7 @@ Platform-key failure MUST NOT be reported as catalog corruption without evidence
 
 StrongBox is optional:
 
-- attempt it only in the user-selected maximum-security mode or after policy review;
+- attempt it only in the user-selected maximum-security mode or after policy review. v1 has no Maximum mode, so v1 does not request StrongBox and uses the default secure hardware of §9.2;
 - catch `StrongBoxUnavailableException` and capability mismatches;
 - fall back to a hardware-backed or ordinary Keystore key according to policy;
 - record only a non-sensitive capability result;

@@ -6,7 +6,6 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyInfo
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
-import android.security.keystore.StrongBoxUnavailableException
 import android.security.keystore.UserNotAuthenticatedException
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
@@ -47,9 +46,13 @@ public actual class DeviceSlot public actual constructor(identifier: ByteArray) 
      * biometric does, and the key is invalidated when the biometric set
      * changes.
      *
-     * StrongBox is requested first and the generation falls back to TEE when
-     * the device has none, because `KEY_SLOTS.md` section 4 makes StrongBox
-     * optional with an explicit fallback rather than a silent one.
+     * StrongBox is not requested. `ANDROID.md` §9.5 admits it only in a
+     * user-selected maximum-security mode, and v1 has none: the two policies
+     * here use the default secure hardware, which is the TEE on most devices.
+     *
+     * The key must live in secure hardware. A key the Keystore keeps in
+     * software gives the slot nothing a password slot does not, so it is
+     * deleted and the enrollment fails as an unavailable device factor.
      */
     public actual fun provision(policy: DeviceSlotPolicy) {
         if (isProvisioned()) {
@@ -58,14 +61,29 @@ public actual class DeviceSlot public actual constructor(identifier: ByteArray) 
                 "a Keystore key already exists for this slot identity",
             )
         }
-        try {
-            generate(policy, strongBox = true)
-        } catch (_: StrongBoxUnavailableException) {
-            generate(policy, strongBox = false)
+        generate(policy)
+        val hardware = try {
+            val secret = key()
+            val info = SecretKeyFactory.getInstance(secret.algorithm, PROVIDER)
+                .getKeySpec(secret, KeyInfo::class.java) as KeyInfo
+            isHardwareBacked(
+                Build.VERSION.SDK_INT,
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) info.securityLevel else 0,
+                @Suppress("DEPRECATION") info.isInsideSecureHardware,
+            )
+        } catch (_: Exception) {
+            false
+        }
+        if (!hardware) {
+            destroy()
+            throw DeviceSlotException(
+                ChurStatus.PLATFORM_KEY_UNAVAILABLE,
+                "the Keystore did not keep the slot key in secure hardware",
+            )
         }
     }
 
-    private fun generate(policy: DeviceSlotPolicy, strongBox: Boolean) {
+    private fun generate(policy: DeviceSlotPolicy) {
         val builder = KeyGenParameterSpec.Builder(
             alias,
             KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
@@ -76,6 +94,9 @@ public actual class DeviceSlot public actual constructor(identifier: ByteArray) 
             // The cipher chooses the nonce, so one key never reuses one.
             .setRandomizedEncryptionRequired(true)
             .setUserAuthenticationRequired(true)
+            // The key is unusable while the device is locked, so a validity
+            // window cannot outlast the screen lock.
+            .setUnlockedDeviceRequired(true)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             val authenticators = when (policy) {
@@ -101,16 +122,10 @@ public actual class DeviceSlot public actual constructor(identifier: ByteArray) 
         if (policy == DeviceSlotPolicy.STRICT) {
             builder.setInvalidatedByBiometricEnrollment(true)
         }
-        if (strongBox && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            builder.setIsStrongBoxBacked(true)
-        }
-
         try {
             val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, PROVIDER)
             generator.init(builder.build())
             generator.generateKey()
-        } catch (cause: StrongBoxUnavailableException) {
-            throw cause
         } catch (cause: Exception) {
             throw DeviceSlotException(
                 ChurStatus.PLATFORM_KEY_UNAVAILABLE,
@@ -286,8 +301,10 @@ public actual class DeviceSlot public actual constructor(identifier: ByteArray) 
 
         // API 29 admits the device credential only through a positive window.
         // It is short on purpose: a longer one would keep the key usable after
-        // the user walked away.
-        const val LEGACY_CREDENTIAL_WINDOW_SECONDS = 10
+        // the user walked away. The cipher starts as soon as the prompt
+        // returns, so five seconds is ample, and `setUnlockedDeviceRequired`
+        // closes the window when the screen locks.
+        const val LEGACY_CREDENTIAL_WINDOW_SECONDS = 5
     }
 }
 
@@ -520,6 +537,25 @@ internal fun allowedAuthenticators(policy: DeviceSlotPolicy, sdkInt: Int): Int =
  */
 public fun promptTakesScreen(policy: DeviceSlotPolicy, sdkInt: Int = Build.VERSION.SDK_INT): Boolean =
     policy == DeviceSlotPolicy.CONVENIENT && sdkInt < Build.VERSION_CODES.R
+
+/**
+ * Whether a generated key lives in secure hardware.
+ *
+ * From API 31 `KeyInfo.getSecurityLevel` answers directly: the TEE, StrongBox
+ * and an unknown secure level pass, and software fails. An unknown level, and
+ * every earlier API level, falls back to `isInsideSecureHardware`.
+ */
+internal fun isHardwareBacked(sdkInt: Int, securityLevel: Int, insideSecureHardware: Boolean): Boolean {
+    if (sdkInt < Build.VERSION_CODES.S) return insideSecureHardware
+    return when (securityLevel) {
+        KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT,
+        KeyProperties.SECURITY_LEVEL_STRONGBOX,
+        KeyProperties.SECURITY_LEVEL_UNKNOWN_SECURE,
+        -> true
+        KeyProperties.SECURITY_LEVEL_SOFTWARE -> false
+        else -> insideSecureHardware
+    }
+}
 
 /** A key keeps its enrollment policy even when the setting changes later. */
 internal fun policyOfKey(sdkInt: Int, validitySeconds: Int, authenticationType: Int): DeviceSlotPolicy =

@@ -70,8 +70,9 @@ Preferred design:
 
 - non-exportable AES-256-GCM wrapping key in Android Keystore;
 - user authentication required according to the configured policy: convenient mode accepts biometry or a device credential, so the device unlock code opens this slot; strict mode accepts biometry only and invalidates on biometric enrollment change;
-- TEE-backed by default when available;
-- StrongBox optional with explicit fallback;
+- held in secure hardware: a key that the Keystore keeps in software is deleted and the enrollment fails, [`../ANDROID.md`](../ANDROID.md) §9.2;
+- usable only while the device is unlocked;
+- StrongBox optional with explicit fallback, requested only in the maximum-security mode of [`../ANDROID.md`](../ANDROID.md) §9.5, which v1 does not have;
 - root wrapped with fresh 96-bit GCM nonce;
 - slot AAD binds the §2 field set on every wrap and unwrap: slot type and version, `vault_id`, `slot_generation`, `wrap_suite_id`, and the public parameters;
 - alias is opaque and does not reveal real/decoy identity.
