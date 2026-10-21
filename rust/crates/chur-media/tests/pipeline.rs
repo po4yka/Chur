@@ -759,6 +759,71 @@ fn a_compatible_video_is_encrypted_and_never_replaces_the_original() {
 }
 
 #[test]
+fn a_real_seek_atlas_is_encrypted_and_bound_to_its_original() {
+    let (_root, mut session) = new_vault();
+    let original = Zeroizing::new(
+        include_bytes!("../../../../tests/media/video-acceptance/main10-long-gop-vfr.mp4").to_vec(),
+    );
+    let object_id = import::import_bytes(
+        &mut session,
+        source("timeline.mp4", original.len() as u64),
+        CanonicalMedia {
+            media_class: MediaClass::Video,
+            width: 320,
+            height: 180,
+            duration_ms: 64_000,
+        },
+        "video/mp4",
+        &original,
+        NOW,
+    )
+    .unwrap();
+    let atlas = Zeroizing::new(
+        include_bytes!("../../../../tests/media/video-timeline/reference-storyboard.jpg").to_vec(),
+    );
+    derived::put(
+        &mut session,
+        &object_id,
+        StreamKind::VideoStoryboard,
+        640,
+        270,
+        &atlas,
+        NOW,
+    )
+    .unwrap();
+    let mut reader = reader::open(&session, &object_id, StreamKind::VideoStoryboard).unwrap();
+    assert_eq!(reader.dimensions(), (640, 270));
+    assert_eq!(
+        reader.read_range(0, atlas.len() as u64).unwrap().as_slice(),
+        atlas.as_slice()
+    );
+    assert_eq!(
+        derived::put(
+            &mut session,
+            &object_id,
+            StreamKind::VideoStoryboard,
+            641,
+            270,
+            &atlas,
+            NOW
+        )
+        .unwrap_err()
+        .status(),
+        ChurStatus::ResourceLimitExceeded
+    );
+    let mut exported = Vec::new();
+    export::export_stream(
+        &session,
+        &object_id,
+        StreamKind::Original,
+        &mut exported,
+        &mut Uninterrupted,
+    )
+    .unwrap();
+    assert_eq!(exported.as_slice(), original.as_slice());
+}
+
+#[test]
 fn a_viewing_copy_cannot_be_attached_to_a_nonvideo_object() {
     let (_root, mut session) = new_vault();
     let (object_id, _) = import_photo(&mut session, 512, "source.jpg");

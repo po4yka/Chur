@@ -428,6 +428,8 @@ fn every_declared_function_is_exported() {
         // §6.12, the recipient revocation surface added at ABI 1.8.
         "chur_sharing_revoke",
         // §6.6, the Android Keystore surface added at ABI 1.2.
+        "chur_playback_position_get",
+        "chur_playback_position_put",
         "chur_jpeg_xl_open",
         "chur_jpeg_xl_open_fd",
         "chur_jpeg_xl_render",
@@ -446,7 +448,7 @@ fn every_declared_function_is_exported() {
 
     // Calling each one proves the list above is not a stale copy.
     assert_eq!(chur_ffi::chur_abi_version_major(), 7);
-    assert_eq!(chur_ffi::chur_abi_version_minor(), 1);
+    assert_eq!(chur_ffi::chur_abi_version_minor(), 2);
     assert_eq!(
         chur_ffi::chur_capabilities(),
         chur_ffi::CHUR_CAP_DECOY_VAULT

@@ -882,6 +882,19 @@ internal actual object ChurNative {
     // Object reader
     // -----------------------------------------------------------------------
 
+    actual fun playbackPosition(session: Long, objectId: ByteArray, outPosition: LongArray): Int = memScoped {
+        val reference = objectReference(objectId)
+        val position = alloc<ULongVar>()
+        val status = dev.po4yka.chur.native.chur_playback_position_get(session.toULong(), reference.ptr, position.ptr)
+        if (status == 0) outPosition[0] = position.value.toLong()
+        status
+    }
+
+    actual fun savePlaybackPosition(session: Long, objectId: ByteArray, positionMs: Long, durationMs: Long): Int = memScoped {
+        val reference = objectReference(objectId)
+        dev.po4yka.chur.native.chur_playback_position_put(session.toULong(), reference.ptr, positionMs.toULong(), durationMs.toULong())
+    }
+
     actual fun objectReaderOpen(
         session: Long,
         objectId: ByteArray,

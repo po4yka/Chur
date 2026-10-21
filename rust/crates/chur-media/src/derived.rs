@@ -40,6 +40,9 @@ pub const GENERATOR_PROFILE_V1: u32 = 1;
 /// A native H.264/AAC SDR viewing copy, distinct from the JPEG profile.
 pub const COMPATIBLE_VIDEO_PROFILE_V1: u32 = 2;
 
+/// Twelve center-time, upright SDR frames in a fixed JPEG grid.
+pub const VIDEO_STORYBOARD_PROFILE_V1: u32 = 3;
+
 /// The long-edge target of one derivative kind, §12.
 ///
 /// An unlisted kind has no v1 target, so it returns `None` rather than a
@@ -51,6 +54,7 @@ pub const fn long_edge(kind: StreamKind) -> Option<u32> {
         StreamKind::GridPreview => Some(media_bounds::GRID_PREVIEW_EDGE),
         StreamKind::ScreenPreview => Some(media_bounds::SCREEN_PREVIEW_EDGE),
         StreamKind::VideoPoster => Some(media_bounds::VIDEO_POSTER_EDGE),
+        StreamKind::VideoStoryboard => Some(640),
         // A waveform is a data record rather than a picture: §6 lists it beside
         // the OCR and embedding records, and §12 gives it no long edge. The arm
         // is written out so that the absence is a decision rather than a
@@ -119,6 +123,18 @@ pub fn put(
                 && bytes.len() <= 32 * 1024 * 1024,
             ResourceLimitExceeded,
             "the viewing copy exceeds its dimensions or byte bound"
+        );
+    }
+    if kind == StreamKind::VideoStoryboard {
+        ensure!(
+            object.media_kind == MediaClass::Video,
+            InvalidInput,
+            "a timeline requires a video original"
+        );
+        ensure!(
+            width == 640 && height == 270 && bytes.len() <= 2 * 1024 * 1024,
+            ResourceLimitExceeded,
+            "the timeline exceeds its fixed atlas bounds"
         );
     }
     let source_content_revision = object.object_generation.try_into().map_err(|_| {
@@ -231,6 +247,8 @@ pub fn put(
             asset_revision: stream_revision,
             generator_profile: if kind == StreamKind::CompatibleVideo {
                 COMPATIBLE_VIDEO_PROFILE_V1
+            } else if kind == StreamKind::VideoStoryboard {
+                VIDEO_STORYBOARD_PROFILE_V1
             } else {
                 GENERATOR_PROFILE_V1
             },

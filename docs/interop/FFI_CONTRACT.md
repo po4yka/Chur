@@ -36,7 +36,7 @@ chur_key_slot_format_max() -> uint16_t
 chur_build_flavor()        -> uint32_t
 ```
 
-- native API version is the (major, minor) pair. The current library reports 7.1: portable bounded JPEG XL decoding is additive; pairing control records are version 2 without service addresses or tokens, and `chur_peer_call` supplies ephemeral direct peer IO; §6.4 reads bounded text for every scope and binds cursors to the complete query filter; §6.25 adds attachment counts and bounded note-owned file operations while retaining explicit note format, and §6.30 retains the caller-persisted import and album identities introduced in published ABI 3.0; §6.19 changes the album-list record, §6.20 adds atomic album placement, §6.21 adds tag and favourite selection controls, §6.22 adds recoverable trash, §6.23 stages the recovery slot until its phrase is confirmed, §6.24 reads and acknowledges the sync fork state, §6.25 adds local private notes, §6.26 adds selective archives, §6.26.1 adds external-file encryption, §6.28 adds the encrypted content index, and §6.29 adds atomic album removal. Incoming OS sharing reuses the existing import surface. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
+- native API version is the (major, minor) pair. The current library reports 7.2: local encrypted playback positions are additive; portable bounded JPEG XL decoding is additive; pairing control records are version 2 without service addresses or tokens, and `chur_peer_call` supplies ephemeral direct peer IO; §6.4 reads bounded text for every scope and binds cursors to the complete query filter; §6.25 adds attachment counts and bounded note-owned file operations while retaining explicit note format, and §6.30 retains the caller-persisted import and album identities introduced in published ABI 3.0; §6.19 changes the album-list record, §6.20 adds atomic album placement, §6.21 adds tag and favourite selection controls, §6.22 adds recoverable trash, §6.23 stages the recovery slot until its phrase is confirmed, §6.24 reads and acknowledges the sync fork state, §6.25 adds local private notes, §6.26 adds selective archives, §6.26.1 adds external-file encryption, §6.28 adds the encrypted content index, and §6.29 adds atomic album removal. Incoming OS sharing reuses the existing import surface. A different major value fails loading, reports `ABI_INCOMPATIBLE`, and the library is not called again in that process. A major value of `0` is such a value: §11 makes it what a handshake export returns when its body panics, so a panicking library fails the gate;
 - the object-format range is the inclusive `container_version` interval this build reads, using the values registered in [`../format/CANONICAL_ENCODING_V1.md`](../format/CANONICAL_ENCODING_V1.md) §15;
 - the key-slot range is the inclusive key-slot format interval;
 - build flavor is a bitfield: bit 0 set means a release build, bit 1 set means debug assertions are compiled in, bit 2 set means test hooks are compiled in. A release application refuses a library with bit 1 or bit 2 set;
@@ -981,3 +981,21 @@ returns decoder error strings. Rust clears its 4 KiB IO and raster row
 buffers. Upstream decoder grids have no secure wipe API: close releases them
 but does not prove allocator zeroization. The host also releases the platform
 image surface when the vault locks.
+
+
+## Local video resume positions (ABI 7.2)
+
+`chur_playback_position_get(session, object_ref, out_position_ms)` reads one
+bounded scalar from the encrypted catalog. Absent or stale state returns zero.
+The output is zeroed before handle or object validation. A null reference or
+output returns `INVALID_INPUT`. An inactive or non-video object is refused.
+
+`chur_playback_position_put(session, object_ref, position_ms, duration_ms)` writes
+one observation. Both scalars are unsigned milliseconds; duration is 1 through
+14,400,000 and position must not exceed the observed or canonical duration.
+Zero clears the saved position. Object generation, original stream revision and
+canonical duration bind the record to its source. No pointers are retained.
+Calls hold the existing session mutex and fail when the session is locked.
+Hosts negotiate minor version 2 before either call. The Kotlin repository also
+requires the captured session generation before it reads or writes a position.
+See [catalog v17](../format/CATALOG_SCHEMA_V17.md) for migration and deletion.

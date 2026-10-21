@@ -571,6 +571,15 @@ chur_status_t chur_object_reader_open(chur_handle_t session,
                                       uint32_t stream_kind,
                                       chur_handle_t *out_reader);
 chur_status_t chur_object_reader_size(chur_handle_t reader, uint64_t *out_size);
+/* ABI 7.2: local encrypted resume positions, in milliseconds. No pointer retained.
+ * Get returns zero when no current position exists. Put validates an active video,
+ * binds its original revision, and requires 0 <= position <= duration <= 4 hours. */
+chur_status_t chur_playback_position_get(chur_handle_t session,
+                                         const ChurObjectRefV1 *object,
+                                         uint64_t *out_position_ms);
+chur_status_t chur_playback_position_put(chur_handle_t session,
+                                         const ChurObjectRefV1 *object,
+                                         uint64_t position_ms, uint64_t duration_ms);
 chur_status_t chur_object_reader_content_info(chur_handle_t reader,
                                               ChurContentInfoV1 *out_info);
 chur_status_t chur_object_reader_read_at(chur_handle_t reader, uint64_t offset,

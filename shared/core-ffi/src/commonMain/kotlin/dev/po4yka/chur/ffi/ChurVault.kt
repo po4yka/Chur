@@ -712,6 +712,28 @@ object ChurVault {
     // Library
     // -----------------------------------------------------------------------
 
+    /** Reads local SQLCipher resume state bound to the original's content revision. */
+    fun playbackPosition(session: Long, objectId: ByteArray): Long {
+        require(objectId.size == ID_LENGTH)
+        requirePlaybackPositionAbi()
+        val output = LongArray(1)
+        ChurFailure.check(ChurNative.playbackPosition(session, objectId, output), "read playback position")
+        return output[0]
+    }
+
+    /** Saves a bounded native observation; zero clears a saved position. */
+    fun savePlaybackPosition(session: Long, objectId: ByteArray, positionMs: Long, durationMs: Long) {
+        require(objectId.size == ID_LENGTH && positionMs >= 0 && durationMs in 1..14_400_000L && positionMs <= durationMs)
+        requirePlaybackPositionAbi()
+        ChurFailure.check(ChurNative.savePlaybackPosition(session, objectId, positionMs, durationMs), "save playback position")
+    }
+
+    private fun requirePlaybackPositionAbi() {
+        if (ChurNative.abiVersionMajor() != 7 || ChurNative.abiVersionMinor() < 2) {
+            throw ChurFailure(ChurStatus.ABI_INCOMPATIBLE, "encrypted playback positions require ABI 7.2")
+        }
+    }
+
     /** Reads one page of a scope, `CATALOG_SCHEMA_V1.md` §16.2. */
     fun query(
         session: Long,
@@ -1863,6 +1885,9 @@ enum class StreamKind(
 
     /** Explicit H.264/AAC SDR viewing copy; original export stays unchanged. */
     COMPATIBLE_VIDEO(10),
+
+    /** Twelve seek previews in one encrypted JPEG atlas. */
+    VIDEO_STORYBOARD(11),
 }
 
 /** One page request. */

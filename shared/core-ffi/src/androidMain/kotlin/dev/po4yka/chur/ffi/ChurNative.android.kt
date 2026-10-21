@@ -372,6 +372,12 @@ internal actual object ChurNative {
 
     actual fun operationClose(operation: Long): Int = ChurJni.operationClose(operation)
 
+    actual fun playbackPosition(session: Long, objectId: ByteArray, outPosition: LongArray): Int =
+        ChurJni.playbackPositionGet(session, objectId, outPosition)
+
+    actual fun savePlaybackPosition(session: Long, objectId: ByteArray, positionMs: Long, durationMs: Long): Int =
+        ChurJni.playbackPositionPut(session, objectId, positionMs, durationMs)
+
     actual fun objectReaderOpen(
         session: Long,
         objectId: ByteArray,

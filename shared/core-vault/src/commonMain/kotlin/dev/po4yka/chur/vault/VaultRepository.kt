@@ -643,8 +643,15 @@ class VaultRepository(
     ) = withSession(expectedGeneration) { ChurVault.putDerived(it, objectId, kind, width, height, bytes) }
 
     /** Reads a derivative, which the timeline does for every visible row. */
-    suspend fun readDerived(objectId: ByteArray, kind: StreamKind): ByteArray =
-        withSession { ChurVault.readDerived(it, objectId, kind) }
+    suspend fun readDerived(objectId: ByteArray, kind: StreamKind, expectedGeneration: Long? = null): ByteArray =
+        withSession(expectedGeneration) { ChurVault.readDerived(it, objectId, kind) }
+
+    /** Resume state remains inside the generation-bound encrypted catalog. */
+    suspend fun playbackPosition(objectId: ByteArray, expectedGeneration: Long): Long =
+        withGenerationSession(expectedGeneration) { ChurVault.playbackPosition(it, objectId) }
+
+    suspend fun savePlaybackPosition(objectId: ByteArray, positionMs: Long, durationMs: Long, expectedGeneration: Long) =
+        withGenerationSession(expectedGeneration) { ChurVault.savePlaybackPosition(it, objectId, positionMs, durationMs) }
 
     /** Reads a plaintext range of the original. */
     suspend fun readRange(objectId: ByteArray, offset: Long, length: Int): ByteArray =

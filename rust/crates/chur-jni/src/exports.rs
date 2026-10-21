@@ -1390,6 +1390,69 @@ pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_operationClose(
 // Object reader
 // ---------------------------------------------------------------------------
 
+/// Reads one encrypted local resume position.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_playbackPositionGet<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    object_id: JByteArray<'local>,
+    out_position: JLongArray<'local>,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(reference) = object_reference(env, &object_id) else {
+            return INVALID_INPUT;
+        };
+        let mut position = 0u64;
+        // SAFETY: the aligned reference and output are live local storage for the synchronous call.
+        let status = unsafe {
+            chur_ffi::playback::chur_playback_position_get(
+                handle_of(session),
+                &reference,
+                &mut position,
+            )
+        };
+        if status != 0 {
+            return status;
+        }
+        if write_long(env, &out_position, 0, position as jlong) {
+            0
+        } else {
+            INVALID_INPUT
+        }
+    })
+}
+
+/// Saves one bounded encrypted local resume position.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_playbackPositionPut<'local>(
+    env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    session: jlong,
+    object_id: JByteArray<'local>,
+    position_ms: jlong,
+    duration_ms: jlong,
+) -> jint {
+    crate::convert::contain_env(INTERNAL_FAILURE, env, |env| {
+        let Some(reference) = object_reference(env, &object_id) else {
+            return INVALID_INPUT;
+        };
+        let (Ok(position), Ok(duration)) = (u64::try_from(position_ms), u64::try_from(duration_ms))
+        else {
+            return INVALID_INPUT;
+        };
+        // SAFETY: the aligned object reference is a live local and no pointer is retained.
+        unsafe {
+            chur_ffi::playback::chur_playback_position_put(
+                handle_of(session),
+                &reference,
+                position,
+                duration,
+            )
+        }
+    })
+}
+
 /// Opens a random-access reader.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_po4yka_chur_ffi_ChurJni_objectReaderOpen<'local>(

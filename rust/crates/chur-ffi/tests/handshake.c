@@ -52,8 +52,8 @@ int main(void) {
           "neither format range is the empty panic fallback");
 
     check(chur_abi_version_major() == 7, "major ABI version is 7");
-    check(chur_abi_version_minor() == 1,
-          "minor ABI version is 1, including portable JPEG XL decoding");
+    check(chur_abi_version_minor() == 2,
+          "minor ABI version is 2, including encrypted playback positions");
 
     check(chur_object_format_min() <= chur_object_format_max(),
           "object format range is ordered");

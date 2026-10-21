@@ -18,6 +18,8 @@ import java.nio.ByteBuffer
  * process and a second load would be one.
  */
 internal object ChurJni {
+    external fun playbackPositionGet(session: Long, objectId: ByteArray, outPosition: LongArray): Int
+    external fun playbackPositionPut(session: Long, objectId: ByteArray, positionMs: Long, durationMs: Long): Int
     init {
         System.loadLibrary("chur_jni")
     }

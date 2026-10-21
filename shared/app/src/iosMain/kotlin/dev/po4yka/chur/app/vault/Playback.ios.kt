@@ -142,9 +142,10 @@ actual fun VaultPlayer(
     controlsPadding: PaddingValues,
     touches: Int,
 ) {
+    val timeline = rememberVideoPlaybackTimeline(source)
     VideoPlaybackTools(source, modifier, controlsVisible, controlsPadding) { effective, childModifier, onViewCopy ->
         NativeVaultPlayer(effective, childModifier, poster, controlsVisible, controlsPinned,
-            onControlsVisibleChange, controlsPadding, touches, onViewCopy)
+            onControlsVisibleChange, controlsPadding, touches, onViewCopy, timeline)
     }
 }
 
@@ -159,6 +160,7 @@ private fun NativeVaultPlayer(
     controlsPadding: PaddingValues,
     touches: Int,
     onViewCopy: (() -> Unit)?,
+    timeline: VideoPlaybackTimeline,
 ) {
     val audio = source.contentType.startsWith("audio/")
     var voiceOver by remember { mutableStateOf(UIAccessibilityIsVoiceOverRunning()) }
@@ -197,6 +199,8 @@ private fun NativeVaultPlayer(
     var phase by remember(player) { mutableStateOf(IosPlaybackPhase.INITIAL) }
     val playing = phase == IosPlaybackPhase.PLAYING
     val buffering = phase == IosPlaybackPhase.BUFFERING
+    var resumeApplied by remember(player) { mutableStateOf(false) }
+    var resumePending by remember(player) { mutableStateOf(false) }
     var position by remember(player) { mutableStateOf(0f) }
     var duration by remember(player) { mutableStateOf(0f) }
     var audioGroup by remember(player) { mutableStateOf<AVMediaSelectionGroup?>(null) }
@@ -213,6 +217,17 @@ private fun NativeVaultPlayer(
         while (true) {
             val item = player.currentItem
             if (item?.status == AVPlayerItemStatusReadyToPlay) {
+                if (!resumeApplied && !resumePending && timeline.initialPositionMs != null && duration > 0) {
+                    val resume = videoResumePosition(checkNotNull(timeline.resumePositionMs()), (duration * 1000).toLong())
+                    if (resume > 0) {
+                        resumePending = true
+                        player.seekToTime(CMTimeMakeWithSeconds(resume / 1000.0, 600)) { completed ->
+                            position = CMTimeGetSeconds(player.currentTime()).takeIf { it.isFinite() }?.toFloat() ?: 0f
+                            resumeApplied = completed
+                            resumePending = false
+                        }
+                    } else resumeApplied = true
+                }
                 // Native playback can accept AAC while silently dropping an
                 // unsupported MP4 video track. A ready item alone is not proof
                 // that this video asset is playable.
@@ -243,6 +258,7 @@ private fun NativeVaultPlayer(
                     audio = player.currentItem?.asset?.let(::iosAssetAudioFormat))
             }
             covered = !audio && (!started || layer?.readyForDisplay != true)
+            if (resumeApplied && scrub.target == null) timeline.sample((position * 1000).toLong(), (duration * 1000).toLong())
             if (phase == IosPlaybackPhase.PLAYING) source.vault.noteActivity()
             delay(250)
         }
@@ -276,6 +292,7 @@ private fun NativeVaultPlayer(
         onDispose {
             // `PLAINTEXT_LIFECYCLE.md` §8 step 1: private playback stops before
             // anything else, and leaving the surface is that event here.
+            if (resumeApplied) { timeline.sample((position * 1000).toLong(), (duration * 1000).toLong()); timeline.flush() }
             player.pause()
             player.replaceCurrentItemWithPlayerItem(null)
             loader.release()
@@ -301,13 +318,15 @@ private fun NativeVaultPlayer(
         if (posterShown) PlayerPoster(checkNotNull(poster), onPlay = if (posterOffersPlay) play else null)
         // The poster owns the only Play until it is pressed. Hidden transport
         // controls must not remain in the keyboard or VoiceOver focus order.
+        TimelinePreview(timeline, Modifier.align(Alignment.Center).padding(controlsPadding))
         if (diagnostic != null) {
             PlaybackProblemPanel(
                 diagnostic = diagnostic,
                 onVerify = source.onVerify,
                 modifier = Modifier.align(Alignment.Center).padding(controlsPadding),
                 onExport = source.onExport,
-                onRetry = { attempt += 1 }, onViewCopy = onViewCopy,
+                onRetry = { attempt += 1 },
+                onViewCopy = onViewCopy,
             )
         }
         if ((controlsVisible || controlsHeld) && !posterOffersPlay && problem == null) {
@@ -332,9 +351,11 @@ private fun NativeVaultPlayer(
                     value = displayedPosition.coerceIn(0f, duration.coerceAtLeast(0f)),
                     onValueChange = {
                         scrub = scrub.previewAt(it)
+                        timeline.scrub((it * 1000).toLong(), (duration * 1000).toLong(), true)
                         onControlsVisibleChange(true)
                     },
                     onValueChangeFinished = {
+                        timeline.scrub((displayedPosition * 1000).toLong(), (duration * 1000).toLong(), false)
                         scrub = scrub.commit()
                         scrub.target?.let { target ->
                             val revision = scrub.revision
@@ -354,6 +375,7 @@ private fun NativeVaultPlayer(
                     TextButton(onClick = {
                         if (playing || buffering) {
                             player.pause()
+                            if (resumeApplied) { timeline.sample((position * 1000).toLong(), (duration * 1000).toLong()); timeline.flush() }
                             phase = IosPlaybackPhase.PAUSED
                             onControlsVisibleChange(true)
                         } else play()

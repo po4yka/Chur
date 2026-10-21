@@ -246,7 +246,7 @@ class ChurVaultHostTest {
     fun the_handshake_matches_the_frozen_abi() {
         val handshake = ChurVault.handshake()
         assertEquals(7, handshake.major)
-        assertEquals(1, handshake.minor, "portable JPEG XL decoding uses ABI 7.1")
+        assertEquals(2, handshake.minor, "encrypted playback positions use ABI 7.2")
         assertEquals(1, handshake.objectFormatMin)
         assertEquals(1, handshake.objectFormatMax)
         assertTrue(handshake.capabilities and 0b0000_0010L != 0L, "the reader is declared")

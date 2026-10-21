@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "provenance": "Twelve decoded center frames from the repository's procedural 64-second Main10 SDR VFR fixture; no user or third-party media.",
+  "generation": "python3 tests/media/video-timeline/generate.py",
+  "ffmpeg_version": "ffmpeg version 9.0.2 Copyright (c) 2000-2026 the FFmpeg developers",
+  "source": {
+    "filename": "../video-acceptance/main10-long-gop-vfr.mp4",
+    "sha256": "17e47414f542339a0fd3141fe4660e4079e89f5233aa2ef816d39ce1a8a6528e",
+    "duration_seconds": 64.0
+  },
+  "slot_centers_seconds": [
+    2.6666666666666665,
+    8.0,
+    13.333333333333334,
+    18.666666666666668,
+    24.0,
+    29.333333333333332,
+    34.666666666666664,
+    40.0,
+    45.333333333333336,
+    50.666666666666664,
+    56.0,
+    61.333333333333336
+  ],
+  "decoded_frame_png_sha256": [
+    "cb39f016b66fad04d4a12569e1aaa2debd9f98a628ae96fd43c00091144b0a04",
+    "81b0f5f1b0b9d43b07c92515da4288eeab750df2a96a4c921638ad916019cdcf",
+    "b3ec76149a9504b472beb57968a0257a69fd8486f5bca17d75e0e49d872fc47e",
+    "adcea20f62024f6f228b32353e8d72c8ff7b22abff0b89df5b27314c55912bbb",
+    "fa19eada27c921f8cb0dc91fee5f6d2809424665dbd3d328b55724e5598db31e",
+    "80a113a226cd9895cd43c0123c1196c900ec16d8bf5f25d5e371869fb9e08d08",
+    "fd75f6d4091d4d82723a502c5c8a68e989319e9c49f86d37d471614ed463544b",
+    "1aa843cce0044e65bfbd24316bad630db30bbd838130aa84d6dc80a1b238bd09",
+    "d13921f506d6e803f0771ce8c667199505f913de4c5d7c63000e071003360148",
+    "f44d97de1b4fe802581b3e9aff7d5e047e8e57a8994ff48c688e048aaadb2455",
+    "deab6c524837510c0208d6a2157c228781870eba9bd49b44484f625748c634de",
+    "fc35a4ec58d3e841a181f1bc8c6a25b15088dab6de92c6d3909f62b13bb4371f"
+  ],
+  "files": [
+    {
+      "filename": "reference-storyboard.jpg",
+      "length": 45369,
+      "sha256": "da099edf74a9f22de313aa338cbaf7ef57019db54da889cb8d7fe53b375eecec",
+      "ffprobe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "codec_name": "mjpeg",
+            "width": 640,
+            "height": 270,
+            "pix_fmt": "yuvj420p"
+          }
+        ]
+      }
+    }
+  ]
+}

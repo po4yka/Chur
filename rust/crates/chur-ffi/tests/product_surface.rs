@@ -1969,3 +1969,103 @@ fn a_failed_scratch_sweep_at_unlock_still_locks_the_session() {
     assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+fn encrypted_video_positions_cross_the_c_boundary_and_fail_closed_on_lock() {
+    use chur_ffi::playback::{chur_playback_position_get, chur_playback_position_put};
+    let root = scratch();
+    let runtime = open_runtime(&root);
+    let session = fresh_session(runtime);
+    let bytes = include_bytes!("../../../../tests/media/hevc-main10/sdr10-hvc1.mp4");
+    let mut file = tempfile();
+    file.write_all(bytes).unwrap();
+    file.rewind().unwrap();
+    let request = ChurImportRequestV2 {
+        requested_object_id: core::ptr::null(),
+        seekable: 1,
+        known_length_present: 1,
+        media_class: 2,
+        reserved: 0,
+        width: 192,
+        height: 96,
+        duration_ms: 1250,
+        known_length: bytes.len() as u64,
+        capture_time_ms: 1_700_000_000_000,
+        capture_time_present: 1,
+        reserved_two: [0; 7],
+        content_type: b"video/mp4".as_ptr(),
+        content_type_length: 9,
+        original_filename: b"video.mp4".as_ptr(),
+        original_filename_length: 9,
+    };
+    let mut operation = 0;
+    // SAFETY: all request fields and writable output live through each synchronous call.
+    assert_eq!(
+        unsafe { chur_import_begin(session, descriptor(&file), &request, &mut operation) },
+        OK
+    );
+    assert_eq!(drain(operation), OK);
+    assert_eq!(unsafe { chur_operation_close(operation) }, OK);
+    let object = ChurObjectRefV1 {
+        object_id: latest_object(session),
+    };
+    let mut position = u64::MAX;
+    // SAFETY: the object reference and exclusive scalar output live for each call.
+    unsafe {
+        assert_eq!(
+            chur_playback_position_get(session, &object, &mut position),
+            OK
+        );
+        assert_eq!(position, 0);
+        assert_eq!(chur_playback_position_put(session, &object, 500, 1250), OK);
+        assert_eq!(
+            chur_playback_position_get(session, &object, &mut position),
+            OK
+        );
+        assert_eq!(position, 500);
+        assert_eq!(
+            status(chur_playback_position_put(session, &object, 1251, 1250)),
+            ChurStatus::InvalidInput
+        );
+        assert_eq!(
+            chur_playback_position_get(session, &object, &mut position),
+            OK
+        );
+        assert_eq!(position, 500);
+        assert_eq!(
+            status(chur_playback_position_get(
+                session,
+                core::ptr::null(),
+                &mut position
+            )),
+            ChurStatus::InvalidInput
+        );
+        assert_eq!(position, 0);
+        assert_eq!(
+            status(chur_playback_position_get(
+                session,
+                &object,
+                core::ptr::null_mut()
+            )),
+            ChurStatus::InvalidInput
+        );
+        assert_eq!(chur_playback_position_put(session, &object, 0, 1250), OK);
+        assert_eq!(
+            chur_playback_position_get(session, &object, &mut position),
+            OK
+        );
+        assert_eq!(position, 0);
+        assert_eq!(chur_vault_lock(session, 1), OK);
+        position = u64::MAX;
+        assert_ne!(
+            chur_playback_position_get(session, &object, &mut position),
+            OK
+        );
+        assert_eq!(position, 0);
+        assert_ne!(chur_playback_position_put(session, &object, 500, 1250), OK);
+        assert_eq!(chur_session_close(session), OK);
+        assert_eq!(chur_runtime_close(runtime), OK);
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}

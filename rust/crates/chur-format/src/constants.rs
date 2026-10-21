@@ -69,6 +69,8 @@ pub const CATALOG_FORMAT_VERSION_V14: u16 = 0x000e;
 pub const CATALOG_FORMAT_VERSION_V15: u16 = 0x000f;
 /// Private catalog supporting encrypted compatible-video derivative streams.
 pub const CATALOG_FORMAT_VERSION_V16: u16 = 0x0010;
+/// Encrypted local playback positions and video storyboard capability.
+pub const CATALOG_FORMAT_VERSION_V17: u16 = 0x0011;
 /// §15.2: `object_store_format_version`.
 pub const OBJECT_STORE_FORMAT_VERSION_V1: u16 = 0x0001;
 /// §15.2: `slot_version` of the v1 key-slot families.
@@ -206,6 +208,8 @@ discriminant_enum! {
         EmbeddingRecord = 0x09;
         /// An explicit H.264/AAC SDR viewing copy of a video original.
         CompatibleVideo = 0x0a;
+        /// Twelve SDR seek thumbnails in a four-by-three JPEG atlas.
+        VideoStoryboard = 0x0b;
     }
 }
 

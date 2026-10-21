@@ -106,6 +106,7 @@ grid preview
 screen preview
 video poster frame
 compatible video viewing copy
+video seek storyboard
 animated preview (future)
 audio waveform
 OCR text (current storage is catalog v10, not a derived asset stream)
@@ -267,6 +268,20 @@ If a declared track cannot be decoded, creation fails. It must not silently
 remove audio. Creation supports cancellation and a session change cancels it.
 The original remains the default export source. Playback can select either
 stream. No import or ordinary playback action starts a conversion.
+
+Stream kind `0x0b`, generator profile 3, is a 640 × 270 JPEG storyboard. It
+contains 12 upright SDR frames in four columns and three rows. Each 160 × 90
+cell fits its frame on black, at `(slot + 0.5) / 12` of the native duration.
+The atlas is at most 2 MiB. It uses the original content revision and the same
+encrypted derivative boundary. The first scrub loads or creates it; decoded
+pixels stay in the current playback session and are released on lock or exit.
+
+A playback checkpoint stores position and observed duration in SQLCipher,
+with the object generation and original stream revision. A replaced source
+invalidates it. The player checkpoints at most every five seconds and on
+pause when possible. A position in the final two seconds resumes at zero.
+A locked or changed session cannot read or update the previous session's
+checkpoint. Playback does not write a private position to platform preferences.
 
 ## 12. Limits
 

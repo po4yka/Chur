@@ -53,6 +53,8 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.PlayerControlView
 import androidx.media3.ui.DefaultTrackNameProvider
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.TimeBar
+import kotlinx.coroutines.delay
 import dev.po4yka.chur.app.R
 import dev.po4yka.chur.app.theme.ViewerColors
 import dev.po4yka.chur.ffi.ChurFailure
@@ -80,9 +82,10 @@ actual fun VaultPlayer(
     controlsPadding: PaddingValues,
     touches: Int,
 ) {
+    val timeline = rememberVideoPlaybackTimeline(source)
     VideoPlaybackTools(source, modifier, controlsVisible, controlsPadding) { effective, childModifier, onViewCopy ->
         NativeVaultPlayer(effective, childModifier, poster, controlsVisible, controlsPinned,
-            onControlsVisibleChange, controlsPadding, touches, onViewCopy)
+            onControlsVisibleChange, controlsPadding, touches, onViewCopy, timeline)
     }
 }
 
@@ -98,6 +101,7 @@ private fun NativeVaultPlayer(
     controlsPadding: PaddingValues,
     touches: Int,
     onViewCopy: (() -> Unit)?,
+    timeline: VideoPlaybackTimeline,
 ) {
     val context = LocalContext.current
     val audio = source.contentType.startsWith("audio/")
@@ -163,6 +167,24 @@ private fun NativeVaultPlayer(
                 prepare()
             }
     }
+    var resumeApplied by remember(player) { mutableStateOf(false) }
+    LaunchedEffect(player, timeline.initialPositionMs) {
+        val saved = timeline.resumePositionMs() ?: return@LaunchedEffect
+        while (player.playbackState != Player.STATE_READY && player.playerError == null) delay(100)
+        val resume = videoResumePosition(saved, player.duration)
+        if (player.playerError == null && resume > 0 && player.duration > 0) {
+            player.seekTo(resume)
+            repeat(100) { if (kotlin.math.abs(player.currentPosition - resume) > 750) delay(100) }
+        }
+        resumeApplied = true
+    }
+    LaunchedEffect(player, resumeApplied) {
+        if (!resumeApplied) return@LaunchedEffect
+        while (true) {
+            timeline.sample(player.currentPosition, player.duration)
+            delay(500)
+        }
+    }
     // The poster covers the view until the player draws a frame. Media3
     // draws the first one while paused, so on most devices the poster goes
     // before a press. It also goes on the press that starts playback: a
@@ -202,10 +224,12 @@ private fun NativeVaultPlayer(
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 buffering = playbackState == Player.STATE_BUFFERING
+                if (resumeApplied && playbackState == Player.STATE_ENDED) { timeline.sample(player.currentPosition, player.duration); timeline.flush() }
             }
 
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                 requested = playWhenReady
+                if (resumeApplied && !playWhenReady) { timeline.sample(player.currentPosition, player.duration); timeline.flush() }
                 if (playWhenReady) {
                     covered = false
                     started = true
@@ -228,6 +252,7 @@ private fun NativeVaultPlayer(
             // §8 of `PLAINTEXT_LIFECYCLE.md`: stopping private playback is the
             // first step of a lock, and leaving the surface is the same event
             // for this player's purposes.
+            if (resumeApplied) { timeline.sample(player.currentPosition, player.duration); timeline.flush() }
             player.release()
         }
     }
@@ -291,6 +316,11 @@ private fun NativeVaultPlayer(
                         },
                     )
                     this.player = player
+                    (findViewById<View>(androidx.media3.ui.R.id.exo_progress) as? TimeBar)?.addListener(object : TimeBar.OnScrubListener {
+                        override fun onScrubStart(timeBar: TimeBar, position: Long) { timeline.scrub(position, player.duration, true) }
+                        override fun onScrubMove(timeBar: TimeBar, position: Long) { timeline.scrub(position, player.duration, true) }
+                        override fun onScrubStop(timeBar: TimeBar, position: Long, canceled: Boolean) { timeline.scrub(position, player.duration, false) }
+                    })
                     // Native settings use focusable PopupWindows that cover the viewer's
                     // lock. Keep the real controller, replacing only popup entry points.
                     listOf(
@@ -381,10 +411,11 @@ private fun NativeVaultPlayer(
                 modifier = Modifier.align(Alignment.TopCenter).padding(controlsPadding).padding(16.dp)
                     .background(ViewerColors.chromeScrim).semantics { liveRegion = LiveRegionMode.Polite })
         }
+        TimelinePreview(timeline, Modifier.align(Alignment.Center).padding(controlsPadding))
         diagnostic?.let {
             PlaybackProblemPanel(it, source.onVerify,
                 Modifier.align(Alignment.Center).padding(controlsPadding), onExport = source.onExport,
-                onRetry = { attempt += 1 })
+                onRetry = { attempt += 1 }, onViewCopy = onViewCopy)
         }
     }
 }

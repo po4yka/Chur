@@ -335,6 +335,9 @@ internal expect object ChurNative {
         outReader: LongArray,
     ): Int
 
+    fun playbackPosition(session: Long, objectId: ByteArray, outPosition: LongArray): Int
+    fun savePlaybackPosition(session: Long, objectId: ByteArray, positionMs: Long, durationMs: Long): Int
+
     fun objectReaderSize(
         reader: Long,
         outSize: LongArray,

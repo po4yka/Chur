@@ -18,7 +18,7 @@ use chur_format::{
         CATALOG_FORMAT_VERSION_V7, CATALOG_FORMAT_VERSION_V8, CATALOG_FORMAT_VERSION_V9,
         CATALOG_FORMAT_VERSION_V10, CATALOG_FORMAT_VERSION_V11, CATALOG_FORMAT_VERSION_V12,
         CATALOG_FORMAT_VERSION_V13, CATALOG_FORMAT_VERSION_V14, CATALOG_FORMAT_VERSION_V15,
-        CATALOG_FORMAT_VERSION_V16,
+        CATALOG_FORMAT_VERSION_V16, CATALOG_FORMAT_VERSION_V17,
     },
     envelope::ObjectKeyEnvelope,
 };
@@ -82,6 +82,9 @@ const STEPS: &[Step] = &[
     },
     Step {
         version: CATALOG_FORMAT_VERSION_V16,
+    },
+    Step {
+        version: CATALOG_FORMAT_VERSION_V17,
     },
 ];
 
@@ -907,6 +910,34 @@ pub fn migrate_v15_to_v16(db: &mut CatalogDb) -> Result<()> {
     })
 }
 
+const V17_DDL: &str = r#"
+CREATE TABLE playback_positions (
+    object_id                BLOB PRIMARY KEY REFERENCES objects(object_id) ON DELETE CASCADE,
+    object_generation        INTEGER NOT NULL CHECK (object_generation >= 1),
+    source_content_revision  INTEGER NOT NULL CHECK (source_content_revision >= 1),
+    position_ms              INTEGER NOT NULL CHECK (position_ms >= 0),
+    duration_ms              INTEGER NOT NULL CHECK (duration_ms BETWEEN 1 AND 14400000),
+    CHECK (position_ms <= duration_ms)
+) STRICT;
+"#;
+
+/// Adds local encrypted resume positions after descriptor authentication.
+pub fn migrate_v16_to_v17(db: &mut CatalogDb) -> Result<()> {
+    ensure!(
+        recorded_version(db.connection())? == Some(CATALOG_FORMAT_VERSION_V16),
+        MigrationRequired,
+        "the catalog is not version sixteen"
+    );
+    db.transaction(|tx| {
+        tx.execute("UPDATE vault_state SET active_migration_target = 17 WHERE only_row = 1", [])
+            .map_err(|error| map_sqlite(error, "the playback migration target could not be written"))?;
+        tx.execute_batch(V17_DDL).map_err(|error| map_sqlite(error, "the playback position schema could not be created"))?;
+        tx.execute("UPDATE vault_state SET catalog_format_version = 17, active_migration_target = NULL WHERE only_row = 1", [])
+            .map_err(|error| map_sqlite(error, "the playback position schema version could not be written"))?;
+        Ok(())
+    })
+}
+
 /// Creates the current schema or opens it without performing an implicit migration.
 ///
 /// `docs/format/CATALOG_SCHEMA_V1.md` §18 forbids skipping an untested step, so
@@ -916,15 +947,15 @@ pub fn open_at_current_version(db: &mut CatalogDb, now_ms: u64) -> Result<u16> {
     let present = recorded_version(db.connection())?;
     let Some(present) = present else {
         install(db, now_ms)?;
-        return Ok(CATALOG_FORMAT_VERSION_V16);
+        return Ok(CATALOG_FORMAT_VERSION_V17);
     };
-    if present != CATALOG_FORMAT_VERSION_V16 {
+    if present != CATALOG_FORMAT_VERSION_V17 {
         bail!(
             MigrationRequired,
             "the catalog requires an authenticated schema migration"
         );
     }
-    Ok(CATALOG_FORMAT_VERSION_V16)
+    Ok(CATALOG_FORMAT_VERSION_V17)
 }
 
 /// The version the database records, or `None` when the schema is absent.
@@ -1000,6 +1031,9 @@ fn install(db: &mut CatalogDb, now_ms: u64) -> Result<()> {
         transaction
             .execute_batch(V14_DDL)
             .map_err(|e| map_sqlite(e, "the note workspace schema could not be created"))?;
+        transaction.execute_batch(V17_DDL).map_err(|error| {
+            map_sqlite(error, "the playback position schema could not be created")
+        })?;
         transaction
             .execute(
                 "INSERT INTO vault_state (
@@ -1007,7 +1041,7 @@ fn install(db: &mut CatalogDb, now_ms: u64) -> Result<()> {
                      active_migration_target, object_store_checkpoint,
                      integrity_checkpoint_ms, capability_flags
                  ) VALUES (1, ?1, 1, NULL, 0, ?2, 0)",
-                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V16), checkpoint],
+                rusqlite::params![i64::from(CATALOG_FORMAT_VERSION_V17), checkpoint],
             )
             .map_err(|error| map_sqlite(error, "the catalog state row could not be written"))?;
         Ok(())
@@ -1032,6 +1066,7 @@ pub fn migrate_v8_to_v9(db: &mut CatalogDb) -> Result<()> {
 
 #[cfg(test)]
 const RESET_V7_DDL: &str = "
+DROP TABLE IF EXISTS playback_positions;
 DROP TABLE IF EXISTS own_sync_pending_album_memberships;
 DROP TABLE IF EXISTS content_index;
 DROP TABLE IF EXISTS private_note_search;
@@ -1744,11 +1779,50 @@ mod tests {
     }
 
     #[test]
-    fn a_new_catalog_installs_version_sixteen() {
+    fn playback_position_migration_rolls_back_ddl_and_version_together() {
+        let mut db = open();
+        open_at_current_version(&mut db, 1).expect("install");
+        db.connection().execute_batch("DROP TABLE playback_positions;
+            UPDATE vault_state SET catalog_format_version = 16;
+            CREATE TRIGGER fail_playback_migration BEFORE UPDATE OF catalog_format_version ON vault_state
+            WHEN NEW.catalog_format_version = 17 BEGIN SELECT RAISE(ABORT, 'interrupted'); END;").expect("v16 fixture");
+        assert!(migrate_v16_to_v17(&mut db).is_err());
+        assert_eq!(
+            recorded_version(db.connection()).expect("version"),
+            Some(CATALOG_FORMAT_VERSION_V16)
+        );
+        let tables: i64 = db
+            .connection()
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name='playback_positions'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("rolled back DDL");
+        assert_eq!(tables, 0);
+        db.connection()
+            .execute_batch("DROP TRIGGER fail_playback_migration")
+            .expect("retry");
+        migrate_v16_to_v17(&mut db).expect("migrate");
+        assert_eq!(
+            recorded_version(db.connection()).expect("version"),
+            Some(CATALOG_FORMAT_VERSION_V17)
+        );
+        assert_eq!(generation(&db).expect("generation"), 1);
+        assert_eq!(
+            migrate_v16_to_v17(&mut db)
+                .expect_err("wrong source version")
+                .status(),
+            chur_core::ChurStatus::MigrationRequired
+        );
+    }
+
+    #[test]
+    fn a_new_catalog_installs_version_seventeen() {
         let mut db = open();
         assert_eq!(
             open_at_current_version(&mut db, 1_700_000_000_000).expect("install"),
-            CATALOG_FORMAT_VERSION_V16
+            CATALOG_FORMAT_VERSION_V17
         );
         let sharing_tables: i64 = db
             .connection()
@@ -1820,7 +1894,7 @@ mod tests {
         }
         assert_eq!(
             STEPS.last().map(|step| step.version),
-            Some(CATALOG_FORMAT_VERSION_V16)
+            Some(CATALOG_FORMAT_VERSION_V17)
         );
     }
 
