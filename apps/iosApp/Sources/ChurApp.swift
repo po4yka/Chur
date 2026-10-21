@@ -177,6 +177,11 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             scene.presentDocumentPicker(answer)
         }
         IosDocumentPicker.shared.cancel = { [weak self] in self?.scene?.cancelDocumentImports() }
+        IosMediaFilesPicker.shared.present = { [weak self] answer in
+            guard let scene = self?.scene else { DocumentPickerDelegate.answerNoAudio(answer); return }
+            scene.presentMediaFilesPicker(answer)
+        }
+        IosMediaFilesPicker.shared.cancel = { [weak self] in self?.scene?.cancelDocumentImports() }
         IosAudioPicker.shared.present = { [weak self] answer in
             guard let scene = self?.scene else { DocumentPickerDelegate.answerNoAudio(answer); return }
             scene.presentAudioPicker(answer)
@@ -458,6 +463,12 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         documentPickerController = picker
         picker.delegate = delegate
         presenter.present(picker, animated: true)
+    }
+
+    func presentMediaFilesPicker(_ answer: @escaping AudioDocumentAnswer) {
+        // Some image formats are not registered by the OS or available in Photos.
+        // Content signatures in the media codec determine how to import them.
+        presentMediaDocumentPicker(answer, types: [.item])
     }
 
     func presentAudioPicker(_ answer: @escaping AudioDocumentAnswer) {

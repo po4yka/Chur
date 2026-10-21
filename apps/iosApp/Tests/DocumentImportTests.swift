@@ -59,6 +59,28 @@ final class DocumentImportTests: XCTestCase {
         wait(for: [stopped], timeout: 5)
     }
 
+    func testJpegXlMediaFileLeaseProvidesReadableOriginalUntilCodecReleasesIt() throws {
+        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let original = try Data(contentsOf: repository.appendingPathComponent("tests/media/jpeg-xl/still-container.jxl"))
+        // The unrestricted media picker can return a format that the OS has not registered.
+        let url = root.appendingPathComponent("Provider copy.bin")
+        try original.write(to: url)
+        let stopped = expectation(description: "media file scope released after codec")
+        let selected = DocumentImportSelection(urls: [url], startAccess: { _ in true }, stopAccess: { _ in stopped.fulfill() })
+        selected.load(index: 0) { source in
+            guard let source else { XCTFail("Media file source not opened"); return }
+            XCTAssertEqual(source.readablePath, url.path)
+            XCTAssertEqual(source.name, "Provider copy.bin")
+            XCTAssertEqual(source.size, Int64(original.count))
+            selected.close()
+            XCTAssertGreaterThanOrEqual(fcntl(source.descriptor, F_GETFD), 0)
+            XCTAssertEqual(try? Data(contentsOf: URL(fileURLWithPath: source.readablePath)), original)
+            source.close()
+        }
+        wait(for: [stopped], timeout: 5)
+    }
+
     func testAnActiveDescriptorStaysValidUntilNativeImportReleasesIt() throws {
         let url = root.appendingPathComponent("document.txt")
         try Data([1]).write(to: url)

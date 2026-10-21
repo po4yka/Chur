@@ -322,9 +322,12 @@ at 4K, or calibrated tone-map fidelity. Those remain device acceptance checks.
 Android and iOS use the same bounded Rust decoder for standalone `.jxl` images.
 It accepts raw codestreams and standard containers. Signatures confirm the format
 when a provider gives a generic or incorrect MIME type. The canonical type is
-`image/jxl`. Explicit **Documents and files** selection keeps its opaque-file
-contract; Photos/media selection and incoming media shares use image import.
-Generic incoming shares with a JPEG XL signature also use the media path.
+`image/jxl`. **Media files** opens an unrestricted file picker and imports
+selected items through the media pipeline. This makes standalone JXL available
+when the system photo picker does not list it. Explicit **Documents and files**
+selection keeps its opaque-file contract. Photos/media selection and incoming
+media shares use image import. Generic incoming shares with a JPEG XL signature
+also use the media path.
 Unsupported media shares retain the fallback warning; explicit file imports do
 not receive that warning.
 

@@ -357,6 +357,7 @@ private fun IosExternalArchiveRoute(controller: ChurController) {
                 IosDocumentPicker.cancel?.invoke()
                 IosAudioPicker.cancel?.invoke()
                 IosLivePhotoFilesPicker.cancel?.invoke()
+                IosMediaFilesPicker.cancel?.invoke()
             }
         }
     }
@@ -467,6 +468,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             IosDocumentPicker.cancel?.invoke()
             IosAudioPicker.cancel?.invoke()
             IosLivePhotoFilesPicker.cancel?.invoke()
+            IosMediaFilesPicker.cancel?.invoke()
             if (documentPickerPending) {
                 documentPickerPending = false
                 val current = controller.vaultState.value as? VaultState.Unlocked
@@ -822,8 +824,12 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
             }
         }
     }
-    val importMediaFiles: (Boolean) -> Unit = { livePhotoPackages ->
-        val present = if (livePhotoPackages) IosLivePhotoFilesPicker.present else IosAudioPicker.present
+    val importMediaFiles: (IosMediaFileSource) -> Unit = { source ->
+        val present = when (source) {
+            IosMediaFileSource.Audio -> IosAudioPicker.present
+            IosMediaFileSource.LivePhoto -> IosLivePhotoFilesPicker.present
+            IosMediaFileSource.Media -> IosMediaFilesPicker.present
+        }
         if (present == null) {
             controller.report("This build cannot open the media file picker.")
         } else {
@@ -925,8 +931,9 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 Column {
                     TextButton(onClick = { choosingImportSource = false; importMedia(false) }, modifier = Modifier.fillMaxWidth()) { Text("Photos and videos") }
                     TextButton(onClick = { choosingImportSource = false; importMedia(true) }, modifier = Modifier.fillMaxWidth()) { Text("Full Live Photos (Photos access)") }
-                    TextButton(onClick = { choosingImportSource = false; importMediaFiles(false) }, modifier = Modifier.fillMaxWidth()) { Text("Audio files") }
-                    TextButton(onClick = { choosingImportSource = false; importMediaFiles(true) }, modifier = Modifier.fillMaxWidth()) { Text("Live Photo packages") }
+                    TextButton(onClick = { choosingImportSource = false; importMediaFiles(IosMediaFileSource.Media) }, modifier = Modifier.fillMaxWidth()) { Text("Media files") }
+                    TextButton(onClick = { choosingImportSource = false; importMediaFiles(IosMediaFileSource.Audio) }, modifier = Modifier.fillMaxWidth()) { Text("Audio files") }
+                    TextButton(onClick = { choosingImportSource = false; importMediaFiles(IosMediaFileSource.LivePhoto) }, modifier = Modifier.fillMaxWidth()) { Text("Live Photo packages") }
                     TextButton(onClick = { choosingImportSource = false; importFiles() }, modifier = Modifier.fillMaxWidth()) { Text("Documents and files") }
                     TextButton(onClick = { choosingImportSource = false; choosingArchiveImport = true }, modifier = Modifier.fillMaxWidth()) { Text("Encrypted archive") }
                 }
@@ -1919,6 +1926,19 @@ public object IosDocumentPicker {
     public var present: ((answer: (
         count: Int,
         load: (index: Int, prepare: (processed: Long, total: Long) -> Boolean, loaded: (descriptor: Int, name: String?, contentType: String, size: Long, release: () -> Unit) -> Unit) -> Unit,
+        releaseSelection: () -> Unit,
+    ) -> Unit) -> Unit)? = null
+    public var cancel: (() -> Unit)? = null
+}
+
+private enum class IosMediaFileSource { Audio, LivePhoto, Media }
+
+/** Media from Files uses the codec pipeline and keeps its scoped source lease. */
+public object IosMediaFilesPicker {
+    public var present: ((answer: (
+        count: Int,
+        load: (index: Int, prepare: (processed: Long, total: Long) -> Boolean,
+            loaded: (descriptor: Int, name: String?, contentType: String, size: Long, path: String?, release: () -> Unit) -> Unit) -> Unit,
         releaseSelection: () -> Unit,
     ) -> Unit) -> Unit)? = null
     public var cancel: (() -> Unit)? = null

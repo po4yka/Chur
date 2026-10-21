@@ -21,6 +21,7 @@ import platform.posix.SEEK_SET
 import platform.posix.unlink
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -52,6 +53,38 @@ class IosJpegXlTest {
             } finally { media.close() }
         }
     }
+
+    @Test
+    fun media_files_keep_the_scoped_provider_lease_and_decode_jxl_while_explicit_files_stay_opaque() =
+        withFixture("still-container.jxl") { path, original ->
+            val codec = IosMediaCodec()
+            var releases = 0
+            val descriptor = platform.posix.open(path, platform.posix.O_RDONLY)
+            assertTrue(descriptor >= 0)
+            val media = assertNotNull(codec.openMediaDocument(
+                NSURL.fileURLWithPath(path), descriptor, "Provider copy.bin", "application/octet-stream", original.length.toLong(),
+                release = { platform.posix.close(descriptor); releases += 1 },
+            ))
+            try {
+                assertFalse(media.importAsFile)
+                assertEquals("image/jxl", media.contentTypeHint)
+                val probe = assertNotNull(codec.probe(media))
+                assertEquals(96 to 48, probe.width to probe.height)
+                val thumbnail = assertNotNull(codec.derive(media, probe, StreamKind.THUMBNAIL))
+                thumbnail.bytes.fill(0)
+                assertEquals(0, releases)
+            } finally { media.close() }
+            assertEquals(1, releases)
+            val fileDescriptor = platform.posix.open(path, platform.posix.O_RDONLY)
+            val document = assertNotNull(codec.openDocument(fileDescriptor, "Provider copy.bin", "application/octet-stream", original.length.toLong()) {
+                platform.posix.close(fileDescriptor)
+            })
+            try {
+                assertTrue(document.importAsFile)
+                assertNull(document.platformHandle)
+                assertEquals(MediaBounds.CLASS_OPAQUE, assertNotNull(codec.probe(document)).mediaClass)
+            } finally { document.close() }
+        }
 
     @Test
     fun large_image_previews_are_bounded_and_decoding_keeps_the_borrowed_descriptor_position() =
