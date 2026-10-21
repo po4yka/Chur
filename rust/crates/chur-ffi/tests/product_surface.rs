@@ -1935,3 +1935,37 @@ fn an_unlock_deletes_a_temporary_container_with_no_journal_record() {
     assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// A failed startup sweep still runs the lock. The lock removes the whole
+/// scratch directory, so the entry the sweep could not delete is gone, and
+/// the next unlock succeeds rather than failing on the same entry again.
+#[test]
+fn a_failed_scratch_sweep_at_unlock_still_locks_the_session() {
+    let root = scratch();
+    let runtime = open_runtime(&root);
+    let session = fresh_session(runtime);
+    assert_eq!(unsafe { chur_vault_lock(session, 1) }, OK);
+    assert_eq!(unsafe { chur_session_close(session) }, OK);
+
+    // `remove_file` cannot delete a directory, so the sweep fails on it.
+    let stuck = only_vault_directory(&root).join("scratch").join("stuck");
+    std::fs::create_dir_all(stuck.join("inner")).unwrap();
+    let unlock = ChurUnlockRequestV1 {
+        factor: 1,
+        reserved: [0; 3],
+        secret: PASSWORD.as_ptr(),
+        secret_length: PASSWORD.len() as u32,
+    };
+    let mut session = 0u64;
+    assert_ne!(
+        unsafe { chur_vault_unlock(runtime, &unlock, &mut session) },
+        OK
+    );
+    assert_eq!(session, 0);
+    assert!(!stuck.exists(), "the lock removes the scratch directory");
+
+    let session = unlock_with_password(runtime);
+    assert_eq!(unsafe { chur_session_close(session) }, OK);
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+    std::fs::remove_dir_all(root).unwrap();
+}

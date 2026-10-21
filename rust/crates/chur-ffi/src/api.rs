@@ -425,7 +425,10 @@ pub unsafe extern "C" fn chur_vault_unlock(
         // reconciliation and before this session becomes a handle, so no host
         // call observes an entry that is about to be deleted and a crash the
         // previous process died in leaves no readable plaintext behind it.
-        export::clear_scratch(&session)?;
+        if let Err(error) = export::clear_scratch(&session) {
+            let _ = session.lock();
+            return Err(error);
+        }
         // A backup that was killed leaves its encrypted catalog snapshot in
         // `incoming/`. It is removed here, for the same reason as the scratch
         // entries above.
@@ -433,7 +436,10 @@ pub unsafe extern "C" fn chur_vault_unlock(
             let _ = session.lock();
             return Err(error);
         }
-        crate::selective::sweep_staging(&session)?;
+        if let Err(error) = crate::selective::sweep_staging(&session) {
+            let _ = session.lock();
+            return Err(error);
+        }
         if let Err(error) = crate::product::sweep_expired_trash(&mut session, now) {
             let _ = session.lock();
             return Err(error);
