@@ -59,7 +59,7 @@
             </intent-filter>
         </service>
         <provider
-            android:name="androidx.core.content.FileProvider"
+            android:name=".ExportScratchProvider"
             android:authorities="${applicationId}.exports"
             android:exported="false"
             android:grantUriPermissions="true">

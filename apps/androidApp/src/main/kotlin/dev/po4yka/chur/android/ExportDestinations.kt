@@ -30,14 +30,17 @@ class ExportDestinations(
     },
 ) : ExportSink {
     private val resolver: ContentResolver = context.contentResolver
-    private val scratch = File(context.cacheDir, "export-scratch")
+    private val scratch = ExportLeases.scratch(context)
+    // The export worker creates and publishes shares; the main thread returns from
+    // the share sheet and runs the cleanup timers. Both maps change only under [shares].
+    private val shares = Any()
     private val pendingShares = mutableMapOf<Uri, File>()
     private val scratchReservations = mutableMapOf<File, Long>()
     private var generation = 0L
     private val directoryExports = mutableSetOf<DocumentExportDirectory>()
 
     init {
-        scratch.deleteRecursively() // A previous process cannot have a live share sheet.
+        ExportLeases.clearScratch(context) // A previous process cannot have a live share sheet.
         scratch.mkdirs()
     }
 
@@ -49,9 +52,9 @@ class ExportDestinations(
         // Native code may be acquiring a duplicate of an active descriptor. Invalidate
         // now; the operation's finally closes and removes its output after native work ends.
         directories.forEach { it.invalidate() }
-        pendingShares.toMap().forEach { (uri, file) -> releaseShare(uri, file) }
-        scratchReservations.clear()
-        scratch.deleteRecursively()
+        synchronized(shares) { pendingShares.toMap() }.forEach { (uri, file) -> releaseShare(uri, file) }
+        synchronized(shares) { scratchReservations.clear() }
+        ExportLeases.clearScratch(context)
         scratch.mkdirs()
         onShareEnd()
     }
@@ -73,21 +76,35 @@ class ExportDestinations(
 
     /** Allow asynchronous recipient opens briefly after the share activity returns. */
     internal fun completePendingShares() {
-        val completed = pendingShares.toMap()
+        expireShares()
+        val completed = synchronized(shares) { pendingShares.toMap() }
         if (completed.isNotEmpty()) scheduleCleanup(60_000L) {
             completed.forEach { (uri, file) -> releaseShare(uri, file) }
         }
     }
 
+    /**
+     * End every share older than the hold limit by the wall clock. The timer of
+     * [scheduleCleanup] counts uptime only and stops in deep sleep.
+     */
+    internal fun expireShares(now: Long = System.currentTimeMillis()) {
+        synchronized(shares) { pendingShares.toMap() }.forEach { (uri, file) ->
+            if (ExportLeases.expired(file, now)) releaseShare(uri, file)
+        }
+    }
+
     private fun releaseShare(uri: Uri, file: File) {
-        if (pendingShares[uri] !== file) return
-        pendingShares.remove(uri)
+        synchronized(shares) {
+            if (pendingShares[uri] !== file) return
+            pendingShares.remove(uri)
+        }
         runCatching { context.revokeUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
         releaseScratch(file)
     }
 
     private fun releaseScratch(file: File) {
-        scratchReservations.remove(file)
+        ExportLeases.revoke(file)
+        synchronized(shares) { scratchReservations.remove(file) }
         file.delete()
     }
 
@@ -115,8 +132,10 @@ class ExportDestinations(
         ExportTarget.FILES -> Long.MAX_VALUE
         ExportTarget.SHARE -> {
             val singleLimit = 4L * 1024 * 1024 * 1024
-            if (scratchReservations.size >= 4) 0L
-            else minOf(singleLimit, 2 * singleLimit - scratchReservations.values.sum()).coerceAtLeast(0)
+            synchronized(shares) {
+                if (scratchReservations.size >= 4) 0L
+                else minOf(singleLimit, 2 * singleLimit - scratchReservations.values.sum()).coerceAtLeast(0)
+            }
         }
         else -> 0L
     }
@@ -143,20 +162,25 @@ class ExportDestinations(
             open(document, publish = {}, discard = { resolver.delete(document, null, null) })
         }
         ExportTarget.SHARE -> {
+            expireShares()
             val singleLimit = 4L * 1024 * 1024 * 1024
             val totalLimit = 2 * singleLimit
-            if (plaintextSize < 0 || plaintextSize > singleLimit || scratchReservations.size >= 4 ||
-                scratchReservations.values.sum() > totalLimit - plaintextSize
-            ) {
-                throw ChurFailure(ChurStatus.RESOURCE_LIMIT_EXCEEDED, "the share scratch budget")
-            }
-            val createdGeneration = generation
+            val createdGeneration = synchronized(directoryExports) { generation }
             val extension = MimeTypeMap.getSingleton().getExtensionFromMimeType(contentType)
                 ?: displayName.substringAfterLast('.', "bin")
             val safeExtension = extension.takeIf { it.matches(Regex("[A-Za-z0-9]{1,10}")) } ?: "bin"
             val file = File(scratch, "${UUID.randomUUID()}.$safeExtension")
-            check(file.createNewFile()) { "the share file already exists" }
-            scratchReservations[file] = plaintextSize
+            // The check and the reservation are one step, so two concurrent creates
+            // cannot both pass a budget that only one of them fits.
+            synchronized(shares) {
+                if (plaintextSize < 0 || plaintextSize > singleLimit || scratchReservations.size >= 4 ||
+                    scratchReservations.values.sum() > totalLimit - plaintextSize
+                ) {
+                    throw ChurFailure(ChurStatus.RESOURCE_LIMIT_EXCEEDED, "the share scratch budget")
+                }
+                check(file.createNewFile()) { "the share file already exists" }
+                scratchReservations[file] = plaintextSize
+            }
             val handle = try {
                 ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_WRITE_ONLY)
             } catch (failure: Exception) {
@@ -164,7 +188,7 @@ class ExportDestinations(
                 throw failure
             }
             Destination(handle, publishAction = {
-                if (createdGeneration != generation) {
+                if (createdGeneration != synchronized(directoryExports) { generation }) {
                     releaseScratch(file)
                     throw ChurFailure(ChurStatus.CANCELLED, "the share was cancelled")
                 }
@@ -177,7 +201,10 @@ class ExportDestinations(
                     clipData = ClipData.newRawUri("", contentUri)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                pendingShares[contentUri] = file
+                // The lease starts now: the provider measures the hold limit from this time.
+                file.setLastModified(System.currentTimeMillis())
+                synchronized(shares) { pendingShares[contentUri] = file }
+                ExportLeases.grant(file)
                 try {
                     onShareLaunch()
                     context.startActivity(Intent.createChooser(intent, "Share original").apply {
@@ -189,7 +216,7 @@ class ExportDestinations(
                     onShareEnd()
                     throw failure
                 }
-                scheduleCleanup(30 * 60 * 1000L) {
+                scheduleCleanup(ExportLeases.HOLD_MS) {
                     releaseShare(contentUri, file)
                 }
             }, discardAction = { releaseScratch(file) })

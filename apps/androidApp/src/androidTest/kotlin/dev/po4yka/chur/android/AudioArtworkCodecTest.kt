@@ -3,7 +3,6 @@ package dev.po4yka.chur.android
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.os.ParcelFileDescriptor
-import androidx.core.content.FileProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.po4yka.chur.app.MediaImporter
@@ -148,7 +147,7 @@ class AudioArtworkCodecTest {
                 source.writeBytes(bytes)
                 try {
                     val codec = AndroidMediaCodec(context)
-                    val picked = requireNotNull(codec.open(FileProvider.getUriForFile(context, "${context.packageName}.exports", source)))
+                    val picked = requireNotNull(codec.open(leasedExportUri(context, source)))
                     val outcome = MediaImporter(codec).import(vault, picked)
                     assertTrue("$name imports: $outcome", outcome is MediaImporter.Outcome.Imported)
                     val id = (outcome as MediaImporter.Outcome.Imported).objectId
@@ -193,7 +192,7 @@ class AudioArtworkCodecTest {
         file.parentFile?.mkdirs()
         file.writeBytes(bytes)
         val codec = AndroidMediaCodec(context.contentResolver)
-        val picked = requireNotNull(codec.open(FileProvider.getUriForFile(context, "${context.packageName}.exports", file)))
+        val picked = requireNotNull(codec.open(leasedExportUri(context, file)))
         try { action(codec, picked, file) } finally { picked.close(); file.delete() }
     }
 

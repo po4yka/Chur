@@ -66,6 +66,29 @@ class ExportScratchBudgetTest {
         } finally { sink.cancelPending() }
     }
 
+    @Test
+    fun concurrentCreatesCannotOverbookTheEntryLimit() {
+        val open = java.util.Collections.synchronizedList(mutableListOf<ExportSink.Destination>())
+        val refused = java.util.concurrent.atomic.AtomicInteger()
+        val start = java.util.concurrent.CountDownLatch(1)
+        try {
+            val workers = (0 until 16).map {
+                Thread {
+                    start.await()
+                    try { open.add(reserve(1)) } catch (failure: ChurFailure) {
+                        assertEquals(ChurStatus.RESOURCE_LIMIT_EXCEEDED, failure.status)
+                        refused.incrementAndGet()
+                    }
+                }.apply { start() }
+            }
+            start.countDown()
+            workers.forEach { it.join(10_000) }
+            assertEquals(4, open.size)
+            assertEquals(12, refused.get())
+            assertEquals(4, files().size)
+        } finally { open.forEach { it.discard() }; sink.cancelPending() }
+    }
+
     private fun reserve(size: Long): ExportSink.Destination {
         val destination = sink.create("original.bin", "application/octet-stream", ExportTarget.SHARE, null, size)
         assertNotNull(destination)

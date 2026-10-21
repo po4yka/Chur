@@ -16,7 +16,6 @@ import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.AnnotatedString
-import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -508,7 +507,7 @@ class GlassChromeIntegrationTest {
             file.outputStream().use { assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
         } finally { bitmap.recycle() }
         try {
-            val uri = FileProvider.getUriForFile(context, "${context.packageName}.exports", file)
+            val uri = leasedExportUri(context, file)
             val codec = AndroidMediaCodec(context.contentResolver)
             val outcome = runBlocking { controller.importMedia(MediaImporter(codec)) { beforeOpen?.invoke(); codec.open(uri) } }
             assertTrue("generated pixels import through the real native vault: $outcome", outcome is MediaImporter.Outcome.Imported)

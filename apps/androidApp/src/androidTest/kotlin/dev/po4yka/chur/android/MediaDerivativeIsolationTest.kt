@@ -15,7 +15,6 @@ import android.os.ParcelFileDescriptor
 import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
-import androidx.core.content.FileProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.po4yka.chur.ffi.StreamKind
@@ -160,7 +159,7 @@ class MediaDerivativeIsolationTest {
         file.outputStream().use { assertTrue(bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it)) }
         bitmap.recycle()
         val codec = AndroidMediaCodec(context)
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.exports", file)
+        val uri = leasedExportUri(context, file)
         val source = requireNotNull(codec.open(uri))
         try {
             assertEquals("image/jpeg", source.contentTypeHint)

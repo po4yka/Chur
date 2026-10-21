@@ -4,7 +4,6 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.os.Build
 import android.os.ParcelFileDescriptor
-import androidx.core.content.FileProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.po4yka.chur.app.MediaImporter
@@ -153,7 +152,7 @@ class MediaFormatsAndroidTest {
     }
 
     private fun fixture(name: String) = instrumentation.context.assets.open("media-formats/$name").use { it.readBytes() }
-    private fun uri(file: File) = FileProvider.getUriForFile(context, "${context.packageName}.exports", file)
+    private fun uri(file: File) = leasedExportUri(context, file)
     private fun sourceFile(name: String, bytes: ByteArray) =
         File(context.cacheDir, "export-scratch/format-${System.nanoTime()}-$name").apply {
             parentFile?.mkdirs(); writeBytes(bytes)

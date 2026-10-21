@@ -21,7 +21,6 @@ import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
-import androidx.core.content.FileProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.po4yka.chur.app.MediaImporter
@@ -111,7 +110,7 @@ class PlaybackPrivacyAndroidTest {
             vault.start()
             vault.create("Synthetic playback privacy password".encodeToByteArray(), false)
             val codec = AndroidMediaCodec(context)
-            val picked = requireNotNull(codec.open(FileProvider.getUriForFile(context, "${context.packageName}.exports", source)))
+            val picked = requireNotNull(codec.open(leasedExportUri(context, source)))
             val imported = MediaImporter(codec).import(vault, picked) as MediaImporter.Outcome.Imported
             val playback = PlaybackSource(vault, imported.objectId, "video/x-matroska", source.length())
             activity = instrumentation.startActivitySync(Intent(context, MainActivity::class.java)

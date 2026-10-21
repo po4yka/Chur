@@ -4,7 +4,6 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import androidx.core.content.FileProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.po4yka.chur.app.MediaImporter
@@ -37,7 +36,7 @@ class ThumbnailMosaicAndroidTest {
         try {
             repository.start()
             repository.create("thumbnail mosaic test password".encodeToByteArray(), offerRecovery = false)
-            val uri = FileProvider.getUriForFile(context, "${context.packageName}.exports", source)
+            val uri = leasedExportUri(context, source)
             val codec = AndroidMediaCodec(context.contentResolver)
             val outcome = MediaImporter(codec).import(repository, codec.open(uri))
             assertTrue("fixture imports through the production pipeline: $outcome", outcome is MediaImporter.Outcome.Imported)

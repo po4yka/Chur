@@ -17,7 +17,6 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.state.ToggleableState
-import androidx.core.content.FileProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.po4yka.chur.app.AppRoute
@@ -196,7 +195,7 @@ class ThumbnailPerformanceTest {
             }
             bitmap.setPixels(pixels, 0, 320, 0, 0, 320, 240)
             file.outputStream().use { assertTrue(bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it)) }
-            val uri = FileProvider.getUriForFile(context, "${context.packageName}.exports", file)
+            val uri = leasedExportUri(context, file)
             val codec = AndroidMediaCodec(context.contentResolver)
             val outcome = runBlocking { controller.importMedia(MediaImporter(codec)) { codec.open(uri) } }
             assertTrue("synthetic photo $index must import: $outcome", outcome is MediaImporter.Outcome.Imported)
