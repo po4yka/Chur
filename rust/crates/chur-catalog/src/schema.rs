@@ -175,9 +175,9 @@ CREATE TABLE object_key_envelopes (
     PRIMARY KEY (object_id, generation)
 ) STRICT;
 
--- §8. `record` is the sealed canonical revision; the remaining columns are the
--- queryable projection of the same bytes, rewritten in the transaction that
--- activates the revision so the two cannot drift.
+-- §8. The queryable columns are the revision, protected by SQLCipher only.
+-- `record` is reserved for a sealed canonical revision; v1 writers store it
+-- empty.
 CREATE TABLE metadata_revisions (
     object_id           BLOB NOT NULL REFERENCES objects(object_id),
     revision            INTEGER NOT NULL,

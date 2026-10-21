@@ -158,6 +158,8 @@ Private metadata is revisioned rather than mutating ciphertext in place. Fields 
 
 The logical model may store queryable plaintext inside an unlocked SQLCipher database, but persisted pages remain encrypted and the database key is session-scoped.
 
+In v1 the queryable columns of `metadata_revisions` are the only copy of the revision. SQLCipher under `CatalogDatabaseKey` is their only protection at rest. No v1 writer seals a revision under `MetadataKey` or `CatalogRecordRootKey`, and the `record` column is reserved for a sealed canonical revision and stays empty. Private-note rows and search rows follow the same rule.
+
 ### 8.1 Timestamp provenance
 
 Two times are stored per object and neither is trusted:

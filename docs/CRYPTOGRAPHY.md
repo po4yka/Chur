@@ -1338,6 +1338,8 @@ MetadataRevision
 
 Each revision MUST use a fresh nonce and revision-bound key context. Reusing nonce index zero under the same metadata key is forbidden.
 
+v1 status: the catalog does not seal metadata revisions. Metadata is stored as queryable columns of the SQLCipher catalog, and the catalog's page encryption under `CatalogDatabaseKey` is its only protection at rest. `MetadataKey` and `CatalogRecordRootKey` are defined labels that no v1 code derives. The structure above is the target of a later sealed-metadata design; see [`format/CATALOG_SCHEMA_V1.md`](format/CATALOG_SCHEMA_V1.md) §8.
+
 Mutable metadata SHOULD be separate from immutable media bytes so a favorite, caption, or album change does not rewrite a multi-gigabyte object.
 
 ---

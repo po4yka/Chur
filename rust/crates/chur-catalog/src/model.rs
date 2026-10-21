@@ -232,10 +232,11 @@ impl Stream {
 
 /// One metadata revision, `docs/format/CATALOG_SCHEMA_V1.md` §8.
 ///
-/// `record` is the sealed canonical revision and is what a backup exports. The
-/// remaining fields are the queryable projection of the same bytes, written in
-/// the transaction that activates the revision, which is what stops the two
-/// from drifting.
+/// The queryable fields are the revision. They are plaintext columns of the
+/// catalog, so SQLCipher under `CatalogDatabaseKey` is their only protection
+/// at rest; no metadata revision is sealed under `MetadataKey` or
+/// `CatalogRecordRootKey` in v1. `record` is reserved for a sealed canonical
+/// revision, and every v1 writer stores it empty.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetadataRevision {
     /// The object this revision describes.
@@ -244,7 +245,7 @@ pub struct MetadataRevision {
     pub revision: u32,
     /// Whether this revision is the active one.
     pub active: bool,
-    /// The sealed canonical record.
+    /// Reserved for the sealed canonical record. Empty in v1.
     pub record: Vec<u8>,
     /// The filename the source reported, if any.
     pub original_filename: Option<String>,
