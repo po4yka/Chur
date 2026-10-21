@@ -50,7 +50,10 @@ interface PrivacyCover {
  * An open session is private, and so is the gate, because `IOS.md` §22.1 keeps
  * authentication errors out of the snapshot. The restore screen is private for
  * the same reason: it takes the vault's password or recovery phrase, and a
- * wrong one shows an authentication failure. The public shell is not private,
+ * wrong one shows an authentication failure. The create screen is private too:
+ * it takes the new vault password, which an autofill service must not offer to
+ * save, and its presence in the switcher shows that a vault is being set up.
+ * The public shell is not private,
  * for the reason [PrivacyCover.setEnabled] gives. Android sets its flag from
  * this while the activity is resumed, and sets it on every route when the
  * activity pauses. iOS asks as the scene resigns active and again as it
@@ -60,7 +63,7 @@ interface PrivacyCover {
 fun needsPrivacyCover(state: VaultState, route: AppRoute, phraseShown: Boolean = false): Boolean =
     phraseShown || state is VaultState.Unlocked || route == AppRoute.Unlock || route == AppRoute.Recover ||
         route == AppRoute.AppUnlock || route == AppRoute.AppRecover || route == AppRoute.RestoreBackup ||
-        route == AppRoute.EncryptFiles
+        route == AppRoute.EncryptFiles || route == AppRoute.CreateVault
 
 /** A cover that does nothing, for a host with no window to cover. */
 object NoPrivacyCover : PrivacyCover {

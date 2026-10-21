@@ -32,9 +32,10 @@ class PrivacyCoverTest {
         }
         assertFalse(needsPrivacyCover(VaultState.Locked(), AppRoute.PublicShell))
         assertFalse(needsPrivacyCover(VaultState.NoVault, AppRoute.PublicShell))
-        // The create form holds no vault content yet; the session it opens is
-        // covered through the Unlocked state above.
-        assertFalse(needsPrivacyCover(VaultState.Creating, AppRoute.CreateVault))
+        // The create form takes the new vault password, which autofill must not
+        // offer to save, and shows that a vault is being set up.
+        assertTrue(needsPrivacyCover(VaultState.NoVault, AppRoute.CreateVault))
+        assertTrue(needsPrivacyCover(VaultState.Creating, AppRoute.CreateVault))
         // A creation waiting for its recovery phrase to be confirmed shows a
         // full credential before any session opens.
         assertTrue(needsPrivacyCover(VaultState.Creating, AppRoute.CreateVault, phraseShown = true))
