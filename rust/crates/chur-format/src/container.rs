@@ -1330,6 +1330,17 @@ impl Layout {
 ///
 /// Opening authenticates the manifest, so every later operation works from
 /// trusted structure. Nothing here returns plaintext whose tag has not verified.
+///
+/// Opening does not authenticate the final commit, so a single chunk read
+/// cannot detect a truncated container. The chunk read is therefore internal,
+/// and a caller outside this crate reads through [`ContainerReader::read_range`]
+/// or [`ContainerReader::verify_complete`], which check the final commit first:
+///
+/// ```compile_fail
+/// fn chunk(reader: &chur_format::container::ContainerReader<'_>) {
+///     let _ = reader.read_chunk(0);
+/// }
+/// ```
 pub struct ContainerReader<'a> {
     bytes: &'a [u8],
     manifest: CanonicalManifest,
@@ -1424,11 +1435,14 @@ impl<'a> ContainerReader<'a> {
 
     /// Reads and authenticates one chunk.
     ///
+    /// It does not check the final commit, so it cannot detect truncation. Only
+    /// the readers in this module call it, after they have checked the commit.
+    ///
     /// # Errors
     ///
     /// Returns [`ChurStatus::ObjectIncomplete`] when the record is absent and
     /// [`ChurStatus::ObjectCorrupt`] when it is malformed or does not verify.
-    pub fn read_chunk(&self, chunk_index: u64) -> Result<Zeroizing<Vec<u8>>> {
+    pub(crate) fn read_chunk(&self, chunk_index: u64) -> Result<Zeroizing<Vec<u8>>> {
         ensure!(
             chunk_index < self.layout.chunk_count,
             ObjectIncomplete,
