@@ -31,16 +31,19 @@ enum class AutoLock(val idleTimeoutMs: Long, val label: String) {
  *
  * It lives in the public shell beside [AppLockSetting], not in a vault
  * catalog, so it is the same in every identity, as `DECOY_VAULT.md` §10
- * requires of a setting. The stored form is the timeout in seconds; a missing
- * or unknown value reads as the default.
+ * requires of a setting. The stored form is the timeout in seconds. A missing
+ * value reads as the default. A value that is present but unknown, an empty
+ * one after a torn write included, reads as the shortest choice, so damage
+ * never lengthens the time a vault stays open.
  */
 class AutoLockSetting(
     private val reader: () -> String?,
     private val writer: (String) -> Unit,
 ) {
     fun read(): AutoLock {
-        val stored = reader()?.trim()
-        return AutoLock.entries.firstOrNull { it.stored == stored } ?: AutoLock.DEFAULT
+        val stored = reader()?.trim() ?: return AutoLock.DEFAULT
+        return AutoLock.entries.firstOrNull { it.stored == stored }
+            ?: AutoLock.entries.minBy { it.idleTimeoutMs }
     }
 
     fun write(choice: AutoLock) = writer(choice.stored)

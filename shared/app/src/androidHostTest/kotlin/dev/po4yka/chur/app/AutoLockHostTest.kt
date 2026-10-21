@@ -57,7 +57,7 @@ class AutoLockHostTest {
     }
 
     @Test
-    fun the_setting_round_trips_and_reads_anything_else_as_two_minutes() {
+    fun the_setting_round_trips_and_reads_anything_unknown_as_the_shortest() {
         assertEquals(AutoLock.AFTER_2_MINUTES, setting.read())
         for (choice in AutoLock.entries) {
             setting.write(choice)
@@ -66,10 +66,11 @@ class AutoLockHostTest {
         setting.write(AutoLock.AFTER_30_SECONDS)
         assertEquals("30", stored)
         stored = "When device locks"
-        assertEquals(AutoLock.DEFAULT, setting.read())
-        // A zero limit is no choice: it would lock the vault on the next tick.
+        assertEquals(AutoLock.AFTER_30_SECONDS, setting.read())
+        // A zero limit is no choice: it would lock the vault on the next tick,
+        // so it reads as the shortest choice there is.
         stored = "0"
-        assertEquals(AutoLock.DEFAULT, setting.read())
+        assertEquals(AutoLock.AFTER_30_SECONDS, setting.read())
     }
 
     /**

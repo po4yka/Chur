@@ -1,6 +1,7 @@
 package dev.po4yka.chur.android
 
 import android.content.Context
+import android.util.AtomicFile
 import androidx.fragment.app.FragmentActivity
 import dev.po4yka.chur.app.AndroidPrivacyCover
 import dev.po4yka.chur.app.AppLockSetting
@@ -9,10 +10,12 @@ import dev.po4yka.chur.app.ChurController
 import dev.po4yka.chur.app.DeviceSlotPolicySetting
 import dev.po4yka.chur.app.PublicShellSetting
 import dev.po4yka.chur.app.RepositorySyncBoundary
+import dev.po4yka.chur.app.SettingText
 import dev.po4yka.chur.core.platformkeys.DeviceSlotPolicy
 import dev.po4yka.chur.notes.FileNoteStore
 import dev.po4yka.chur.sync.PeerSyncCoordinator
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.IOException
 
 /**
@@ -58,28 +61,21 @@ internal class ChurHost private constructor(context: Context) {
      *
      * It is a public-shell choice - which factor may open the device slot -
      * so it lives beside the notes in the backed-up public directory, as
-     * one word. A missing or unreadable file is the convenient default.
+     * one word. A missing file is the convenient default; a file that holds
+     * anything else, an empty one included, reads as strict, [SettingText].
      */
     private val deviceSlotPolicy =
         DeviceSlotPolicySetting(
-            reader = {
-                val file = File(context.publicShellFile("device-slot-policy.txt"))
-                file.exists() && file.readText().trim() == "strict"
-            },
+            reader = { SettingText.strictPolicy(readSetting(context.publicShellFile("device-slot-policy.txt"))) },
             writer = { strict ->
-                File(context.publicShellFile("device-slot-policy.txt"))
-                    .writeText(if (strict) "strict" else "convenient")
+                writeSetting(context.publicShellFile("device-slot-policy.txt"), SettingText.policyWord(strict))
             },
         )
 
     private val appLockSetting = AppLockSetting(
-        reader = {
-            val file = File(context.publicShellFile("app-lock.txt"))
-            file.exists() && file.readText().trim() == "whole-app"
-        },
+        reader = { SettingText.wholeAppLock(readSetting(context.publicShellFile("app-lock.txt"))) },
         writer = { enabled ->
-            File(context.publicShellFile("app-lock.txt"))
-                .writeText(if (enabled) "whole-app" else "vault-only")
+            writeSetting(context.publicShellFile("app-lock.txt"), SettingText.appLockWord(enabled))
         },
     )
 
@@ -89,11 +85,8 @@ internal class ChurHost private constructor(context: Context) {
      * reads the same one, `DECOY_VAULT.md` §10.
      */
     private val autoLockSetting = AutoLockSetting(
-        reader = {
-            val file = File(context.publicShellFile("auto-lock.txt"))
-            if (file.exists()) file.readText() else null
-        },
-        writer = { File(context.publicShellFile("auto-lock.txt")).writeText(it) },
+        reader = { readSetting(context.publicShellFile("auto-lock.txt")) },
+        writer = { writeSetting(context.publicShellFile("auto-lock.txt"), it) },
     )
 
     private var shareHostActivity = false
@@ -228,3 +221,43 @@ private fun Context.storageRoot(): String =
  */
 private fun Context.publicShellFile(name: String): String =
     File(filesDir, "public").apply { mkdirs() }.resolve(name).path
+
+/**
+ * Reads one setting file, or `null` when it does not exist.
+ *
+ * [AtomicFile] also restores the previous content when a write was cut short
+ * before its rename. A file that is too long to be a setting reads as an
+ * unknown word, which [SettingText] and `AutoLockSetting` treat as the
+ * stricter choice.
+ */
+private fun readSetting(path: String): String? = try {
+    val file = AtomicFile(File(path))
+    // An interrupted write on an older release can leave only the AtomicFile
+    // backup, which `readFully` restores.
+    if (!file.baseFile.exists() && !File("$path.bak").exists()) return null
+    val bytes = file.readFully()
+    if (bytes.size > MAX_SETTING_BYTES) "" else bytes.decodeToString()
+} catch (_: FileNotFoundException) {
+    null
+}
+
+/**
+ * Writes one setting file with [AtomicFile]: a new file, fsync, then rename.
+ *
+ * `File.writeText` truncated the file before it wrote, so a power loss could
+ * leave it empty, and an empty security setting used to read as the weaker
+ * choice.
+ */
+private fun writeSetting(path: String, value: String) {
+    val file = AtomicFile(File(path))
+    val stream = file.startWrite()
+    try {
+        stream.write(value.encodeToByteArray())
+        file.finishWrite(stream)
+    } catch (failure: IOException) {
+        file.failWrite(stream)
+        throw failure
+    }
+}
+
+private const val MAX_SETTING_BYTES = 64
