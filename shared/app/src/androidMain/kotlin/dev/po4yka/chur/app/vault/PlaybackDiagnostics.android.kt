@@ -32,9 +32,12 @@ internal fun androidPlaybackDiagnostic(error: PlaybackException?, tracks: Tracks
             PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED -> return PlaybackDiagnostic(PlaybackProblem.UNSUPPORTED_CONTAINER)
         }
         val renderer = error as? ExoPlaybackException
+        // Media3 can try a track that exceeds the advertised capabilities. When the
+        // decoder then fails, the format is beyond this device, not transiently busy.
         val unsupportedFormat = error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ||
             error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES ||
-            renderer?.rendererFormatSupport in listOf(C.FORMAT_UNSUPPORTED_TYPE, C.FORMAT_UNSUPPORTED_SUBTYPE)
+            renderer?.rendererFormatSupport in listOf(C.FORMAT_UNSUPPORTED_TYPE, C.FORMAT_UNSUPPORTED_SUBTYPE,
+                C.FORMAT_EXCEEDS_CAPABILITIES)
         if (unsupportedFormat) {
             return unsupportedDiagnostic(renderer?.rendererFormat) ?: unsupportedTrackDiagnostic(tracks)
                 ?: PlaybackDiagnostic(PlaybackProblem.UNSUPPORTED)
