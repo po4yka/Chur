@@ -983,9 +983,19 @@ pub fn stream_into(
         }
         let mut filled = 0usize;
         while filled < chunk {
-            let read = source
-                .read(&mut buffer[filled..])
-                .map_err(|_| chur_core::err!(IoFailure, "the import source could not be read"))?;
+            let read = match source.read(&mut buffer[filled..]) {
+                Ok(read) => read,
+                Err(_) => {
+                    import.abandon(session)?;
+                    if progress.cancelled() {
+                        return Err(progress::cancelled("the import was cancelled"));
+                    }
+                    return Err(chur_core::err!(
+                        IoFailure,
+                        "the import source could not be read"
+                    ));
+                }
+            };
             if read == 0 {
                 break;
             }

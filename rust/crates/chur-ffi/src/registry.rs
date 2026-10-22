@@ -386,6 +386,13 @@ pub fn drain_owned_by(owner: Handle) -> Vec<Arc<Entry>> {
         }
     }
     drop(table);
+    // Signal every worker before any join or reader revocation. A worker can
+    // be queued on a session mutex held by another provider operation.
+    for entry in &taken {
+        if let Entry::Operation { operation, .. } = entry.as_ref() {
+            operation.cancel();
+        }
+    }
     for entry in &taken {
         revoke_reader(entry);
     }

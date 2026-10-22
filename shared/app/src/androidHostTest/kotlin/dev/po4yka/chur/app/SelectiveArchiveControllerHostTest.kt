@@ -10,6 +10,12 @@ import java.io.RandomAccessFile
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
@@ -45,7 +51,9 @@ class SelectiveArchiveControllerHostTest {
         val input = RandomAccessFile(archive.file, "r")
         val closed = CompletableDeferred<Boolean>()
         val credential = ArchiveCredential(ARCHIVE_PASSWORD)
+        val stagingHold = controller.retainArchiveCredential(credential)
         controller.restoreBackup(descriptor(input), credential) { cancelled -> input.close(); closed.complete(cancelled) }
+        stagingHold.release()
         assertFalse(withTimeout(TIMEOUT) { closed.await() })
         assertCleared(credential)
         withTimeout(TIMEOUT) { controller.route.first { it == AppRoute.Unlock } }
@@ -108,6 +116,73 @@ class SelectiveArchiveControllerHostTest {
     }
 
     @Test
+    fun package_staging_is_cancelled_and_its_credential_cleared_before_a_late_callback() = scenario {
+        val owner = ArchiveTransferOwner(controller, generation)
+        val credential = ArchiveCredential(ARCHIVE_PASSWORD)
+        owner.import(credential) { }
+        var entered = false
+        val staging = CoroutineScope(currentCoroutineContext()).launch(start = CoroutineStart.LAZY) {
+            entered = true
+            awaitCancellation()
+        }
+        owner.importPickerReturned(staging)
+        staging.start()
+        yield()
+        assertTrue(entered)
+        controller.background()
+        // No staging completion or late callback is needed to erase the secret.
+        assertCleared(credential)
+        assertTrue(staging.isCancelled)
+        controller.onBackground()
+        assertTrue(controller.vault.state.value is VaultState.Locked)
+        val staged = RandomAccessFile(File(root, "late-staged.churbak"), "rw")
+        var closed = false
+        owner.importedFile(ArchiveSource(descriptor(staged)) { staged.close(); closed = true })
+        assertTrue(closed)
+        assertNull(controller.activeOperation.value)
+        owner.close()
+    }
+
+    @Test
+    fun restore_staging_credential_is_cleared_synchronously_when_the_application_locks() = scenario {
+        controller.restoreArchiveAsSeparateVault()
+        withTimeout(TIMEOUT) { controller.route.first { it == AppRoute.RestoreBackup } }
+        val credential = ArchiveCredential(ARCHIVE_PASSWORD)
+        val hold = controller.retainArchiveCredential(credential)
+        var entered = false
+        val staging = CoroutineScope(currentCoroutineContext()).launch(start = CoroutineStart.LAZY) {
+            entered = true
+            awaitCancellation()
+        }
+        hold.attach(staging)
+        staging.start()
+        yield()
+        assertTrue(entered)
+        controller.lock()
+        assertCleared(credential)
+        assertFalse(hold.active)
+        assertTrue(staging.isCancelled)
+        assertNull(controller.activeOperation.value)
+        controller.onBackground()
+    }
+
+    @Test
+    fun cancelling_restore_staging_before_it_starts_still_clears_its_credential() = scenario {
+        val credential = ArchiveCredential(ARCHIVE_PASSWORD)
+        val hold = controller.retainArchiveCredential(credential)
+        var entered = false
+        val staging = CoroutineScope(currentCoroutineContext()).launch(start = CoroutineStart.LAZY) {
+            entered = true
+            awaitCancellation()
+        }
+        hold.attach(staging)
+        staging.cancel()
+        assertCleared(credential)
+        assertFalse(hold.active)
+        assertFalse(entered)
+    }
+
+    @Test
     fun a_disposed_picker_owner_discards_a_late_files_document_even_after_the_vault_locks() = scenario {
         val owner = ArchiveTransferOwner(controller, generation)
         val credential = ArchiveCredential(ARCHIVE_PASSWORD)
@@ -154,7 +229,7 @@ class SelectiveArchiveControllerHostTest {
             val operation = assertNotNull(controller.activeOperation.value)
             sink.returnedDocument = File(root, "busy-returned.churbak").apply { createNewFile() }
             owner.exportedFile(RETURNED_URI)
-            assertReturnedDocumentDiscarded(sink.closedOutput())
+            assertReturnedDocumentDiscarded(sink.closedOutput(), capacity = sink.capacity)
             withTimeout(TIMEOUT) { controller.notice.first { it?.text == "Finish the current operation first." } }
             assertEquals(operation.id, controller.activeOperation.value?.id)
             assertCleared(credential)
@@ -215,8 +290,8 @@ class SelectiveArchiveControllerHostTest {
             assertTrue(output.file.exists())
             return output
         }
-        fun assertReturnedDocumentDiscarded(output: Output) {
-            assertEquals(Creation("", "", ExportTarget.FILES, RETURNED_URI, null), output.creation)
+        fun assertReturnedDocumentDiscarded(output: Output, capacity: Long? = null) {
+            assertEquals(Creation("", "", ExportTarget.FILES, RETURNED_URI, capacity), output.creation)
             assertEquals(listOf("discard", "close"), output.events)
             assertFalse(output.file.exists())
         }

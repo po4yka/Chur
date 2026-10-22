@@ -1107,3 +1107,268 @@ fn creation_session_excludes_second_unlock_and_serializes_reader_deletion() {
     assert_eq!(unsafe { chur_runtime_close(second_runtime) }, OK);
     assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
 }
+
+#[cfg(unix)]
+fn provider_pipe() -> (std::fs::File, std::fs::File) {
+    use std::os::fd::FromRawFd;
+    let mut fds = [-1; 2];
+    // SAFETY: fds contains two writable descriptor slots.
+    assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+    // SAFETY: pipe returned two distinct owned descriptors, each transferred once.
+    (unsafe { std::fs::File::from_raw_fd(fds[0]) }, unsafe {
+        std::fs::File::from_raw_fd(fds[1])
+    })
+}
+
+#[cfg(unix)]
+fn pipe_import(session: u64, source: &std::fs::File) -> u64 {
+    let mime = b"application/octet-stream";
+    let request = ChurImportRequestV2 {
+        requested_object_id: core::ptr::null(),
+        seekable: 0,
+        known_length_present: 0,
+        media_class: 4,
+        reserved: 0,
+        width: 0,
+        height: 0,
+        duration_ms: 0,
+        known_length: 0,
+        capture_time_ms: 0,
+        capture_time_present: 0,
+        reserved_two: [0; 7],
+        content_type: mime.as_ptr(),
+        content_type_length: mime.len() as u32,
+        original_filename: core::ptr::null(),
+        original_filename_length: 0,
+    };
+    let mut operation = 0;
+    // SAFETY: source and request remain valid for this call; out is writable.
+    assert_eq!(
+        unsafe { chur_import_begin(session, descriptor(source), &request, &mut operation) },
+        OK
+    );
+    operation
+}
+
+#[cfg(unix)]
+fn wait_pipe_consumed(source: &std::fs::File) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let mut available: libc::c_int = 0;
+        // SAFETY: the pipe is live and FIONREAD writes one initialized integer.
+        assert_eq!(
+            unsafe { libc::ioctl(descriptor(source), libc::FIONREAD, &mut available) },
+            0
+        );
+        if available == 0 {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "provider input was never consumed"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn stalled_provider_read_cancels_without_eof_and_discards_partial_import() {
+    let root = scratch();
+    create_vault(&root);
+    let runtime = open_runtime(&root);
+    let (_, session) = unlock(runtime, PASSWORD, 1);
+    let (source, mut producer) = provider_pipe();
+    producer.write_all(&[7; 1024]).unwrap();
+    let operation = pipe_import(session, &source);
+    wait_pipe_consumed(&source);
+    assert_eq!(unsafe { chur_operation_cancel(operation) }, OK);
+    let (send, receive) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || send.send(drain(operation)).unwrap());
+    let result = receive.recv_timeout(std::time::Duration::from_secs(3));
+    // Release only after the timed result: old code needs EOF and fails the assertion.
+    drop(producer);
+    worker.join().unwrap();
+    assert_eq!(result.unwrap(), ChurStatus::Cancelled as i32);
+    assert_eq!(unsafe { chur_operation_close(operation) }, OK);
+    let mut output = vec![0; 65536];
+    let mut length = 0;
+    assert_eq!(
+        unsafe {
+            chur_catalog_query(
+                session,
+                &timeline_query(),
+                output.as_mut_ptr(),
+                output.len(),
+                &mut length,
+            )
+        },
+        OK
+    );
+    assert!(decode_page(&output[..length]).unwrap().objects.is_empty());
+    assert_eq!(unsafe { chur_vault_lock(session, 1) }, OK);
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+    // Open directly, without the FFI unlock's orphan sweep, to check rollback.
+    let directory = chur_catalog::paths::VaultRoot::new(root.clone());
+    let mut reopened = chur_catalog::vault::unlock_with_password(&directory, PASSWORD, 2).unwrap();
+    assert!(
+        chur_catalog::journal::live(reopened.catalog_ref().unwrap())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        chur_catalog::journal::dead(reopened.catalog_ref().unwrap())
+            .unwrap()
+            .is_empty()
+    );
+    reopened.lock().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn locking_stalled_provider_write_cancels_all_workers_before_joining() {
+    let root = scratch();
+    create_vault(&root);
+    let runtime = open_runtime(&root);
+    let (_, session) = unlock(runtime, PASSWORD, 1);
+    let object_id = import(session, &vec![7; 4 * 1024 * 1024]);
+    // Reserve the lower operation slot, then put the blocked writer in a higher one.
+    let scan_request = ChurScanRequestV1 {
+        single_object: 0,
+        reserved: [0; 7],
+        object_id: [0; 16],
+    };
+    let mut spare = 0;
+    assert_eq!(
+        unsafe { chur_integrity_scan_begin(session, &scan_request, &mut spare) },
+        OK
+    );
+    assert_eq!(drain(spare), OK);
+    let (reader, writer) = provider_pipe();
+    let mut exporting = 0;
+    assert_eq!(
+        unsafe {
+            chur_export_begin(
+                session,
+                &ChurObjectRefV1 { object_id },
+                descriptor(&writer),
+                &mut exporting,
+            )
+        },
+        OK
+    );
+    let mut ready = libc::pollfd {
+        fd: descriptor(&reader),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: ready is a valid one-entry pollfd array and reader stays open.
+    assert_eq!(unsafe { libc::poll(&mut ready, 1, 10_000) }, 1);
+    assert_eq!(unsafe { chur_operation_close(spare) }, OK);
+    let (input, producer) = provider_pipe();
+    let queued = pipe_import(session, &input);
+    let (send, receive) = std::sync::mpsc::channel();
+    let worker =
+        std::thread::spawn(move || send.send(unsafe { chur_vault_lock(session, 2) }).unwrap());
+    let result = receive.recv_timeout(std::time::Duration::from_secs(3));
+    // A failed old implementation is released before the test reports failure.
+    drop(reader);
+    drop(producer);
+    worker.join().unwrap();
+    assert_eq!(result.unwrap(), OK);
+    for operation in [queued, exporting] {
+        assert_eq!(
+            status(unsafe { chur_operation_poll(operation, &mut zeroed_progress()) }),
+            ChurStatus::SessionExpired
+        );
+    }
+    let mut output = [0; 128];
+    let mut length = 0;
+    assert_eq!(
+        status(unsafe {
+            chur_catalog_query(
+                session,
+                &timeline_query(),
+                output.as_mut_ptr(),
+                output.len(),
+                &mut length,
+            )
+        }),
+        ChurStatus::VaultLocked
+    );
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn stalled_provider_write_reports_cancelled_without_provider_drain() {
+    let root = scratch();
+    create_vault(&root);
+    let runtime = open_runtime(&root);
+    let (_, session) = unlock(runtime, PASSWORD, 1);
+    let object_id = import(session, &vec![7; 4 * 1024 * 1024]);
+    let (reader, writer) = provider_pipe();
+    let mut exporting = 0;
+    assert_eq!(
+        unsafe {
+            chur_export_begin(
+                session,
+                &ChurObjectRefV1 { object_id },
+                descriptor(&writer),
+                &mut exporting,
+            )
+        },
+        OK
+    );
+    let mut ready = libc::pollfd {
+        fd: descriptor(&reader),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: ready covers one valid pollfd; reader remains open for the call.
+    assert_eq!(unsafe { libc::poll(&mut ready, 1, 10_000) }, 1);
+    assert_eq!(unsafe { chur_operation_cancel(exporting) }, OK);
+    let (send, receive) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || send.send(drain(exporting)).unwrap());
+    let result = receive.recv_timeout(std::time::Duration::from_secs(3));
+    drop(reader);
+    worker.join().unwrap();
+    assert_eq!(result.unwrap(), ChurStatus::Cancelled as i32);
+    assert_eq!(unsafe { chur_operation_close(exporting) }, OK);
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn seekable_backup_apis_reject_provider_pipes_before_starting_workers() {
+    let root = scratch();
+    create_vault(&root);
+    let runtime = open_runtime(&root);
+    let (_, session) = unlock(runtime, PASSWORD, 1);
+    let (reader, writer) = provider_pipe();
+    let mut operation = 0;
+    assert_eq!(
+        status(unsafe {
+            chur_ffi::product::chur_backup_create(session, descriptor(&writer), &mut operation)
+        }),
+        ChurStatus::InvalidInput
+    );
+    assert_eq!(
+        status(unsafe {
+            chur_ffi::product::chur_backup_restore(
+                runtime,
+                descriptor(&reader),
+                PASSWORD.as_ptr(),
+                PASSWORD.len() as u32,
+                &mut operation,
+            )
+        }),
+        ChurStatus::InvalidInput
+    );
+    assert_eq!(operation, 0);
+    assert_eq!(unsafe { chur_runtime_close(runtime) }, OK);
+    std::fs::remove_dir_all(root).unwrap();
+}

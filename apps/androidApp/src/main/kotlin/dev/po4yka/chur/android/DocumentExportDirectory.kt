@@ -8,8 +8,10 @@ import dev.po4yka.chur.app.ExportDirectory
 import dev.po4yka.chur.app.ExportSink
 import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.ChurFailure
+import dev.po4yka.chur.imports.AndroidProviderPipe
 import java.util.UUID
 import java.util.Locale
+import java.util.concurrent.CopyOnWriteArraySet
 
 /** A transient SAF tree grant. Only documents created by this export can be removed. */
 internal class DocumentExportDirectory private constructor(
@@ -22,7 +24,7 @@ internal class DocumentExportDirectory private constructor(
     private var closed = false
 
     /** Lock must not close a descriptor while Rust can still acquire its duplicate. */
-    fun invalidate() { lease.invalidated = true }
+    fun invalidate() { lease.invalidated = true; lease.transfers.forEach { it.cancel() } }
 
     override fun createDirectory(displayName: String): ExportDirectory = synchronized(lease) {
         requireOpen()
@@ -34,6 +36,7 @@ internal class DocumentExportDirectory private constructor(
         synchronized(lease) {
             requireOpen()
             val created = create("chur-partial-${UUID.randomUUID()}-${uniqueDocumentName(displayName, emptySet())}", contentType)
+            var openerEntered = false
             val handle = try {
                 val flags = provider {
                     resolver.query(created, arrayOf(DocumentsContract.Document.COLUMN_FLAGS), null, null, null)?.use {
@@ -44,13 +47,22 @@ internal class DocumentExportDirectory private constructor(
                 if (flags and required != required) {
                     throw ChurFailure(ChurStatus.IO_FAILURE, "the export provider must support rename and delete")
                 }
-                provider { resolver.openFileDescriptor(created, "w") }
-                    ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the export file could not be opened")
+                AndroidProviderPipe.output {
+                    openerEntered = true
+                    provider { AndroidProviderOpen.open(resolver, created, "w", document = true) { lease.invalidated } }
+                        ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the export file could not be opened")
+                }
             } catch (failure: Exception) {
-                remove(created)
+                if (!openerEntered) AndroidProviderOpen.discard(resolver, created, document = true)
                 throw failure
             }
-            DocumentDestination(handle, created, displayName).also { lease.pending.add(it) }
+            try {
+                DocumentDestination(handle, created, displayName).also { lease.pending.add(it) }
+            } catch (failure: Exception) {
+                runCatching { handle.close() }
+                AndroidProviderOpen.discard(resolver, created, document = true)
+                throw failure
+            }
         }
 
     /** The selected root stays intact. Successful exports remain outside the vault. */
@@ -113,18 +125,20 @@ internal class DocumentExportDirectory private constructor(
     }
 
     private inner class DocumentDestination(
-        private val handle: ParcelFileDescriptor,
+        private val transfer: AndroidProviderPipe.Output,
         private var document: Uri,
         private val finalName: String,
     ) : ExportSink.Destination {
+        init { lease.transfers.add(transfer) }
         private var handleClosed = false
         private var published = false
         private var discarded = false
-        override val descriptor: Int get() = handle.fd
+        override val descriptor: Int get() = transfer.descriptor
 
         override fun publish(): Unit = synchronized(lease) {
             if (published || discarded) return@synchronized
             requireOpen()
+            transfer.finish()
             close()
             val name = uniqueDocumentName(finalName, children().values.toSet())
             document = provider { DocumentsContract.renameDocument(resolver, document, name) }
@@ -148,7 +162,7 @@ internal class DocumentExportDirectory private constructor(
         override fun close(): Unit = synchronized(lease) {
             if (!handleClosed) {
                 handleClosed = true
-                provider { handle.close() }
+                try { provider { transfer.close() } } finally { lease.transfers.remove(transfer) }
             }
         }
     }
@@ -157,6 +171,7 @@ internal class DocumentExportDirectory private constructor(
         var closed = false
         @Volatile var invalidated = false
         val pending = mutableSetOf<ExportSink.Destination>()
+        val transfers = CopyOnWriteArraySet<AndroidProviderPipe.Output>()
     }
 
     companion object {

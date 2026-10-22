@@ -223,7 +223,18 @@ impl Operation {
                 match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(&worker_state)))
                 {
                     Ok(Ok(object_id)) => worker_state.finish(chur_core::CHUR_OK, object_id),
-                    Ok(Err(error)) => worker_state.finish(error.as_i32(), None),
+                    Ok(Err(error)) => {
+                        // Cancel-aware provider I/O must use a non-Interrupted
+                        // std::io error so read_exact/write_all do not retry it.
+                        let status = if error.status() == chur_core::ChurStatus::IoFailure
+                            && worker_state.cancelled()
+                        {
+                            chur_core::ChurStatus::Cancelled.as_i32()
+                        } else {
+                            error.as_i32()
+                        };
+                        worker_state.finish(status, None);
+                    }
                     Err(_) => {
                         worker_state.finish(chur_core::ChurStatus::InternalFailure.as_i32(), None)
                     }

@@ -13,6 +13,39 @@ class ArchiveCredential(password: String) {
     override fun toString(): String = "ArchiveCredential(<redacted>)"
 }
 
+/** UI-thread ownership of a credential before an archive operation starts. */
+class ArchiveCredentialHold internal constructor(
+    private val credential: ArchiveCredential,
+    private val remove: (ArchiveCredentialHold) -> Unit,
+) {
+    var active: Boolean = true
+        private set
+    private var job: kotlinx.coroutines.Job? = null
+
+    /** Bind before starting a lazy job, so cancellation also covers pre-start work. */
+    fun attach(job: kotlinx.coroutines.Job) {
+        if (!active) { job.cancel(); return }
+        this.job = job
+        job.invokeOnCompletion { if (active) revoke() }
+    }
+
+    /** Transfer ownership after the next controller operation has registered it. */
+    fun release() {
+        if (!active) return
+        active = false
+        job = null
+        remove(this)
+    }
+
+    internal fun revoke() {
+        if (!active) return
+        val running = job
+        credential.clear()
+        release()
+        running?.cancel()
+    }
+}
+
 /** An open host input; its owner must close it even when a picker answers late. */
 class ArchiveSource(val descriptor: Int, val close: () -> Unit) {
     override fun toString(): String = "ArchiveSource(<redacted>)"
@@ -22,6 +55,7 @@ class ArchiveSource(val descriptor: Int, val close: () -> Unit) {
 class ArchiveTransferOwner(private val controller: ChurController, private val generation: Long) {
     private var export: Pair<SelectiveExportRequest, ArchiveCredential>? = null
     private var importing: ArchiveCredential? = null
+    private var importHold: ArchiveCredentialHold? = null
     private var disposed = false
     private var lease = false
 
@@ -81,24 +115,39 @@ class ArchiveTransferOwner(private val controller: ChurController, private val g
     fun import(credential: ArchiveCredential, chooseFile: () -> Unit) {
         if (!acquire()) { credential.clear(); return }
         importing = credential
+        importHold = controller.retainArchiveCredential(credential)
         try { chooseFile() } catch (_: Exception) {
             importing = null
+            importHold?.revoke(); importHold = null
             credential.clear()
             release()
             controller.report("The file picker could not be opened.")
         }
     }
 
+    /** Release the picker lease before cancellable host-side package staging. */
+    fun importPickerReturned(staging: kotlinx.coroutines.Job? = null) {
+        release()
+        if (staging != null) {
+            val hold = importHold
+            if (hold == null) staging.cancel() else hold.attach(staging)
+        }
+    }
+
     fun importedFile(source: ArchiveSource?) {
         val credential = importing
         importing = null
+        val hold = importHold
+        importHold = null
         release()
-        if (source == null || credential == null || !current()) {
+        if (source == null || credential == null || hold?.active != true || !current()) {
+            hold?.revoke()
             credential?.clear()
             source?.close?.invoke()
             return
         }
-        controller.importSelectiveArchive(generation, source.descriptor, credential, source.close)
+        try { controller.importSelectiveArchive(generation, source.descriptor, credential, source.close) }
+        finally { hold.release() }
     }
 
     fun close() {
@@ -107,6 +156,7 @@ class ArchiveTransferOwner(private val controller: ChurController, private val g
         export = null
         importing?.clear()
         importing = null
+        importHold?.revoke(); importHold = null
         release()
     }
 }

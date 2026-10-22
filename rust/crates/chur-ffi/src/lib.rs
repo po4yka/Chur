@@ -49,6 +49,7 @@ mod operation;
 mod panic;
 pub mod private_notes;
 pub mod product;
+mod provider_io;
 pub mod records;
 pub mod reencrypt;
 mod registry;

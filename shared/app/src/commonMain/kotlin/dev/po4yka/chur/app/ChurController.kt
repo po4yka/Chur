@@ -1862,7 +1862,7 @@ class ChurController(
         // Own an already-created SAF document even if another operation won
         // the race while the picker was open. A refusal still removes it.
         var destination = if (target == ExportTarget.FILES && uri != null) {
-            exports.create("", "", target, uri)
+            withContext(Dispatchers.Default) { exports.create("", "", target, uri) }
                 ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the export destination")
         } else null
         var published = false
@@ -1875,9 +1875,9 @@ class ChurController(
                     if (cancellationRequested(token)) throw ChurFailure(ChurStatus.CANCELLED, "the private note export")
                 }
                 checkSession()
-                val output = destination ?: exports.create(
+                val output = destination ?: withContext(Dispatchers.Default) { exports.create(
                     request.filename, request.contentType, target, uri, request.exportSize,
-                ) ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the export destination")
+                ) } ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the export destination")
                 destination = output
                 checkSession()
                 val nativeOperation = withContext(Dispatchers.Default) {
@@ -1888,7 +1888,7 @@ class ChurController(
                 val terminal = try { drain(nativeOperation, token) } finally { closeOperation(nativeOperation) }
                 if (terminal != 0) throw ChurFailure(ChurStatus.fromValue(terminal), "the private note export")
                 checkSession()
-                if (!output.publishChecked()) throw ChurFailure(ChurStatus.IO_FAILURE, "the export destination")
+                if (!withContext(Dispatchers.Default) { output.publishChecked() }) throw ChurFailure(ChurStatus.IO_FAILURE, "the export destination")
                 checkSession()
                 published = true
                 say("Note exported. The destination may keep an unencrypted copy.")
@@ -1902,15 +1902,15 @@ class ChurController(
         // A SAF document exists as soon as the picker returns. Own it before
         // reading catalog metadata so even an invalidated object deletes it.
         var destination = if (target == ExportTarget.FILES && uri != null) {
-            exports.create("", "", target, uri)
+            withContext(Dispatchers.Default) { exports.create("", "", target, uri) }
                 ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the export destination")
         } else null
         var published = false
         try {
             val detail = withContext(Dispatchers.Default) { repository.detail(objectId) }
-            val output = destination ?: exports.create(
+            val output = destination ?: withContext(Dispatchers.Default) { exports.create(
                 detail.filename.ifBlank { "chur-export" }, detail.contentType, target, uri, detail.plaintextSize,
-            ) ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the export destination")
+            ) } ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the export destination")
             destination = output
             writeVerifiedExport(objectId, output, token)
             published = true
@@ -1933,9 +1933,8 @@ class ChurController(
         if (cancellationRequested(token) || repository.state.value !is VaultState.Unlocked) {
             throw ChurFailure(ChurStatus.CANCELLED, "the export")
         }
-        // Single exports publish on their host caller context. Album export
-        // already runs on Default, where directory-provider I/O belongs.
-        if (!output.publishChecked()) throw ChurFailure(ChurStatus.IO_FAILURE, "the export destination")
+        // Provider delivery can wait after native keys are released. Keep it off Main.
+        if (!withContext(Dispatchers.Default) { output.publishChecked() }) throw ChurFailure(ChurStatus.IO_FAILURE, "the export destination")
         // A lock or cancellation while a provider publishes still owns this file.
         if (cancellationRequested(token) || repository.state.value !is VaultState.Unlocked) {
             throw ChurFailure(ChurStatus.CANCELLED, "the export")
@@ -2093,6 +2092,18 @@ class ChurController(
         }
     }
 
+    private val archiveCredentials = mutableSetOf<ArchiveCredentialHold>()
+
+    /** Register on the UI thread before starting archive staging or a queued native call. */
+    fun retainArchiveCredential(credential: ArchiveCredential): ArchiveCredentialHold =
+        ArchiveCredentialHold(credential) { archiveCredentials.remove(it) }.also { archiveCredentials.add(it) }
+
+    private fun clearArchiveCredentials() {
+        val pending = archiveCredentials.toList()
+        archiveCredentials.clear()
+        pending.forEach { it.revoke() }
+    }
+
     private var externalArchiveSecret: ArchiveCredential? = null
     private var externalArchiveBytes: ByteArray? = null
     private fun clearExternalArchiveSecret() {
@@ -2152,7 +2163,7 @@ class ChurController(
         var nativeOperation: Long? = null
         try {
             if (target == ExportTarget.FILES && uri != null) {
-                destination = exports.create("", "", target, uri)
+                destination = withContext(Dispatchers.Default) { exports.createArchive("", "", target, uri) }
                     ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the archive destination")
             }
             tracked("external-archive") { token ->
@@ -2182,12 +2193,12 @@ class ChurController(
                         }
                         knownTotal += size
                     }
-                    files += dev.po4yka.chur.ffi.ExternalArchiveFile(source.descriptor,
+                    files += dev.po4yka.chur.ffi.ExternalArchiveFile(source.nativeDescriptor,
                         source.originalFilename?.takeIf { it.isNotBlank() } ?: "file-${index + 1}", source.contentTypeHint, source.knownLength)
                 }
                 val capacity = if (destination != null) Long.MAX_VALUE else exports.archiveCapacity(target)
                 if (capacity <= 0) throw ChurFailure(ChurStatus.RESOURCE_LIMIT_EXCEEDED, "the archive destination")
-                val output = destination ?: exports.create("chur-archive.churbak", "application/octet-stream", target, uri, capacity)
+                val output = destination ?: withContext(Dispatchers.Default) { exports.createArchive("chur-archive.churbak", "application/octet-stream", target, uri, capacity) }
                     ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the archive destination")
                 destination = output
                 val bytes = credential.copyBytes()
@@ -2204,7 +2215,7 @@ class ChurController(
                 nativeOperation = null
                 if (result.status != 0) throw ChurFailure(ChurStatus.fromValue(result.status), "the external archive")
                 checkOwner()
-                if (!output.publishChecked()) throw ChurFailure(ChurStatus.IO_FAILURE, "the archive destination")
+                if (!withContext(Dispatchers.Default) { output.publishChecked() }) throw ChurFailure(ChurStatus.IO_FAILURE, "the archive destination")
                 checkOwner()
                 published = true
                 say("Encrypted archive ready. Use its password to restore it or import fresh copies. The library was not changed.")
@@ -2235,7 +2246,7 @@ class ChurController(
         try {
             // A returned SAF URI already names an empty file, including on a busy refusal.
             if (target == ExportTarget.FILES && uri != null) {
-                destination = exports.create("", "", target, uri)
+                destination = withContext(Dispatchers.Default) { exports.createArchive("", "", target, uri) }
                     ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the archive destination")
             }
             tracked("archive-export") { token ->
@@ -2251,7 +2262,7 @@ class ChurController(
                 }
                 val capacity = if (destination != null) Long.MAX_VALUE else exports.archiveCapacity(target)
                 if (capacity <= 0) throw ChurFailure(ChurStatus.RESOURCE_LIMIT_EXCEEDED, "the archive destination")
-                val output = destination ?: exports.create("chur-archive.churbak", "application/octet-stream", target, uri, capacity)
+                val output = destination ?: withContext(Dispatchers.Default) { exports.createArchive("chur-archive.churbak", "application/octet-stream", target, uri, capacity) }
                     ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the archive destination")
                 destination = output
                 val password = credential.copyBytes()
@@ -2265,7 +2276,7 @@ class ChurController(
                 val result = try { drainProgress(nativeOperation, token) } finally { closeOperation(nativeOperation) }
                 if (result.status != 0) throw ChurFailure(ChurStatus.fromValue(result.status), "the archive export")
                 checkSession()
-                if (!output.publishChecked()) throw ChurFailure(ChurStatus.IO_FAILURE, "the archive destination")
+                if (!withContext(Dispatchers.Default) { output.publishChecked() }) throw ChurFailure(ChurStatus.IO_FAILURE, "the archive destination")
                 checkSession()
                 published = true
                 say("Encrypted archive ready. Open it with its archive password using Restore or Import encrypted archive.")
@@ -2279,66 +2290,70 @@ class ChurController(
 
     /** Removes a document returned to a disposed Android picker owner. */
     fun discardArchiveDestination(uri: String) = guarded(clearMessage = false) {
-        val destination = exports.create("", "", ExportTarget.FILES, uri) ?: return@guarded
+        val destination = withContext(Dispatchers.Default) { exports.create("", "", ExportTarget.FILES, uri) } ?: return@guarded
         try { destination.discard() } finally { destination.close() }
     }
 
     /** Authenticates the complete archive before the native worker adds fresh copies. */
-    fun importSelectiveArchive(generation: Long, sourceFd: Int, credential: ArchiveCredential, close: () -> Unit) = guarded {
-        var bytes: ByteArray? = null
-        try {
-            tracked("archive-import") { token ->
-                if ((repository.state.value as? VaultState.Unlocked)?.generation != generation) {
-                    throw ChurFailure(ChurStatus.SESSION_EXPIRED, "the archive import")
-                }
-                val password = credential.copyBytes()
-                bytes = password
-                val operation = try {
-                    withContext(Dispatchers.Default) { repository.beginSelectiveImport(generation, sourceFd, password) }
-                } finally { password.fill(0); credential.clear() }
-                val result = try { drainProgress(operation, token) } finally { closeOperation(operation) }
-                if ((repository.state.value as? VaultState.Unlocked)?.generation != generation) return@tracked
-                // A failed refresh must not hide items that the native worker already committed.
-                val revision = queryRevision
-                val query = currentQuery.copy(cursor = null)
-                val refreshed = try {
-                    withContext(Dispatchers.Default) {
-                        fun checkGeneration() {
-                            if ((repository.state.value as? VaultState.Unlocked)?.generation != generation) {
-                                throw ChurFailure(ChurStatus.SESSION_EXPIRED, "the archive import")
-                            }
-                        }
-                        checkGeneration()
-                        val importedPage = repository.page(query)
-                        checkGeneration()
-                        val importedAlbums = repository.albums()
-                        checkGeneration()
-                        val importedTags = repository.tags()
-                        checkGeneration()
-                        Triple(importedPage, importedAlbums, importedTags)
+    fun importSelectiveArchive(generation: Long, sourceFd: Int, credential: ArchiveCredential, close: () -> Unit) {
+        val hold = retainArchiveCredential(credential)
+        guarded {
+            var bytes: ByteArray? = null
+            try {
+                tracked("archive-import") { token ->
+                    if ((repository.state.value as? VaultState.Unlocked)?.generation != generation) {
+                        throw ChurFailure(ChurStatus.SESSION_EXPIRED, "the archive import")
                     }
-                } catch (cancelled: CancellationException) { throw cancelled
-                } catch (_: Exception) { null }
-                if ((repository.state.value as? VaultState.Unlocked)?.generation != generation) return@tracked
-                if (refreshed != null) {
-                    if (queryRevision == revision) _page.value = refreshed.first
-                    _albums.value = refreshed.second
-                    _tags.value = refreshed.third
+                    val password = credential.copyBytes()
+                    bytes = password
+                    val operation = try {
+                        withContext(Dispatchers.Default) { repository.beginSelectiveImport(generation, sourceFd, password) }
+                    } finally { password.fill(0); credential.clear() }
+                    val result = try { drainProgress(operation, token) } finally { closeOperation(operation) }
+                    if ((repository.state.value as? VaultState.Unlocked)?.generation != generation) return@tracked
+                    // A failed refresh must not hide items that the native worker already committed.
+                    val revision = queryRevision
+                    val query = currentQuery.copy(cursor = null)
+                    val refreshed = try {
+                        withContext(Dispatchers.Default) {
+                            fun checkGeneration() {
+                                if ((repository.state.value as? VaultState.Unlocked)?.generation != generation) {
+                                    throw ChurFailure(ChurStatus.SESSION_EXPIRED, "the archive import")
+                                }
+                            }
+                            checkGeneration()
+                            val importedPage = repository.page(query)
+                            checkGeneration()
+                            val importedAlbums = repository.albums()
+                            checkGeneration()
+                            val importedTags = repository.tags()
+                            checkGeneration()
+                            Triple(importedPage, importedAlbums, importedTags)
+                        }
+                    } catch (cancelled: CancellationException) { throw cancelled
+                    } catch (_: Exception) { null }
+                    if ((repository.state.value as? VaultState.Unlocked)?.generation != generation) return@tracked
+                    if (refreshed != null) {
+                        if (queryRevision == revision) _page.value = refreshed.first
+                        _albums.value = refreshed.second
+                        _tags.value = refreshed.third
+                    }
+                    val refreshCopy = if (refreshed == null) " Refresh the library to see the imported items." else ""
+                    if (result.status == 0) {
+                        say("${result.processed} items imported from the encrypted archive. Existing items were kept." + refreshCopy)
+                    } else if (result.processed > 0) {
+                        say("${result.processed} items saved. Saved originals and notes remain; tags, previews, or album organization may be incomplete. " +
+                            userCopy(ChurStatus.fromValue(result.status)) + refreshCopy)
+                    } else {
+                        throw ChurFailure(ChurStatus.fromValue(result.status), "the archive import")
+                    }
                 }
-                val refreshCopy = if (refreshed == null) " Refresh the library to see the imported items." else ""
-                if (result.status == 0) {
-                    say("${result.processed} items imported from the encrypted archive. Existing items were kept." + refreshCopy)
-                } else if (result.processed > 0) {
-                    say("${result.processed} items saved. Saved originals and notes remain; tags, previews, or album organization may be incomplete. " +
-                        userCopy(ChurStatus.fromValue(result.status)) + refreshCopy)
-                } else {
-                    throw ChurFailure(ChurStatus.fromValue(result.status), "the archive import")
-                }
+            } finally {
+                bytes?.fill(0)
+                credential.clear()
+                hold.release()
+                close()
             }
-        } finally {
-            bytes?.fill(0)
-            credential.clear()
-            close()
         }
     }
 
@@ -2366,7 +2381,7 @@ class ChurController(
      */
     fun createBackup() = guarded {
         tracked("backup") { token ->
-            val destination = exports.create("chur-backup", "application/octet-stream")
+            val destination = withContext(Dispatchers.Default) { exports.createArchive("chur-backup", "application/octet-stream", ExportTarget.DEFAULT, null) }
                 ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the backup destination")
             var published = false
             try {
@@ -2384,7 +2399,7 @@ class ChurController(
                 if (_activeOperation.value?.id != token) {
                     throw ChurFailure(ChurStatus.CANCELLED, "the backup")
                 }
-                destination.publish()
+                withContext(Dispatchers.Default) { destination.publish() }
                 published = true
                 say("Backup written. It opens with the password or phrase you use now.")
             } finally {
@@ -2434,36 +2449,40 @@ class ChurController(
     fun restoreBackup(sourceFd: Int, password: String, close: (cancelled: Boolean) -> Unit) =
         restoreBackup(sourceFd, ArchiveCredential(password), close)
 
-    fun restoreBackup(sourceFd: Int, credential: ArchiveCredential, close: (cancelled: Boolean) -> Unit) = guarded {
-        var bytes: ByteArray? = null
-        var cancelled = false
-        var heldActivity = false
-        try {
-            val password = credential.copyBytes()
-            bytes = password
-            beginHostActivity()
-            heldActivity = true
-            tracked("restore") { token ->
-                val operation = withContext(Dispatchers.Default) {
-                    repository.beginRestore(sourceFd, password)
+    fun restoreBackup(sourceFd: Int, credential: ArchiveCredential, close: (cancelled: Boolean) -> Unit) {
+        val hold = retainArchiveCredential(credential)
+        guarded {
+            var bytes: ByteArray? = null
+            var cancelled = false
+            var heldActivity = false
+            try {
+                val password = credential.copyBytes()
+                bytes = password
+                beginHostActivity()
+                heldActivity = true
+                tracked("restore") { token ->
+                    val operation = withContext(Dispatchers.Default) {
+                        repository.beginRestore(sourceFd, password)
+                    }
+                    val terminal = try {
+                        drain(operation, token)
+                    } finally {
+                        closeOperation(operation)
+                    }
+                    if (terminal != 0) {
+                        cancelled = terminal == ChurStatus.CANCELLED.value
+                        throw ChurFailure(ChurStatus.fromValue(terminal), "the restore")
+                    }
+                    withContext(Dispatchers.Default) { repository.start() }
+                    setRoute(AppRoute.Unlock)
                 }
-                val terminal = try {
-                    drain(operation, token)
-                } finally {
-                    closeOperation(operation)
-                }
-                if (terminal != 0) {
-                    cancelled = terminal == ChurStatus.CANCELLED.value
-                    throw ChurFailure(ChurStatus.fromValue(terminal), "the restore")
-                }
-                withContext(Dispatchers.Default) { repository.start() }
-                setRoute(AppRoute.Unlock)
+            } finally {
+                bytes?.fill(0)
+                credential.clear()
+                hold.release()
+                if (heldActivity) endHostActivity()
+                close(cancelled)
             }
-        } finally {
-            bytes?.fill(0)
-            credential.clear()
-            if (heldActivity) endHostActivity()
-            close(cancelled)
         }
     }
 
@@ -3081,6 +3100,8 @@ class ChurController(
     }
 
     private fun clearPrivateProjections() {
+        // Clear pre-native credentials synchronously; never wait for a provider.
+        clearArchiveCredentials()
         clearLauncherAction()
         launcherNavigationBusy = false
         contentIndexer.reset()
@@ -3553,6 +3574,15 @@ interface ExportSink {
         target: ExportTarget,
         uri: String?,
     ): Destination?
+
+    /** Encrypted archives need a seekable destination before provider delivery. */
+    fun createArchive(
+        displayName: String,
+        contentType: String,
+        target: ExportTarget,
+        uri: String?,
+        capacity: Long = archiveCapacity(target),
+    ): Destination? = create(displayName, contentType, target, uri, capacity)
 
     /** Reserves the known plaintext size before the host opens a scratch file. */
     fun create(

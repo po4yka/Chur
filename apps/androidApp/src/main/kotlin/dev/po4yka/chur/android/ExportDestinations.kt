@@ -20,6 +20,7 @@ import dev.po4yka.chur.app.ExportDirectory
 import dev.po4yka.chur.app.ExportTarget
 import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.ChurFailure
+import dev.po4yka.chur.imports.AndroidProviderPipe
 import java.io.File
 import java.util.UUID
 
@@ -41,10 +42,15 @@ class ExportDestinations(
     private val scratchReservations = mutableMapOf<File, Long>()
     private var generation = 0L
     private val directoryExports = mutableSetOf<DocumentExportDirectory>()
+    private val providerOutputs = mutableSetOf<AndroidProviderPipe.Output>()
+    private val ciphertextScratch = File(context.cacheDir, "encrypted-transfers")
+    private val ciphertextFiles = mutableSetOf<File>()
 
     init {
         ExportLeases.clearScratch(context) // A previous process cannot have a live share sheet.
         scratch.mkdirs()
+        ciphertextScratch.mkdirs()
+        ciphertextScratch.listFiles()?.forEach { it.delete() }
         // ChurHost builds this once per process, so no export of this process is
         // in flight yet: every pending row that is still ours is a partial export.
         deleteAbandonedMediaExports()
@@ -92,6 +98,7 @@ class ExportDestinations(
         // Native code may be acquiring a duplicate of an active descriptor. Invalidate
         // now; the operation's finally closes and removes its output after native work ends.
         directories.forEach { it.invalidate() }
+        synchronized(providerOutputs) { providerOutputs.toList() }.forEach { it.cancel() }
         synchronized(shares) { pendingShares.toMap() }.forEach { (uri, file) -> releaseShare(uri, file) }
         synchronized(shares) { scratchReservations.clear() }
         ExportLeases.clearScratch(context)
@@ -165,6 +172,76 @@ class ExportDestinations(
         }
         override fun close() {
             if (!closed) { handle.close(); closed = true }
+        }
+    }
+
+    private inner class ProviderDestination(
+        val transfer: AndroidProviderPipe.Output,
+        private val uri: Uri,
+        private val publishAction: () -> Unit,
+        private val discardAction: () -> Unit,
+    ) : ExportSink.Destination {
+        override val descriptor: Int get() = transfer.descriptor
+        override fun publish() {
+            transfer.finish()
+            publishAction()
+        }
+        override fun discard() { close(); discardAction() }
+        fun discardAfterSetupFailure() {
+            try { close() } finally { AndroidProviderOpen.discard(resolver, uri) }
+        }
+        override fun close() {
+            transfer.close()
+            synchronized(providerOutputs) { providerOutputs.remove(transfer) }
+        }
+    }
+
+    /** Only encrypted backup/archive callers may use this local seekable spool. */
+    override fun createArchive(
+        displayName: String,
+        contentType: String,
+        target: ExportTarget,
+        uri: String?,
+        capacity: Long,
+    ): ExportSink.Destination? {
+        if (target == ExportTarget.SHARE) return create(displayName, contentType, target, uri, capacity)
+        val destination = create(displayName, contentType, target, uri, capacity) as? ProviderDestination ?: return null
+        val file = File(ciphertextScratch, UUID.randomUUID().toString())
+        try {
+            synchronized(ciphertextFiles) {
+                if (ciphertextFiles.size >= 4) throw ChurFailure(ChurStatus.RESOURCE_LIMIT_EXCEEDED, "the encrypted transfer budget")
+                check(file.createNewFile())
+                ciphertextFiles.add(file)
+            }
+            val handle = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_WRITE)
+            return object : ExportSink.Destination {
+                private var closed = false
+                override val descriptor: Int get() = handle.fd
+                override fun publish() {
+                    if (closed) throw ChurFailure(ChurStatus.CANCELLED, "the encrypted transfer")
+                    handle.close()
+                    ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use {
+                        destination.transfer.copyCiphertext(it)
+                    }
+                    destination.publish()
+                    close()
+                }
+                override fun discard() { try { destination.discard() } finally { close() } }
+                override fun close() {
+                    if (closed) return
+                    closed = true
+                    try { handle.close() } finally {
+                        destination.close()
+                        file.delete()
+                        synchronized(ciphertextFiles) { ciphertextFiles.remove(file) }
+                    }
+                }
+            }
+        } catch (failure: Exception) {
+            file.delete()
+            synchronized(ciphertextFiles) { ciphertextFiles.remove(file) }
+            runCatching { destination.discardAfterSetupFailure() }
+            throw failure
         }
     }
 
@@ -288,17 +365,23 @@ class ExportDestinations(
     }
 
     private fun open(uri: Uri, publish: () -> Unit, discard: () -> Unit): ExportSink.Destination? {
-        val handle = try {
-            resolver.openFileDescriptor(uri, "w")
+        val openedGeneration = synchronized(directoryExports) { generation }
+        var openerEntered = false
+        val transfer = try {
+            AndroidProviderPipe.output {
+                openerEntered = true
+                AndroidProviderOpen.open(resolver, uri, "w") {
+                    openedGeneration != synchronized(directoryExports) { generation }
+                } ?: throw ChurFailure(ChurStatus.IO_FAILURE, "the export file could not be opened")
+            }
         } catch (failure: Exception) {
-            discard()
+            // Once entered, the opener owns late-FD cleanup. Before entry, only
+            // this path can discard the selected URI or the new MediaStore row.
+            if (!openerEntered) AndroidProviderOpen.discard(resolver, uri)
             throw failure
         }
-        if (handle == null) {
-            discard()
-            return null
-        }
-        return Destination(handle, publish, discard)
+        synchronized(providerOutputs) { providerOutputs.add(transfer) }
+        return ProviderDestination(transfer, uri, publish, discard)
     }
 }
 

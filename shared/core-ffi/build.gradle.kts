@@ -56,6 +56,7 @@ fun registerCargo(
         environment("CC", "cc")
     }
     inputs.dir(rustDirectory.dir("crates"))
+    inputs.dir(rustDirectory.dir("vendor"))
     inputs.file(rustDirectory.file("Cargo.toml"))
     inputs.file(rustDirectory.file("Cargo.lock"))
     inputs.file(rustDirectory.file("rust-toolchain.toml"))

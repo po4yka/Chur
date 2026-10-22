@@ -101,6 +101,14 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func application(
         _ application: UIApplication,
+        shouldAllowExtensionPointIdentifier extensionPointIdentifier: UIApplication.ExtensionPointIdentifier
+    ) -> Bool {
+        // Private notes and search use ordinary text fields. Keep their input in the system keyboard.
+        extensionPointIdentifier != .keyboard
+    }
+
+    func application(
+        _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         configureAdaptiveBars()
@@ -1189,6 +1197,11 @@ private final class ShareExportSink: NSObject, ExportSink {
 
     func create(displayName: String, contentType: String) -> ExportSinkDestination? {
         create(displayName: displayName, contentType: contentType, target: .default_, uri: nil)
+    }
+
+    func createArchive(displayName: String, contentType: String, target: ExportTarget, uri: String?, capacity: Int64) -> ExportSinkDestination? {
+        // iOS exports already use a protected, seekable app-private file.
+        create(displayName: displayName, contentType: contentType, target: target, uri: uri, plaintextSize: capacity)
     }
 
     func create(displayName: String, contentType: String, target: ExportTarget, uri: String?, plaintextSize: Int64) -> ExportSinkDestination? {

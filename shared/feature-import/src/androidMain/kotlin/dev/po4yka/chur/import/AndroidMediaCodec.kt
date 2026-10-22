@@ -115,17 +115,21 @@ class AndroidMediaCodec private constructor(
             } }
             val livePhoto = if (seekable) readLivePhotoBundle(descriptor.fd, size, validatePayloads = false) else null
             val type = if (livePhoto != null) LivePhotoBundle.CONTENT_TYPE else sourceType(uri, name, runCatching { resolver.getType(uri) }.getOrNull())
+            val captureTime = taken ?: if (asFile) null else embeddedCaptureTime(uri, normalizeType(type))
+            val nativeSource = AndroidProviderPipe.input(descriptor, seekable)
             return PickedMedia(
                 descriptor = descriptor.fd,
                 seekable = seekable,
                 knownLength = size,
                 contentTypeHint = type,
                 originalFilename = name,
-                captureTimeMs = taken ?: if (asFile) null else embeddedCaptureTime(uri, normalizeType(type)),
+                captureTimeMs = captureTime,
                 platformHandle = uri,
-                close = { descriptor.close() },
+                close = { nativeSource.close() },
                 importAsFile = asFile && livePhoto == null,
                 livePhoto = livePhoto,
+                nativeDescriptor = nativeSource.descriptor,
+                nativeSeekable = false,
             )
         } catch (_: Exception) {
             descriptor.close()

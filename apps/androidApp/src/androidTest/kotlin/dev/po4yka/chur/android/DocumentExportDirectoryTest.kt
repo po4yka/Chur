@@ -8,12 +8,18 @@ import android.os.CancellationSignal
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.DocumentsProvider
+import android.system.ErrnoException
 import android.system.Os
+import android.system.StructPollfd
 import android.system.OsConstants
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.po4yka.chur.ffi.ChurFailure
+import dev.po4yka.chur.imports.AndroidProviderPipe
 import java.io.File
+import java.io.IOException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -163,7 +169,7 @@ class DocumentExportDirectoryTest {
         try {
             provider.refuseOpen = true
             failure { root.createFile("open.bin", "application/octet-stream", 3) }
-            assertTrue(provider.root.list()!!.isEmpty())
+            awaitCleanup { provider.root.list()!!.isEmpty() }
             provider.refuseOpen = false
             val destination = root.createFile("rename.bin", "application/octet-stream", 3)
             write(destination.descriptor, byteArrayOf(1, 2, 3))
@@ -183,8 +189,67 @@ class DocumentExportDirectoryTest {
             provider.fileFlags = DocumentsContract.Document.FLAG_SUPPORTS_DELETE
             failure { root.createFile("no-rename.bin", "application/octet-stream", 3) }
             assertEquals(0, provider.opens)
-            assertTrue(provider.root.list()!!.isEmpty())
+            awaitCleanup { provider.root.list()!!.isEmpty() }
         } finally { root.close() }
+    }
+
+    @Test
+    fun outputSlotExhaustionRemovesTheNewPartialDocument() = withProvider { provider, resolver ->
+        val root = DocumentExportDirectory.open(resolver, provider.tree)
+        try {
+            withFullOutputPool {
+                exhausted { root.createFile("refused.bin", "application/octet-stream", 1) }
+                awaitCleanup { provider.root.list()!!.isEmpty() }
+                assertEquals(0, provider.opens)
+            }
+        } finally { root.close() }
+    }
+
+    @Test
+    fun stalledFailingCleanupDoesNotMaskSlotFailureOrHoldOffLock() = withProvider { provider, resolver ->
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val ended = CountDownLatch(1)
+        provider.deleteEntered = entered
+        provider.deleteRelease = release
+        provider.deleteEnded = ended
+        provider.refuseDelete = true
+        val root = DocumentExportDirectory.open(resolver, provider.tree)
+        try {
+            withFullOutputPool {
+                exhausted { root.createFile("refused.bin", "application/octet-stream", 1) }
+                assertTrue(entered.await(5, TimeUnit.SECONDS))
+                val before = System.nanoTime()
+                root.invalidate()
+                assertTrue("lock waited for provider deletion", System.nanoTime() - before < TimeUnit.SECONDS.toNanos(1))
+                assertEquals(1L, release.count)
+            }
+        } finally {
+            release.countDown()
+            assertTrue(ended.await(5, TimeUnit.SECONDS))
+            root.close()
+        }
+    }
+
+    private fun withFullOutputPool(action: () -> Unit) {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val files = List(4) { File.createTempFile("provider-slot-", ".bin", context.cacheDir) }
+        val outputs = files.map { AndroidProviderPipe.output(ParcelFileDescriptor.open(it, ParcelFileDescriptor.MODE_WRITE_ONLY)) }
+        try { action() } finally {
+            outputs.forEach { it.close(); runCatching { it.finish() } }
+            files.forEach { it.delete() }
+        }
+    }
+
+    private fun exhausted(action: () -> Unit) {
+        try { action(); fail("the occupied output pool must reject the export") }
+        catch (failure: IOException) { assertEquals("Too many provider output workers", failure.message) }
+    }
+
+    private fun awaitCleanup(complete: () -> Boolean) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (!complete() && System.nanoTime() < deadline) Thread.sleep(20)
+        assertTrue("the partial document was not removed", complete())
     }
 
     @Test
@@ -260,7 +325,17 @@ class DocumentExportDirectoryTest {
     }
 
     private fun write(descriptor: Int, bytes: ByteArray) {
-        ParcelFileDescriptor.AutoCloseOutputStream(ParcelFileDescriptor.fromFd(descriptor)).use { it.write(bytes) }
+        ParcelFileDescriptor.fromFd(descriptor).use { output ->
+            var offset = 0
+            while (offset < bytes.size) {
+                try { offset += Os.write(output.fileDescriptor, bytes, offset, bytes.size - offset) }
+                catch (failure: ErrnoException) {
+                    if (failure.errno != OsConstants.EAGAIN) throw failure
+                    val poll = StructPollfd().apply { fd = output.fileDescriptor; events = OsConstants.POLLOUT.toShort() }
+                    assertTrue("export pipe made no progress", Os.poll(arrayOf(poll), 5000) > 0)
+                }
+            }
+        }
     }
 
     private fun failure(action: () -> Unit) {
@@ -282,11 +357,15 @@ class DocumentExportDirectoryTest {
 }
 
 private class TestDocumentsProvider(val root: File) : DocumentsProvider() {
-    private val files = linkedMapOf("root" to root)
+    private val files = java.util.concurrent.ConcurrentHashMap<String, File>().apply { put("root", root) }
     private var nextId = 0
     var refuseOpen = false
     var refuseCreate = false
     var refuseRename = false
+    var refuseDelete = false
+    var deleteEntered: CountDownLatch? = null
+    var deleteRelease: CountDownLatch? = null
+    var deleteEnded: CountDownLatch? = null
     var existingCreateId: String? = null
     var opens = 0
     var pipeWrites = false
@@ -330,9 +409,14 @@ private class TestDocumentsProvider(val root: File) : DocumentsProvider() {
     }
 
     override fun deleteDocument(documentId: String) {
-        check(documentId != "root")
-        check(files.getValue(documentId).delete())
-        files.remove(documentId)
+        try {
+            deleteEntered?.countDown()
+            deleteRelease?.await()
+            if (refuseDelete) throw IOException("test deletion refused")
+            check(documentId != "root")
+            check(files.getValue(documentId).delete())
+            files.remove(documentId)
+        } finally { deleteEnded?.countDown() }
     }
 
     override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor {

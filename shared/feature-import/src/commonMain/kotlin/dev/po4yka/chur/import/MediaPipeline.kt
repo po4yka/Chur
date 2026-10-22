@@ -52,6 +52,9 @@ data class PickedMedia(
     val livePhoto: LivePhotoBundle? = null,
     /** A media share fell back to a file because its decoder was unavailable. */
     val mediaPreviewUnavailable: Boolean = false,
+    /** Native I/O may use a cancellable pipe while platform probes keep the original descriptor. */
+    val nativeDescriptor: Int = descriptor,
+    val nativeSeekable: Boolean = seekable,
 )
 
 /** The canonical media facts a probe produced, §4. */

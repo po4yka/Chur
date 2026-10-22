@@ -10,6 +10,8 @@ members = [
     "crates/chur-ffi",
     "crates/chur-jni",
     "crates/chur-cli",
+    "vendor/hmac-0.13.0",
+    "vendor/hkdf-0.13.0",
 ]
 
 [workspace.package]
@@ -41,7 +43,7 @@ chur-sync-protocol = { path = "crates/chur-sync-protocol", version = "0.1.0" }
 # caller-owned, wiped block buffer needs. In chacha20poly1305 it wipes the key
 # that each cipher instance holds when the instance is dropped.
 argon2 = { version = "0.6", default-features = false, features = ["alloc", "zeroize"] }
-blake3 = "1"
+blake3 = { version = "1", features = ["zeroize"] }
 chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc", "zeroize"] }
 # Phase 3 operation signatures. Exact on first adoption; no hazmat, batch,
 # serialization, key-file, or RNG feature enters the protocol build.
@@ -58,7 +60,7 @@ getrandom = "0.4"
 # direct edge adds no package.
 libc = { version = "0.2", default-features = false }
 hkdf = "0.13"
-sha2 = { version = "0.11", default-features = false }
+sha2 = { version = "0.11", default-features = false, features = ["zeroize"] }
 subtle = { version = "2", default-features = false }
 zeroize = { version = "1", default-features = false, features = ["alloc"] }
 # NFKD for recovery-phrase re-entry, which ADR-0029 requires. Data tables only,
@@ -138,3 +140,9 @@ overflow-checks = true
 # converts a panic into INTERNAL_FAILURE, which requires unwinding to be enabled.
 # See docs/interop/FFI_CONTRACT.md section 11 and docs/adr/0016-freeze-the-v1-c-abi.md.
 panic = "unwind"
+
+# Local cleanup patches; provenance and scope are in rust/vendor/README.md.
+[patch.crates-io]
+hmac = { path = "vendor/hmac-0.13.0" }
+hkdf = { path = "vendor/hkdf-0.13.0" }
+digest = { path = "vendor/digest-0.11.3" }

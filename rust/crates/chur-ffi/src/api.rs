@@ -1139,13 +1139,14 @@ pub(crate) fn session_of(
 
 fn run_import(
     entry: &std::sync::Arc<Entry>,
-    mut source: std::fs::File,
+    source: std::fs::File,
     capability: SourceCapability,
     media: CanonicalMedia,
     content_type: &str,
     now_ms: u64,
     shared: &crate::operation::Shared,
 ) -> Result<Option<Id>> {
+    let mut source = crate::provider_io::ProviderIo::new(source, shared)?;
     let guarded = session_of(entry)?;
     let mut session = registry::lock(guarded);
     let running = import::begin(&mut session, capability, media, now_ms)?;
@@ -1165,9 +1166,10 @@ fn run_import(
 fn run_export(
     entry: &std::sync::Arc<Entry>,
     object_id: &Id,
-    mut destination: std::fs::File,
+    destination: std::fs::File,
     shared: &crate::operation::Shared,
 ) -> Result<Option<Id>> {
+    let mut destination = crate::provider_io::ProviderIo::new(destination, shared)?;
     let guarded = session_of(entry)?;
     let session = registry::lock(guarded);
     shared.advance(0, Stage::Running);
@@ -1279,7 +1281,10 @@ pub(crate) unsafe fn duplicate_descriptor(fd: c_int) -> Result<std::fs::File> {
     )]
     // SAFETY: `owned` is an `OwnedFd` this function just created, so the raw
     // value is valid and unowned by anything else.
-    Ok(unsafe { std::fs::File::from_raw_fd(owned.into_raw_fd()) })
+    let file = unsafe { std::fs::File::from_raw_fd(owned.into_raw_fd()) };
+    #[cfg(target_os = "android")]
+    crate::provider_io::reject_provider_filesystem(&file)?;
+    Ok(file)
 }
 
 /// The device clock, `CATALOG_SCHEMA_V1.md` §8.1.

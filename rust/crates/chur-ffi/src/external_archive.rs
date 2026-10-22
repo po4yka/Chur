@@ -317,8 +317,9 @@ fn run(
     drop(request.password);
     let result = (|| {
         let mut aggregate = 0u64;
-        for (source, mut input) in request.sources.into_iter().zip(inputs) {
+        for (source, input) in request.sources.into_iter().zip(inputs) {
             check(shared)?;
+            let mut input = crate::provider_io::ProviderIo::new(input, shared)?;
             let capability = import::SourceCapability {
                 requested_object_id: None,
                 seekable: false,
@@ -466,6 +467,7 @@ pub unsafe extern "C" fn chur_external_archive_begin(
             inputs.push(unsafe { api::duplicate_descriptor(fd)? });
         }
         let mut output = unsafe { api::duplicate_descriptor(destination_fd)? };
+        crate::provider_io::require_regular(&output)?;
         ensure!(
             output.stream_position().is_ok_and(|position| position == 0),
             InvalidInput,
@@ -830,14 +832,16 @@ mod tests {
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        let closing = std::thread::spawn(move || unsafe { api::chur_runtime_close(runtime) });
-        while registry::get(handle, Kind::Operation).is_ok() {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        // Provider EOS releases the documented blocking-read limit during runtime close.
+        let (send, receive) = std::sync::mpsc::channel();
+        let closing = std::thread::spawn(move || {
+            send.send(unsafe { api::chur_runtime_close(runtime) })
+                .unwrap();
+        });
+        let closed = receive.recv_timeout(std::time::Duration::from_secs(3));
+        // Keep the provider open until after the timed result. Cleanup must not need EOF.
         drop(producer);
-        assert_eq!(closing.join().unwrap(), 0);
+        closing.join().unwrap();
+        assert_eq!(closed.unwrap(), 0);
         assert_eq!(output.metadata().unwrap().len(), 0);
         assert_eq!(stages(&root), 0);
         assert!(registry::get(handle, Kind::Operation).is_err());

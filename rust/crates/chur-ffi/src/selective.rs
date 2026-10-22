@@ -661,6 +661,7 @@ unsafe fn begin(
         let request = decode(bytes, export)?;
         let entry = registry::get(session, Kind::Session)?;
         let descriptor = unsafe { api::duplicate_descriptor(fd)? };
+        crate::provider_io::require_regular(&descriptor)?;
         let owner = Access::Shared {
             handle: session,
             entry,

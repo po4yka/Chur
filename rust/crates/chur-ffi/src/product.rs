@@ -1756,6 +1756,7 @@ pub unsafe extern "C" fn chur_backup_create(
         // SAFETY: the caller guarantees the descriptor for the duration of the
         // call; the duplicate is Rust's from here on.
         let mut destination = unsafe { crate::api::duplicate_descriptor(destination_fd)? };
+        crate::provider_io::require_regular(&destination)?;
         let now = crate::api::now_ms();
         let operation = crate::operation::Operation::spawn(
             crate::operation::OperationKind::Backup,
@@ -1835,6 +1836,7 @@ pub unsafe extern "C" fn chur_backup_restore(
         };
         // SAFETY: as above for the descriptor.
         let mut source = unsafe { crate::api::duplicate_descriptor(source_fd)? };
+        crate::provider_io::require_regular(&source)?;
         let operation = crate::operation::Operation::spawn(
             crate::operation::OperationKind::Restore,
             0,

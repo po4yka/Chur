@@ -370,6 +370,18 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn hkdf_and_sha_state_keep_drop_wipes_enabled() {
+        fn requires_drop_wipe<T: zeroize::ZeroizeOnDrop>() {}
+        requires_drop_wipe::<Sha256>();
+        requires_drop_wipe::<hkdf::Hkdf<Sha256>>();
+        requires_drop_wipe::<hkdf::HkdfExtract<Sha256>>();
+        requires_drop_wipe::<hkdf::SimpleHkdf<Sha256>>();
+        requires_drop_wipe::<hkdf::SimpleHkdfExtract<Sha256>>();
+        requires_drop_wipe::<hkdf::hmac::HmacReset<Sha256>>();
+        requires_drop_wipe::<hkdf::hmac::SimpleHmacReset<Sha256>>();
+    }
+
     fn id(byte: u8) -> Id {
         Id::new([byte; 16]).unwrap()
     }

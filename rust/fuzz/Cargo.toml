@@ -147,3 +147,9 @@ debug = true
 overflow-checks = true
 
 [workspace]
+
+# Local cleanup patches; provenance and scope are in rust/vendor/README.md.
+[patch.crates-io]
+hmac = { path = "../vendor/hmac-0.13.0" }
+hkdf = { path = "../vendor/hkdf-0.13.0" }
+digest = { path = "../vendor/digest-0.11.3" }

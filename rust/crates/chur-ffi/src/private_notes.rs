@@ -692,7 +692,7 @@ unsafe fn begin_export(
             .map(|id| Id::from_slice(unsafe { api::borrow_bytes(id, 16)? }))
             .transpose()?;
         // Validate the descriptor before retaining a plaintext snapshot.
-        let mut destination = unsafe { api::duplicate_descriptor(fd)? };
+        let destination = unsafe { api::duplicate_descriptor(fd)? };
         let bytes = with_catalog(session, |db| {
             notes::purge_expired(db, api::now_ms())?;
             let n = notes::get(db, &id)?;
@@ -705,6 +705,7 @@ unsafe fn begin_export(
         let operation =
             Operation::spawn(OperationKind::Export, bytes.len() as u64, move |shared| {
                 use std::io::Write;
+                let mut destination = crate::provider_io::ProviderIo::new(destination, shared)?;
                 let mut done = 0;
                 for chunk in bytes.chunks(4096) {
                     ensure!(

@@ -148,12 +148,12 @@ class MediaImporter(
 
             val operation =
                 repository.beginImport(
-                    sourceFd = media.descriptor,
+                    sourceFd = media.nativeDescriptor,
                     expectedGeneration = generation,
                     request =
                         ImportRequest(
                             contentType = probe.contentType,
-                            seekable = media.seekable,
+                            seekable = media.nativeSeekable,
                             mediaClass = probe.mediaClass,
                             width = probe.width,
                             height = probe.height,

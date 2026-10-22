@@ -14,6 +14,8 @@
 //! a domain tag followed by record bytes, and that the tuple rules do not apply
 //! to it.
 
+use zeroize::Zeroizing;
+
 use chur_core::limits::COMMITMENT_LEN;
 
 use crate::secret::{Key, constant_time_eq};
@@ -36,10 +38,14 @@ pub fn commit(tag: &[u8], parts: &[&[u8]]) -> Commitment {
 /// The key is a derived authentication key, never a parent secret.
 #[must_use]
 pub fn keyed_commit(key: &Key, tag: &[u8], body: &[u8]) -> Commitment {
-    let mut hasher = blake3::Hasher::new_keyed(key.expose());
+    let mut hasher = Zeroizing::new(blake3::Hasher::new_keyed(key.expose()));
     hasher.update(tag);
     hasher.update(body);
-    *hasher.finalize().as_bytes()
+    // The reader owns the final chaining state too. Both owners wipe on drop.
+    let mut reader = Zeroizing::new(hasher.finalize_xof());
+    let mut commitment = [0; COMMITMENT_LEN];
+    reader.fill(&mut commitment);
+    commitment
 }
 
 /// Verifies a keyed commitment in constant time.
@@ -144,6 +150,20 @@ mod tests {
             body,
             &second
         ));
+    }
+
+    #[test]
+    fn wiped_keyed_commitment_matches_blake3_at_block_and_chunk_boundaries() {
+        let key = Key::new([0x71; 32]);
+        for length in [0, 1, 63, 64, 65, 1023, 1024, 1025, 4096] {
+            let body = vec![0x42; length];
+            let mut input = tag::VAULT_DESCRIPTOR_AUTH.to_vec();
+            input.extend_from_slice(&body);
+            assert_eq!(
+                keyed_commit(&key, tag::VAULT_DESCRIPTOR_AUTH, &body),
+                *blake3::keyed_hash(key.expose(), &input).as_bytes()
+            );
+        }
     }
 
     #[test]

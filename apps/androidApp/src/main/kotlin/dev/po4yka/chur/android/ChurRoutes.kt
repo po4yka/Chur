@@ -432,6 +432,8 @@ private fun RestoreRoute(controller: ChurController) {
             if (pickerOpen) { pickerOpen = false; controller.endHostActivity() }
         }
     }
+    val stagingScope = rememberCoroutineScope()
+    var staging by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val restorePickerOwner = remember { Any() }
     lateinit var picker: ManagedActivityResultLauncher<Array<String>, Uri?>
     key(restorePickerOwner) {
@@ -441,17 +443,41 @@ private fun RestoreRoute(controller: ChurController) {
                 pending = null
                 if (pickerOpen) { pickerOpen = false; controller.endHostActivity() }
                 if (credential != null) {
-                    val handle = uri?.let { runCatching { context.contentResolver.openFileDescriptor(it, "r") }.getOrNull() }
-                    if (handle == null) {
+                    if (uri == null || controller.route.value != AppRoute.RestoreBackup) {
                         credential.clear()
-                        if (uri != null) controller.report("That file could not be opened.")
                         running = false
                     } else {
-                        controller.restoreBackup(handle.fd, credential) { wasCancelled ->
-                            handle.close()
-                            running = false
-                            cancelled = wasCancelled
+                        val hold = controller.retainArchiveCredential(credential)
+                        val job = stagingScope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
+                            var source: ArchiveSource? = null
+                            var transferred = false
+                            try {
+                                val ready = AndroidArchiveInput.open(context, uri)
+                                source = ready
+                                controller.restoreBackup(ready.descriptor, credential) { wasCancelled ->
+                                    ready.close()
+                                    running = false
+                                    cancelled = wasCancelled
+                                }
+                                transferred = true
+                            } catch (failure: kotlinx.coroutines.CancellationException) {
+                                cancelled = true
+                                throw failure
+                            } catch (_: Exception) {
+                                controller.report("That file could not be opened.")
+                            } finally {
+                                if (!transferred) {
+                                    source?.close?.invoke()
+                                    credential.clear()
+                                    running = false
+                                }
+                                hold.release()
+                                staging = null
+                            }
                         }
+                        staging = job
+                        hold.attach(job)
+                        job.start()
                     }
                 }
             }
@@ -476,7 +502,7 @@ private fun RestoreRoute(controller: ChurController) {
                 controller.report("The file picker could not be opened.")
             }
         },
-        onBack = back, onCancel = controller::cancelActiveOperation,
+        onBack = back, onCancel = { staging?.cancel(); controller.cancelActiveOperation() },
     )
 }
 
@@ -814,11 +840,24 @@ private fun VaultRoute(controller: ChurController) {
                 archiveTransfers.exportedFile(uri?.toString())
             }
             archiveImportPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-                val handle = uri?.let { runCatching { context.contentResolver.openFileDescriptor(it, "r") }.getOrNull() }
-                if (uri != null && handle == null && (controller.vaultState.value as? VaultState.Unlocked)?.generation == generation) {
-                    controller.report("That file could not be opened.")
+                val staging = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
+                    var source: ArchiveSource? = null
+                    try {
+                        source = uri?.let { AndroidArchiveInput.open(context, it) }
+                        archiveTransfers.importedFile(source)
+                        source = null
+                    } catch (failure: kotlinx.coroutines.CancellationException) {
+                        archiveTransfers.importedFile(null)
+                        throw failure
+                    } catch (_: Exception) {
+                        if ((controller.vaultState.value as? VaultState.Unlocked)?.generation == generation) {
+                            controller.report("That file could not be opened.")
+                        }
+                        archiveTransfers.importedFile(null)
+                    } finally { source?.close?.invoke() }
                 }
-                archiveTransfers.importedFile(handle?.let { ArchiveSource(it.fd) { it.close() } })
+                archiveTransfers.importPickerReturned(staging)
+                staging.start()
             }
         }
     }
