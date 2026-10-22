@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Keep the system splash mask/scale aligned with the adaptive launcher icon. -->
+    <!-- A neutral launch surface cannot expose the private presentation. -->
     <style name="Theme.Chur" parent="Theme.Chur.Base">
         <item name="android:windowSplashScreenBackground">@color/canvas</item>
-        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_splash</item>
-        <item name="android:windowSplashScreenIconBackgroundColor">@color/launcher_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_public_splash</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/canvas</item>
     </style>
 </resources>

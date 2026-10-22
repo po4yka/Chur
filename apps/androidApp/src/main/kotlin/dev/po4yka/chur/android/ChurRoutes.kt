@@ -288,6 +288,12 @@ private fun ChurRoutesContent(controller: ChurController, route: AppRoute, vault
 
 @Composable
 private fun PublicShellRoute(controller: ChurController, route: AppRoute) {
+    dev.po4yka.chur.app.publicshell.PublicUtilityTheme(controller.publicUtilities) { PublicShellContent(controller, route) }
+}
+
+@Composable
+private fun PublicShellContent(controller: ChurController, route: AppRoute) {
+    val discreet by controller.publicUtilities.discreet.collectAsState()
     val shell by controller.publicShell.collectAsState()
     val error by controller.publicShellError.collectAsState()
     val disclosureDue by controller.publicDisclosureRequired.collectAsState()
@@ -297,6 +303,7 @@ private fun PublicShellRoute(controller: ChurController, route: AppRoute) {
             onBack = { controller.goTo(AppRoute.PublicShell) },
             onOpenVault = controller::openVaultEntry,
             onEncryptExternalFiles = controller::openExternalArchive,
+            discreet = discreet,
             selectedShell = shell,
             onSelectShell = controller::setPublicShell,
             error = error,
@@ -306,8 +313,10 @@ private fun PublicShellRoute(controller: ChurController, route: AppRoute) {
     key(shell) {
         when (shell) {
             PublicShellKind.NOTES -> PublicNotesShell(controller) { controller.goTo(AppRoute.PublicSettings) }
-            PublicShellKind.CALCULATOR -> CalculatorScreen(onOpenSettings = { controller.goTo(AppRoute.PublicSettings) })
+            PublicShellKind.CALCULATOR -> CalculatorScreen(onOpenSettings = { controller.goTo(AppRoute.PublicSettings) }, onSubmitCode = controller::submitPublicCode,
+                showFirstWriteDisclosure = disclosureDue, onAcknowledgeDisclosure = controller::acknowledgeDisclosure)
             PublicShellKind.CAMERA -> AndroidPublicCameraScreen(
+                onSubmitCode = controller::submitPublicCode,
                 onOpenSettings = { controller.goTo(AppRoute.PublicSettings) },
                 showFirstWriteDisclosure = disclosureDue,
                 onAcknowledgeDisclosure = controller::acknowledgeDisclosure,
@@ -329,6 +338,9 @@ private fun PublicNotesShell(controller: ChurController, onOpenSettings: () -> U
     // Saved state, so a recreation or a process restart reopens the note being
     // written; the editor saves its own draft whenever it leaves.
     var editing by rememberOpenNote()
+    val newNoteRequest by controller.publicNoteRequest.collectAsState()
+    LaunchedEffect(newNoteRequest) { controller.takePublicNoteRequest()?.let { editing = OpenNote(it, isNew = true) } }
+
     val focusManager = LocalFocusManager.current
     DisposableEffect(controller, editing != null) {
         controller.setLauncherNavigationBusy(editing != null)
@@ -340,6 +352,8 @@ private fun PublicNotesShell(controller: ChurController, onOpenSettings: () -> U
             open = open,
             savedNote = notes.firstOrNull { it.id == open.note.id },
             writeFailed = writeFailureId == open.note.id,
+            showFirstWriteDisclosure = disclosureDue,
+            onAcknowledgeDisclosure = controller::acknowledgeDisclosure,
             systemBack = { onBack -> BackHandler(onBack = onBack) },
             onSave = controller::putNote,
             onAddAttachment = controller::addPublicNoteAttachment,
@@ -377,6 +391,8 @@ private fun PublicNotesShell(controller: ChurController, onOpenSettings: () -> U
         },
         query = query,
         onQueryChange = { query = it },
+        onSubmitSearch = { if (controller.matchesPublicCode(query)) { val submitted = query; query = ""; controller.submitPublicCode(submitted) } },
+        onBulkAction = controller::updatePublicNotes,
         onOpen = { editing = OpenNote(it, isNew = false) },
         onCreate = {
             editing = OpenNote(
@@ -761,6 +777,7 @@ private fun VaultRoute(controller: ChurController) {
                 privateNoteCreateRequest = request.token
                 showingPrivateNotes = true
             }
+            LauncherAction.PUBLIC_NOTES, LauncherAction.PUBLIC_CALCULATOR, LauncherAction.PUBLIC_CAMERA -> Unit
             LauncherAction.LOCK_AND_HIDE -> Unit // Handled synchronously by the controller.
         }
     }
@@ -1339,7 +1356,7 @@ private fun VaultRoute(controller: ChurController) {
                 systemSecurity = systemSecurityLine(patchLevels, publishedCheck),
             ),
             actions = VaultActions(
-                onThumbnailsConcealedChange = { thumbnailsConcealed = it },
+                publicSettingsContent = { dev.po4yka.chur.app.publicshell.DiscreetSettings(controller) },                onThumbnailsConcealedChange = { thumbnailsConcealed = it },
                 onDestination = {
                     terms = ""
                     openAlbum = null

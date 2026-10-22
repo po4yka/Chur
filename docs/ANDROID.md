@@ -192,7 +192,7 @@ The activity MUST always be able to start in `PublicLocked`, even when the previ
 Android state restoration MAY restore:
 
 - the public shell route;
-- public notes/calculator state, from the public store and, for an open editor, from saved instance state;
+- public notes and calculator history from public storage, and an open note draft from saved instance state; calculator and transition-code inputs are never saved;
 - theme, locale, and non-secret preferences;
 - an indication that an interrupted encrypted transaction requires Rust reconciliation.
 
@@ -655,9 +655,9 @@ This session authorizes the currently open identity only. It does not unlock a v
 
 ### 14.7 Public camera
 
-The public Camera screen delegates photo capture to a system camera activity. It does not request `CAMERA`, microphone, or photo-library read permission. A dedicated non-exported FileProvider grants only the current file under `cache/public-camera/`; it does not expose the public album, vault, or export scratch. The result is bounded, oriented, and normalized before review. Cancellation and screen disposal revoke the grant and remove temporary files.
+The public Camera screen uses CameraX 1.6.2. Its lifecycle controller provides an embedded preview, JPEG capture, and H.264/AAC video. Camera permission is requested for the viewfinder; microphone permission is requested for the first video with sound. Permission alerts use an idempotent host-activity lease. A stale lease cannot end a newer session's prompt.
 
-An accepted Save photo writes atomically to `filesDir/public/camera/`, subject to the count and byte limits in [`product/DISCREET_MODE.md`](product/DISCREET_MODE.md#camera-and-public-album). Saved photos use the existing public backup include. No MediaStore row is created. Only a validated album identifier can open or delete a saved photo. The external camera owns an idempotent host-activity lease; a lease from before a lock must not end a newer session's prompt or picker.
+`PublicMediaAlbum` validates and atomically publishes completed files under `filesDir/public/camera/`. Existing UUID JPEGs remain readable. There is no count or total-byte quota; capture reserves free disk space. Pending captures are retained after failed finalization and validated on recovery. Preview images are sampled. The gallery supports file selection, playback, and confirmed deletion. Explicit export either creates MediaStore rows or grants selected FileProvider URIs; no system-gallery entry is created during ordinary capture. The provider exposes public camera files only. Backgrounding stops recording and unbinds the camera.
 
 ## 15. Metadata and derived assets
 
@@ -973,7 +973,7 @@ A Compose dialog, sheet, or popup is a separate window, outside the activity dec
 
 The public shell is a real utility surface backed by its own public data.
 
-Android launcher presentation MAY support user-selected alternatives through documented launcher components or activity aliases, subject to prototype validation across launchers and store policy.
+Android uses activity aliases for the selected public name and icon. See [ADR-0070](adr/0070-public-utilities-and-configured-entry.md). Launcher-specific acceptance remains a release gate.
 
 Requirements:
 
@@ -1523,7 +1523,7 @@ The release process answers Google Play's US export-compliance question on the b
 
 Play's Device and Network Abuse and Deceptive Behavior policies prohibit an app that hides itself or misrepresents its function. The discreet presentation stays inside those policies only while every one of the following holds, and each is a release check:
 
-- the launcher alias changes only by an explicit user action and is reversible from the public shell;
+- the launcher alias changes only after explicit configuration and can be reversed from authenticated Settings;
 - the package stays visible in Settings, installed-app lists, and device-policy tooling;
 - the public shell is a working utility rather than a facade over dormant behavior;
 - the store listing and the review notes describe the vault and the alternate icon;

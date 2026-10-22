@@ -421,7 +421,7 @@ A long-lived public owner MUST NOT retain a private session projection. There is
 
 ### 10.5 Public persistence
 
-`FileNoteStore` persists public Notes and its disclosure state as JSON. Platform preferences persist the shell choice. Camera saves confirmed JPEGs in `public/camera/`. Calculator input is transient. No Journal, calculator-history database, Room database, or DataStore is implemented.
+`FileNoteStore` persists public Notes and its disclosure state as JSON. Platform preferences persist the shell choice. Camera atomically saves completed JPEG photos and videos in `public/camera/`. `PublicUtilityStore` stores versioned calculator history (at most 500 rows) and appearance preferences in public storage. Calculator input is transient. Transition-code settings hold a digest outside backup; setup must complete a real entry and authentication trial. Unknown structured-data versions are not overwritten. No Room or DataStore is introduced.
 
 These stores are public and participate in normal platform backup. They MUST NOT contain private item counts, names, timestamps, identifiers, key slots, unlock history, or search text. [Discreet Mode](product/DISCREET_MODE.md) owns the disclosure and backup rules.
 

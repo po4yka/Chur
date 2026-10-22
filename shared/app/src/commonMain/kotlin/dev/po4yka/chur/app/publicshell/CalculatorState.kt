@@ -22,6 +22,12 @@ data class CalculatorState private constructor(
     val pendingExpression: String
         get() = if (stored != null && operation != null) "$stored ${operation.symbol}" else ""
 
+    val calculationExpression: String? get() {
+        val selected = operation ?: repeatOperation ?: return null
+        val right = if (operation != null) { if (waiting) stored!! else display } else repeatOperand!!
+        return "${if (operation != null) stored else display} ${selected.symbol} $right"
+    }
+
     fun press(key: CalculatorKey): CalculatorState {
         if (key == CalculatorKey.CLEAR) return CalculatorState()
         if (key.digit != null || key == CalculatorKey.DECIMAL) {
@@ -97,6 +103,10 @@ data class CalculatorState private constructor(
         waiting.toString(), freshInput.toString(), repeatOperation?.name ?: "", repeatOperand ?: "")
 
     companion object {
+        fun fromNumber(text: String): CalculatorState? {
+            val value = text.trim().replace(publicDecimalSeparator(), ".").replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() } ?: return null
+            return format(value)?.let { CalculatorState().copy(display = it, freshInput = true) }
+        }
         internal fun restore(values: List<String>): CalculatorState? {
             if (values.size != 8 || values.any { it.length > 64 }) return null
             val display = values[0].takeIf { it.length <= 32 && it.toDoubleOrNull()?.isFinite() == true } ?: return null
@@ -128,7 +138,7 @@ data class CalculatorState private constructor(
         }
 
         /** Twelve significant digits, with bounded scientific notation for extreme values. */
-        private fun format(value: Double): String? {
+        internal fun format(value: Double): String? {
             if (!value.isFinite() || abs(value) > 1e99 || (value != 0.0 && abs(value) < 1e-99)) return null
             if (value == 0.0) return "0"
             val magnitude = abs(value)

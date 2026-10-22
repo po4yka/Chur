@@ -2,3 +2,6 @@
 "Search" = "Поиск";
 "Lock and hide" = "Заблокировать и скрыть";
 "New private note" = "Новая приватная заметка";
+"NSCameraUsageDescription" = "Показывать видоискатель и снимать фото или видео по вашему действию.";
+"NSMicrophoneUsageDescription" = "Записывать звук вместе с видео по вашему выбору.";
+"NSPhotoLibraryAddUsageDescription" = "Сохранять выбранные фото и видео в системную медиатеку по вашему действию.";

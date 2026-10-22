@@ -218,6 +218,7 @@ data class VaultUiState(
 
 /** What the shell can ask the application to do. */
 data class VaultActions(
+    val publicSettingsContent: @Composable () -> Unit = {},
     /** Move to a destination. */
     val onDestination: (VaultDestination) -> Unit,
     /** Open one object in the viewer. */
@@ -1071,6 +1072,7 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions, onNavigatio
                 Text(line, style = MaterialTheme.typography.bodyMedium, color = colors.inkMuted)
             }
         }
+        item { actions.publicSettingsContent() }
         item {
             Text("Access", style = MaterialTheme.typography.titleMedium)
         }

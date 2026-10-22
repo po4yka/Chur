@@ -42,7 +42,7 @@ class PublicShellHostTest {
     }
 
     @Test
-    fun selection_survives_restart_and_lock_without_changing_notes_or_opening_a_vault() = scenario { root ->
+    fun selection_requires_authentication_and_survives_restart_without_changing_notes() = scenario { root ->
         var stored: String? = null
         val notes = InMemoryNoteStore()
         val note = Note("public-shell-fixture", "Public fixture", "Notes stay in Notes", 1L)
@@ -51,22 +51,25 @@ class PublicShellHostTest {
         var controller = controller(root, setting, notes)
         try {
             controller.start()
+            controller.goTo(AppRoute.PublicSettings)
+            controller.setPublicShell(PublicShell.CAMERA)
+            assertEquals(PublicShell.NOTES, controller.publicShell.value)
+            controller.create("Public-shell-password", offerRecovery = false)
+            withTimeout(10_000) { controller.route.first { it == AppRoute.Vault } }
             for (shell in PublicShell.entries) {
-                controller.goTo(AppRoute.PublicSettings)
                 controller.setPublicShell(shell)
-                controller.lock()
-                withTimeout(10_000) { controller.route.first { it == AppRoute.PublicShell } }
                 assertEquals(shell, controller.publicShell.value)
                 assertEquals(listOf(note), notes.all())
-                assertIs<VaultState.NoVault>(controller.vaultState.value)
             }
+            controller.lock()
+            withTimeout(10_000) { controller.vaultState.first { it is VaultState.Locked } }
             controller.shutdown()
             controller = controller(root, setting, notes)
             controller.start()
             assertEquals(PublicShell.CAMERA, controller.publicShell.value)
             assertEquals(listOf(note), notes.all())
             controller.openVaultEntry()
-            assertEquals(AppRoute.CreateVault, controller.route.value)
+            assertEquals(AppRoute.Unlock, controller.route.value)
         } finally { controller.shutdown() }
     }
 
@@ -77,7 +80,8 @@ class PublicShellHostTest {
             controller.start()
             controller.setPublicShell(PublicShell.CAMERA)
             assertEquals(PublicShell.NOTES, controller.publicShell.value)
-            controller.goTo(AppRoute.PublicSettings)
+            controller.create("Public-shell-password", offerRecovery = false)
+            withTimeout(10_000) { controller.route.first { it == AppRoute.Vault } }
             controller.setPublicShell(PublicShell.CAMERA)
             assertEquals(PublicShell.NOTES, controller.publicShell.value)
             assertNotNull(controller.publicShellError.value)
@@ -109,6 +113,41 @@ class PublicShellHostTest {
             controller.endPrompt(prompt)
             controller.onBackground()
             withTimeout(10_000) { controller.vaultState.first { it is VaultState.Locked } }
+        } finally { controller.shutdown() }
+    }
+
+    @Test
+    fun entry_setup_requires_the_real_trigger_and_successful_authentication() = scenario { root ->
+        val files = mutableMapOf<String, String>()
+        val store = dev.po4yka.chur.app.publicshell.PublicUtilityStore(files::get, files::put)
+        val controller = ChurController(storageRoot = root.path, privacy = NoPrivacyCover, exports = NoExports,
+            notes = InMemoryNoteStore(), publicUtilities = store, clock = { 1_700_000_000_000L })
+        try {
+            controller.start()
+            controller.create("Public-shell-password", offerRecovery = false)
+            withTimeout(10_000) { controller.route.first { it == AppRoute.Vault } }
+            controller.beginDiscreetSetup("01234567")
+            withTimeout(10_000) { controller.vaultState.first { it is VaultState.Locked } }
+            assertFalse(store.discreet.value)
+            assertFalse(controller.submitPublicCode("1234567"))
+            assertTrue(controller.submitPublicCode("01234567"))
+            assertEquals(AppRoute.Unlock, controller.route.value)
+            assertFalse(store.discreet.value)
+            controller.unlock("wrong-password")
+            withTimeout(10_000) { controller.unlocking.first { !it } }
+            assertFalse(store.discreet.value)
+            controller.unlock("Public-shell-password")
+            withTimeout(10_000) { controller.route.first { it == AppRoute.Vault } }
+            assertTrue(store.discreet.value)
+            assertTrue(store.matches("01234567"))
+            assertFalse(files.values.any { "01234567" in it })
+            controller.disableDiscreetMode()
+            controller.beginDiscreetSetup("87654321")
+            withTimeout(10_000) { controller.vaultState.first { it is VaultState.Locked } }
+            controller.openVaultEntry() // Recovery entry authenticates, but does not complete a trial.
+            controller.unlock("Public-shell-password")
+            withTimeout(10_000) { controller.route.first { it == AppRoute.Vault } }
+            assertFalse(store.discreet.value)
         } finally { controller.shutdown() }
     }
 

@@ -1,5 +1,6 @@
 package dev.po4yka.chur.app.notes
 
+import dev.po4yka.chur.app.publicshell.utilityText
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -33,13 +34,13 @@ fun NoteOrganizationFields(folder: String, tags: List<String>, enabled: Boolean,
     var invalid by remember { mutableStateOf(false) }
     val field = if (private) Modifier.fillMaxWidth().privateNoteTextFieldPolicy() else Modifier.fillMaxWidth()
     Column(verticalArrangement = Arrangement.spacedBy(ChurSpacing.one)) {
-        Text("Organization", style = MaterialTheme.typography.titleSmall)
+        Text(utilityText("Organization", "Организация"), style = MaterialTheme.typography.titleSmall)
         OutlinedTextField(folderDraft, { if (it != folderDraft) onActivity(); folderDraft = it.take(128); invalid = false }, enabled = enabled,
-            singleLine = true, label = { Text("Folder (empty for no folder)") }, modifier = field.testTag("note-folder"),
+            singleLine = true, label = { Text(utilityText("Folder (empty for no folder)", "Папка (можно не указывать)")) }, modifier = field.testTag("note-folder"),
             keyboardOptions = if (private) privateKeyboardOptions() else androidx.compose.foundation.text.KeyboardOptions.Default,
             colors = churOutlinedTextFieldColors())
         OutlinedTextField(tagDraft, { if (it != tagDraft) onActivity(); tagDraft = it.take(2048); invalid = false }, enabled = enabled,
-            singleLine = false, maxLines = 4, label = { Text("Tags (one per line)") }, modifier = field.testTag("note-tags"),
+            singleLine = false, maxLines = 4, label = { Text(utilityText("Tags (one per line)", "Теги (по одному в строке)")) }, modifier = field.testTag("note-tags"),
             keyboardOptions = if (private) privateKeyboardOptions() else androidx.compose.foundation.text.KeyboardOptions.Default,
             colors = churOutlinedTextFieldColors())
         TextButton(enabled = enabled && (folderDraft != folder || tagDraft != tags.joinToString("\n")), onClick = {
@@ -47,7 +48,7 @@ fun NoteOrganizationFields(folder: String, tags: List<String>, enabled: Boolean,
                 NoteOrganization.tags(tagDraft.lines().map { it.trim() }.filter { it.isNotEmpty() })
             } catch (_: IllegalArgumentException) { invalid = true; null }
             canonical?.let { onApply(it.first, it.second) }
-        }) { Text("Apply organization") }
+        }) { Text(utilityText("Apply organization", "Применить")) }
         if (invalid) Text("Use up to 16 tags and 64 UTF-8 bytes per folder or tag.")
     }
 }
@@ -61,11 +62,11 @@ fun NoteFilterFields(folder: String, tag: String, enabled: Boolean, private: Boo
     val field = if (private) Modifier.fillMaxWidth().privateNoteTextFieldPolicy() else Modifier.fillMaxWidth()
     Column(verticalArrangement = Arrangement.spacedBy(ChurSpacing.one)) {
         OutlinedTextField(folderDraft, { if (it != folderDraft) onActivity(); if (it.encodeToByteArray().size <= 64) folderDraft = it },
-            enabled = enabled, singleLine = true, label = { Text("Filter folder (empty for any)") }, modifier = field.testTag("note-filter-folder"),
+            enabled = enabled, singleLine = true, label = { Text(utilityText("Filter folder (empty for any)", "Папка (пусто — любая)")) }, modifier = field.testTag("note-filter-folder"),
             keyboardOptions = if (private) privateKeyboardOptions() else androidx.compose.foundation.text.KeyboardOptions.Default,
             colors = churOutlinedTextFieldColors())
         OutlinedTextField(tagDraft, { if (it != tagDraft) onActivity(); if (it.encodeToByteArray().size <= 64) tagDraft = it },
-            enabled = enabled, singleLine = true, label = { Text("Filter tag (empty for any)") }, modifier = field.testTag("note-filter-tag"),
+            enabled = enabled, singleLine = true, label = { Text(utilityText("Filter tag (empty for any)", "Тег (пусто — любой)")) }, modifier = field.testTag("note-filter-tag"),
             keyboardOptions = if (private) privateKeyboardOptions() else androidx.compose.foundation.text.KeyboardOptions.Default,
             colors = churOutlinedTextFieldColors())
         FlowRow {
@@ -73,8 +74,8 @@ fun NoteFilterFields(folder: String, tag: String, enabled: Boolean, private: Boo
                 val labels = try { NoteOrganization.folder(folderDraft).orEmpty() to NoteOrganization.folder(tagDraft).orEmpty()
                 } catch (_: IllegalArgumentException) { invalid = true; null }
                 labels?.let { onApply(it.first, it.second) }
-            }) { Text("Apply filters") }
-            TextButton(enabled = enabled, onClick = { folderDraft = ""; tagDraft = ""; onApply("", "") }) { Text("Clear filters") }
+            }) { Text(utilityText("Apply filters", "Применить фильтры")) }
+            TextButton(enabled = enabled, onClick = { folderDraft = ""; tagDraft = ""; onApply("", "") }) { Text(utilityText("Clear filters", "Сбросить фильтры")) }
         }
         if (invalid) Text("Use valid labels up to 64 UTF-8 bytes each.")
     }
@@ -87,6 +88,6 @@ fun NoteFilterSummary(folder: String, tag: String, enabled: Boolean, onClear: ()
         Text(listOfNotNull(folder.takeIf { it.isNotEmpty() }?.let { "Folder: $it" },
             tag.takeIf { it.isNotEmpty() }?.let { "Tag: $it" }).joinToString(" · "),
             Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
-        TextButton(enabled = enabled, onClick = onClear) { Text("Clear filters") }
+        TextButton(enabled = enabled, onClick = onClear) { Text(utilityText("Clear filters", "Сбросить фильтры")) }
     }
 }

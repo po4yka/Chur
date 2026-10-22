@@ -208,6 +208,7 @@ fun churController(privacy: IosPrivacyCover, exports: ExportSink): ChurControlle
             reader = { NSUserDefaults.standardUserDefaults.boolForKey("lockWholeApp") },
             writer = { NSUserDefaults.standardUserDefaults.setBool(it, forKey = "lockWholeApp") },
         ),
+        publicUtilities = dev.po4yka.chur.app.publicshell.publicUtilityStore("$documents/public/utilities", "$documents/utility-settings"),
         publicShellSetting = PublicShellSetting(
             reader = { NSUserDefaults.standardUserDefaults.stringForKey("publicShell") },
             writer = { NSUserDefaults.standardUserDefaults.setObject(it, forKey = "publicShell") },

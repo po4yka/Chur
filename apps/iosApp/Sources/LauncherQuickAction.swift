@@ -1,5 +1,8 @@
 /// Fixed, content-free Home Screen commands. Never decode shortcut userInfo.
 enum LauncherQuickAction: String, CaseIterable {
+    case publicNotes = "dev.po4yka.chur.action.public-notes"
+    case publicCalculator = "dev.po4yka.chur.action.public-calculator"
+    case publicCamera = "dev.po4yka.chur.action.public-camera"
     case importItems = "dev.po4yka.chur.action.import"
     case search = "dev.po4yka.chur.action.search"
     case lockAndHide = "dev.po4yka.chur.action.lock-and-hide"

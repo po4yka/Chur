@@ -2,3 +2,6 @@
 "Search" = "Search";
 "Lock and hide" = "Lock and hide";
 "New private note" = "New private note";
+"NSCameraUsageDescription" = "Use the viewfinder and take photos or videos when you choose.";
+"NSMicrophoneUsageDescription" = "Record sound with video when you choose.";
+"NSPhotoLibraryAddUsageDescription" = "Save selected photos and videos to your photo library when you choose.";

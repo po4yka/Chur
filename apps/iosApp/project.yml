@@ -9,6 +9,10 @@ targets:
     sources:
       - Sources
       - Resources
+      - path: Resources/filament-LICENSE
+        buildPhase: resources
+      - path: Resources/filament-THIRD-PARTY-NOTICES
+        buildPhase: resources
       - Assets.xcassets
       - ChurMirror.icon
       - SpiritRenderer/ChurSpiritRenderer.swift
@@ -25,8 +29,9 @@ targets:
         CFBundleVersion: "1"
         CADisableMinimumFrameDurationOnPhone: true
         LSRequiresIPhoneOS: true
-        NSCameraUsageDescription: "Take public photos when you tap Take photo. Photos are saved only when you choose Save photo."
-        NSPhotoLibraryAddUsageDescription: "Save selected vault media to your photo library."
+        NSCameraUsageDescription: "Use the viewfinder and take photos or videos when you choose."
+        NSMicrophoneUsageDescription: "Record sound with video when you choose."
+        NSPhotoLibraryAddUsageDescription: "Save selected photos and videos to your photo library when you choose."
         NSPhotoLibraryUsageDescription: "Import complete Live Photo resources and review deletion of imported originals only when you choose."
         NSLocalNetworkUsageDescription: "Connect directly to your other device to sync this vault while both apps are open."
         NSFaceIDUsageDescription: "Use Face ID to open your Chur vault and to confirm it's you before showing a recovery phrase."
@@ -41,19 +46,6 @@ targets:
               public.mime-type:
                 - application/vnd.chur.live-photo
         UILaunchScreen: {}
-        UIApplicationShortcutItems:
-          - UIApplicationShortcutItemType: dev.po4yka.chur.action.import
-            UIApplicationShortcutItemTitle: "Import"
-            UIApplicationShortcutItemIconSymbolName: square.and.arrow.down
-          - UIApplicationShortcutItemType: dev.po4yka.chur.action.search
-            UIApplicationShortcutItemTitle: "Search"
-            UIApplicationShortcutItemIconSymbolName: magnifyingglass
-          - UIApplicationShortcutItemType: dev.po4yka.chur.action.lock-and-hide
-            UIApplicationShortcutItemTitle: "Lock and hide"
-            UIApplicationShortcutItemIconSymbolName: lock.fill
-          - UIApplicationShortcutItemType: dev.po4yka.chur.action.new-private-note
-            UIApplicationShortcutItemTitle: "New private note"
-            UIApplicationShortcutItemIconSymbolName: square.and.pencil
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
           UISceneConfigurations:
@@ -70,6 +62,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: dev.po4yka.chur
         CODE_SIGN_ENTITLEMENTS: IncomingShare.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: ChurMirror
+        ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES: "UtilityNotes UtilityCalculator UtilityCamera"
         ARCHS: arm64
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "5.0"
@@ -122,7 +115,7 @@ targets:
     info:
       path: ShareExtension/Info.plist
       properties:
-        CFBundleDisplayName: Chur
+        CFBundleDisplayName: Save files
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
         NSExtension:

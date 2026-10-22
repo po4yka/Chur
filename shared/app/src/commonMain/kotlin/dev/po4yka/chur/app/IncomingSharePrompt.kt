@@ -47,9 +47,9 @@ fun IncomingSharePrompt(
     if (route == AppRoute.PublicShell || route == AppRoute.PublicSettings) {
         AlertDialog(
             onDismissRequest = inbox::discard,
-            title = { ExcludeWindowFromCapture(); Text("Shared with Chur") },
-            text = { Text("${pending.count} shared ${if (pending.count == 1) "item is" else "items are"} ready. Open your vault to choose where to import. Originals stay in the source app.") },
-            confirmButton = { TextButton(onClick = controller::openVaultEntry) { Text("Open vault") } },
+            title = { ExcludeWindowFromCapture(); Text("Shared files") },
+            text = { Text("${pending.count} shared ${if (pending.count == 1) "item is" else "items are"} ready. Continue to choose where to import. Originals stay in the source app.") },
+            confirmButton = { TextButton(onClick = controller::openVaultEntry) { Text("Continue") } },
             dismissButton = { TextButton(onClick = inbox::discard) { Text("Discard") } },
         )
     } else if (route == AppRoute.Vault && unlocked != null) {

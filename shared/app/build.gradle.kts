@@ -271,6 +271,7 @@ kotlin {
             // `api` rather than `implementation`: the framework exports this
             // module, and Kotlin exports only an `api` dependency.
             api(project(":shared:feature-import"))
+            implementation(libs.kotlinx.serialization.json)
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.compose.runtime)
             implementation(libs.compose.foundation)

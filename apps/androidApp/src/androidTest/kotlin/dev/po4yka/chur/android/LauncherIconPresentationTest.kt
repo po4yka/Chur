@@ -138,8 +138,8 @@ class LauncherIconPresentationTest {
                 val splash = themed.obtainStyledAttributes(intArrayOf(android.R.attr.windowSplashScreenBackground, android.R.attr.windowSplashScreenAnimatedIcon, android.R.attr.windowSplashScreenIconBackgroundColor))
                 try {
                     assertEquals(expected, splash.getColor(0, Color.TRANSPARENT))
-                    assertEquals(R.drawable.ic_splash, splash.getResourceId(1, 0))
-                    assertEquals(0xFF0A0A0A.toInt(), splash.getColor(2, Color.TRANSPARENT))
+                    assertEquals(R.drawable.ic_public_splash, splash.getResourceId(1, 0))
+                    assertEquals(expected, splash.getColor(2, Color.TRANSPARENT))
                 } finally { splash.recycle() }
             }
         }

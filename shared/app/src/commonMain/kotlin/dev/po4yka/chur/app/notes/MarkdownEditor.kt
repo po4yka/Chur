@@ -1,5 +1,6 @@
 package dev.po4yka.chur.app.notes
 
+import dev.po4yka.chur.app.publicshell.utilityText
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -126,13 +127,13 @@ internal fun MarkdownEditor(
                 }
                 if (markdown) TextButton(onClick = { preview = !preview }, enabled = enabled) { Text(if (preview) "Edit source" else "Preview") }
                 if (!readOnly) {
-                    TextButton(enabled = enabled && history.canUndo, onClick = { history.undo()?.let { publish(it, false) } }) { Text("Undo") }
-                    TextButton(enabled = enabled && history.canRedo, onClick = { history.redo()?.let { publish(it, false) } }) { Text("Redo") }
-                    TextButton(onClick = { finding = !finding; preview = false }, enabled = enabled) { Text("Find") }
+                    TextButton(enabled = enabled && history.canUndo, onClick = { history.undo()?.let { publish(it, false) } }) { Text(utilityText("Undo", "Отменить")) }
+                    TextButton(enabled = enabled && history.canRedo, onClick = { history.redo()?.let { publish(it, false) } }) { Text(utilityText("Redo", "Повторить")) }
+                    TextButton(onClick = { finding = !finding; preview = false }, enabled = enabled) { Text(utilityText("Find", "Найти")) }
                 }
-                if (markdown) TextButton(onClick = { outline = !outline }, enabled = enabled) { Text("Outline") }
+                if (markdown) TextButton(onClick = { outline = !outline }, enabled = enabled) { Text(utilityText("Outline", "Оглавление")) }
                 if (markdown && !readOnly && !preview) Box {
-                    TextButton(enabled = enabled, onClick = { formatting = true }) { Text("Format") }
+                    TextButton(enabled = enabled, onClick = { formatting = true }) { Text(utilityText("Format", "Формат")) }
                     PrivateDropdownMenu(expanded = formatting, onDismissRequest = { formatting = false }) {
                         MarkdownCommand.entries.forEach { action -> DropdownMenuItem(text = { Text(action.label) },
                             onClick = { formatting = false; command(action) }) }
@@ -140,11 +141,11 @@ internal fun MarkdownEditor(
                 }
             }
             if (finding && !readOnly) {
-                OutlinedTextField(query, { query = it }, label = { Text("Find text") }, singleLine = true,
+                OutlinedTextField(query, { query = it }, label = { Text(utilityText("Find text", "Найти текст")) }, singleLine = true,
                     keyboardOptions = if (private) privateKeyboardOptions() else androidx.compose.foundation.text.KeyboardOptions.Default,
                     modifier = Modifier.fillMaxWidth().then(if (private) Modifier.privateNoteTextFieldPolicy() else Modifier)
                         .testTag(if (private) "private-note-find" else "note-find"))
-                OutlinedTextField(replacement, { replacement = it }, label = { Text("Replace with") }, singleLine = true,
+                OutlinedTextField(replacement, { replacement = it }, label = { Text(utilityText("Replace with", "Заменить на")) }, singleLine = true,
                     keyboardOptions = if (private) privateKeyboardOptions() else androidx.compose.foundation.text.KeyboardOptions.Default,
                     modifier = Modifier.fillMaxWidth().then(if (private) Modifier.privateNoteTextFieldPolicy() else Modifier)
                         .testTag(if (private) "private-note-replace" else "note-replace"))
@@ -154,16 +155,16 @@ internal fun MarkdownEditor(
                         val from = value.selection.max.coerceAtMost(source.length)
                         val found = source.indexOf(query, from, ignoreCase = true).let { if (it < 0) source.indexOf(query, ignoreCase = true) else it }
                         if (found < 0) message = "No matches." else value = value.copy(selection = TextRange(found, found + query.length), composition = null)
-                    }) { Text("Next match") }
+                    }) { Text(utilityText("Next match", "Следующее")) }
                     TextButton(enabled = enabled && query.isNotEmpty(), onClick = {
                         if (value.text.substring(value.selection.min, value.selection.max).equals(query, ignoreCase = true)) {
                             val start = value.selection.min
                             publish(TextFieldValue(value.text.replaceRange(start, value.selection.max, replacement), TextRange(start + replacement.length)))
                         }
-                    }) { Text("Replace") }
+                    }) { Text(utilityText("Replace", "Заменить")) }
                     TextButton(enabled = enabled && query.isNotEmpty(), onClick = {
                         publish(TextFieldValue(value.text.replace(query, replacement, ignoreCase = true)))
-                    }) { Text("Replace all") }
+                    }) { Text(utilityText("Replace all", "Заменить всё")) }
                 }
             }
             if (outline && markdown) MarkdownOutline(value.text) { offset -> preview = false; value = value.copy(selection = TextRange(offset)); outline = false }
@@ -276,13 +277,13 @@ internal fun MarkdownPreview(body: String, modifier: Modifier = Modifier, onTogg
                     MarkdownSuccess(state, components, renderedModifier)
                 }
             },
-            loading = { Text("Preparing preview…") },
-            error = { Text("Preview could not be rendered. The original source is available in Edit source.") })
+            loading = { Text(utilityText("Preparing preview…", "Подготовка просмотра…")) },
+            error = { Text(utilityText("Preview could not be rendered. The original source is available in Edit source.", "Не удалось показать заметку. Исходный текст доступен в редакторе.")) })
     }
-    link?.let { uri -> PrivateAlertDialog(onDismissRequest = { link = null }, title = { Text("Open external link?") },
+    link?.let { uri -> PrivateAlertDialog(onDismissRequest = { link = null }, title = { Text(utilityText("Open external link?", "Открыть внешнюю ссылку?")) },
         text = { Text(if (openFailed) "The link could not be opened. Try again or cancel." else "The destination will receive this address.\n$uri") },
-        confirmButton = { TextButton(onClick = { try { host.openUri(uri); link = null } catch (_: Exception) { openFailed = true } }) { Text("Open") } },
-        dismissButton = { TextButton(onClick = { link = null }) { Text("Cancel") } }) }
+        confirmButton = { TextButton(onClick = { try { host.openUri(uri); link = null } catch (_: Exception) { openFailed = true } }) { Text(utilityText("Open", "Открыть")) } },
+        dismissButton = { TextButton(onClick = { link = null }) { Text(utilityText("Cancel", "Отмена")) } }) }
 }
 
 @Composable
@@ -305,7 +306,7 @@ private fun MarkdownOutline(source: String, onSelect: (Int) -> Unit) {
         }
     }
     LazyColumn(Modifier.fillMaxWidth().heightIn(max = 160.dp)) {
-        if (headings.isEmpty()) item { Text("No headings.") }
+        if (headings.isEmpty()) item { Text(utilityText("No headings.", "Заголовков нет.")) }
         items(headings, key = { it.first }) { (offset, title) -> TextButton(onClick = { onSelect(offset) }) { Text(title) } }
     }
 }

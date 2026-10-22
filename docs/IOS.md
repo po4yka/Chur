@@ -627,9 +627,9 @@ Default import stays selection-only (§15.1). Full Live Photo import (§15.3) do
 
 ### 15.5 Public camera
 
-The public Camera screen uses a photo-only `UIImagePickerController` after an explicit Take photo action. Camera access is requested at that point with `NSCameraUsageDescription`; no microphone or Photos authorization is requested by this flow. Missing camera hardware, restricted access, or a denial receives public feedback. The native picker and bounded review files belong to the public camera host, not a vault import or export.
+The public Camera screen uses an embedded AVFoundation capture session. Camera permission controls the preview. The first video with sound requests microphone access. A denial permits an explicitly silent recording. Capture uses JPEG photos and H.264/AAC QuickTime movies. Prefer the supported 1080p/30 profile; lower supported session presets provide fallback. A serial queue owns capture configuration and finalization.
 
-Save photo atomically writes a normalized JPEG to `Documents/public/camera/`. The local public album supports list, open, and confirmed deletion within the limits of [`product/DISCREET_MODE.md`](product/DISCREET_MODE.md#camera-and-public-album). This directory enters normal platform backup. No system Photos asset is created. Temporary files are protected separately and removed on discard, screen disposal, background, or scene disconnect. Generation checks reject late permission or capture callbacks. Only the camera authorization alert uses a system-prompt bracket; actual background still closes the public camera and enforces the whole-app gate.
+Completed files are validated and atomically moved into `Documents/public/camera/`, which remains in normal platform backup. Existing JPEGs remain readable. There is no count or total-byte quota. Failed files remain pending for recovery. The Kotlin/Swift bridge carries file paths, bounded thumbnail references, and metadata, never video byte arrays. The native player is released when the viewer closes. Export to Photos or a share sheet requires a separate action. Backgrounding stops recording and the capture session. Permission callbacks use generation checks. The whole-app gate and private session teardown remain unchanged.
 
 ## 16. Files import and security-scoped URLs
 
@@ -929,7 +929,7 @@ The public shell is a genuine functional utility surface with independent public
 
 ### 23.1 Alternate icons
 
-iOS MAY offer user-selected alternate application icons through supported platform APIs.
+iOS uses user-selected alternate application icons through `setAlternateIconName`. See [ADR-0070](adr/0070-public-utilities-and-configured-entry.md).
 
 Requirements:
 

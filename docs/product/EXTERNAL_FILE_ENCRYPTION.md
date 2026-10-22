@@ -2,7 +2,7 @@
 
 > **Status:** Accepted product contract; physical-device and release acceptance remain separate
 
-Open **Public Settings → Encrypt external files**, or **Vault → Settings → Backup → Encrypt external files**. This tool works before a vault is created, while it is locked, and from an unlocked vault. It does not add files to the library or change the current vault's credentials, objects, albums, notes, or synchronization state.
+Open **Vault → Settings → Backup → Encrypt external files**. This tool works before a vault is created, while it is locked, and from an unlocked vault. It does not add files to the library or change the current vault's credentials, objects, albums, notes, or synchronization state.
 
 Choose files through the system document picker. Enter a new archive password and repeat it, then use **Save to Files** or **Share**. The suggested filename is `chur-archive.churbak`. The source files are kept. The archive password is independent of any local vault password. Keep it: the archive has no password reset or recovery phrase.
 

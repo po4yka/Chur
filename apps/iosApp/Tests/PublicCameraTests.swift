@@ -20,6 +20,30 @@ final class PublicCameraTests: XCTestCase {
     }
     override func tearDownWithError() throws { try FileManager.default.removeItem(at: directory) }
 
+    func testNewCaptureFinalizationPreservesLegacyAlbumAndHasNoCountQuota() throws {
+        let album = PublicCameraAlbum(root: root)
+        try album.prepare()
+        try jpeg.write(to: source)
+        let oldID = try album.save(source)
+        let bytes = try jpeg
+        for _ in 0..<101 {
+            let pending = try album.pendingMedia(video: false)
+            try bytes.write(to: pending)
+            XCTAssertFalse(try album.mediaEntries().contains { $0.id == pending.lastPathComponent })
+            try album.commitMedia(pending)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: pending.path))
+        }
+        let reopened = PublicCameraAlbum(root: root)
+        XCTAssertEqual(try reopened.mediaEntries().count, 102)
+        XCTAssertEqual(try Data(contentsOf: reopened.mediaURL(oldID + ".jpg")), bytes)
+        let invalid = try album.pendingMedia(video: false)
+        try Data("invalid".utf8).write(to: invalid)
+        XCTAssertThrowsError(try album.commitMedia(invalid))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: invalid.path))
+        XCTAssertEqual(try reopened.mediaEntries().count, 102)
+        XCTAssertThrowsError(try album.mediaURL("../capture.jpg"))
+    }
+
     func testOnlyOwnRandomScratchJpegCanBeDeleted() throws {
         let files = PublicCameraFiles(root: directory)
         let photo = files.photo(id: UUID())

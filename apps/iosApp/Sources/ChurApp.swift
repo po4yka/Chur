@@ -81,7 +81,26 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         endPrompt: { [unowned self] in self.controller.endPrompt(bracket: $0) }
     )
 
+    private func updatePublicPresentation(enabled: Bool, shell: String) {
+        let app = UIApplication.shared
+        let rows: [(LauncherQuickAction, String, String)] = enabled ? [
+            (.publicNotes, NSLocalizedString("New note", comment: ""), "square.and.pencil"),
+            (.publicCalculator, NSLocalizedString("Calculator", comment: ""), "plus.forwardslash.minus"),
+            (.publicCamera, NSLocalizedString("Camera", comment: ""), "camera")
+        ] : [(.importItems, "Import", "square.and.arrow.down"), (.search, "Search", "magnifyingglass"),
+             (.lockAndHide, "Lock and hide", "lock.fill"), (.newPrivateNote, "New private note", "square.and.pencil")]
+        app.shortcutItems = rows.map { UIApplicationShortcutItem(type: $0.0.rawValue, localizedTitle: NSLocalizedString($0.1, comment: ""), localizedSubtitle: nil, icon: UIApplicationShortcutIcon(systemImageName: $0.2), userInfo: nil) }
+        let icon: String? = enabled ? (shell == "calculator" ? "UtilityCalculator" : shell == "camera" ? "UtilityCamera" : "UtilityNotes") : nil
+        if app.supportsAlternateIcons && app.alternateIconName != icon {
+            app.setAlternateIconName(icon) { error in
+                if error != nil { /* Keep the supported system icon. Retry on the next explicit settings change. */ }
+            }
+        }
+    }
+
     func cancelPublicCamera() { publicCamera.cancel() }
+    func suspendPublicCamera() { publicCamera.suspend() }
+    func resumePublicCamera() { publicCamera.resume() }
 
     private lazy var exports = ShareExportSink(
         present: { [weak self] url, target in
@@ -133,26 +152,34 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             storageReady = false
         }
 
-        let publicCameraReady = publicCamera.prepare()
-        IosPublicCamera.shared.capture = { [weak self] answer in
-            guard publicCameraReady, let self, self.scene != nil else { _ = answer(nil, nil, "Camera is unavailable."); return }
-            self.publicCamera.capture(answer)
+        PublicPresentation.shared.version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        PublicPresentation.shared.apply = { [weak self] enabled, shell in
+            guard let self, UIApplication.shared.applicationState == .active else { return }
+            self.updatePublicPresentation(enabled: enabled.boolValue, shell: shell)
+            return
         }
-        IosPublicCamera.shared.save = { [weak self] path, answer in
-            guard let self else { _ = answer(KotlinBoolean(bool: false), "Saving photos is unavailable."); return }
-            self.publicCamera.save(path, answer: answer)
-        }
+        _ = publicCamera.prepare()
+        IosPublicCamera.shared.previewView = { [weak self] in self?.publicCamera.view() ?? UIView() }
+        IosPublicCamera.shared.start = { [weak self] in self?.publicCamera.start() }
+        IosPublicCamera.shared.capture = { [weak self] in self?.publicCamera.capture() }
+        IosPublicCamera.shared.setVideo = { [weak self] value in self?.publicCamera.setVideo(value.boolValue) }
+        IosPublicCamera.shared.flip = { [weak self] in self?.publicCamera.flip() }
+        IosPublicCamera.shared.setZoom = { [weak self] value in self?.publicCamera.zoom(value.floatValue) }
+        IosPublicCamera.shared.setLens = { [weak self] id in self?.publicCamera.lens(id) }
+        IosPublicCamera.shared.setExposure = { [weak self] value in self?.publicCamera.exposure(value.floatValue) }
+        IosPublicCamera.shared.toggleFlash = { [weak self] in self?.publicCamera.toggleFlash() }
+        IosPublicCamera.shared.toggleSound = { [weak self] in self?.publicCamera.toggleSound() }
         IosPublicCamera.shared.list = { [weak self] in self?.publicCamera.list() ?? [] }
-        IosPublicCamera.shared.open = { [weak self] id, answer in
-            guard let self else { _ = answer(nil, "Photo is unavailable."); return }
-            self.publicCamera.open(id, answer: answer)
+        IosPublicCamera.shared.thumbnail = { [weak self] id, edge, answer in
+            guard let self else { _ = answer(nil); return }
+            self.publicCamera.thumbnail(id, edge: edge.intValue, answer: answer)
         }
-        IosPublicCamera.shared.delete_ = { [weak self] id in
-            guard let self else { return "Camera is unavailable." }
-            return self.publicCamera.delete(id)
-        }
-        IosPublicCamera.shared.discard = { [weak self] path in self?.publicCamera.discard(path) }
+        IosPublicCamera.shared.playbackView = { [weak self] id in self?.publicCamera.playback(id) }
+        IosPublicCamera.shared.closePlayback = { [weak self] in self?.publicCamera.closePlayback() }
+        IosPublicCamera.shared.delete_ = { [weak self] id in self?.publicCamera.delete(id) }
+        IosPublicCamera.shared.export_ = { [weak self] ids in self?.publicCamera.export(ids) }
         IosPublicCamera.shared.cancel = { [weak self] in self?.publicCamera.cancel() }
+        IosPublicCamera.shared.retry = { [weak self] in self?.publicCamera.retry() }
         let mediaScratchReady = MediaPickerDelegate.prepareScratch()
         IosMediaPicker.shared.present = { [weak self] answer in
             guard mediaScratchReady, let scene = self?.scene else { MediaPickerDelegate.answerNothing(answer); return }
@@ -297,6 +324,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         host.refreshIncomingShares { [weak self] in
             guard let self, self.host.scene === self,
                 UIApplication.shared.applicationState == .active else { return }
+            self.host.controller.refreshPublicPresentation()
             IosLauncherActions.shared.setSceneReady(ready: true)
             self.quickActions.activate(perform: self.performQuickAction)
         }
@@ -339,7 +367,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         IosLauncherActions.shared.setSceneReady(ready: false)
         // An action still waiting for the inbox/scene belongs to this visit.
         quickActions.cancel()
-        host.cancelPublicCamera()
+        host.suspendPublicCamera()
         // Recheck before UIKit takes the switcher picture: native work can
         // finish between lifecycle callbacks even when its stale UI result
         // is rejected by the controller. Attaching an existing cover is safe.
@@ -352,6 +380,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidBecomeActive(_ scene: UIScene) {
+        host.resumePublicCamera()
         if !quickActionMaskPending { host.privacy.detach() }
         // UIApplication can remain inactive during the scene callback. Check
         // its foreground guard after UIKit completes that state transition.

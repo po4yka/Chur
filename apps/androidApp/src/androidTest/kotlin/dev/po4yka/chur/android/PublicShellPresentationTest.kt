@@ -51,32 +51,20 @@ class PublicShellPresentationTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
 
     @Test
-    fun spirit_is_opt_in_and_suppressed_during_search_disclosure_and_dialogs() {
+    fun notes_keep_search_and_settings_without_brand_controls() {
         val query = mutableStateOf("")
-        val disclosure = mutableStateOf(false)
-        val companion = "Chur companion. Drag to move, activate to greet."
-        present(content = { NotesScreen(emptyList(), query.value, { query.value = it }, {}, {}, {},
-            showFirstWriteDisclosure = disclosure.value) }) { f ->
-            assertFalse(f.has(companion))
-            f.click("Show Chur")
-            assertTrue(f.await { f.has(companion) })
-            f.click("Folders and tags")
-            assertTrue(f.await { !f.has(companion) })
-            f.click("Close")
-            assertTrue(f.await { f.has(companion) })
-            instrumentation.runOnMainSync { query.value = "search" }
-            assertTrue(f.await { !f.has(companion) })
-            instrumentation.runOnMainSync { query.value = ""; disclosure.value = true }
-            assertTrue(f.await { !f.has(companion) })
-            instrumentation.runOnMainSync { disclosure.value = false }
-            assertTrue(f.await { f.has(companion) })
-            f.click("Hide Chur")
-            assertTrue(f.await { !f.has(companion) })
+        present(content = { NotesScreen(notes = emptyList(), query = query.value, onQueryChange = { query.value = it }, onOpen = {}, onCreate = {}, onOpenSettings = {}, showFirstWriteDisclosure = false) }) { f ->
+            assertTrue(f.await { f.has("Search notes") })
+            assertFalse(f.has("Show Chur"))
+            assertFalse(f.has("Chur companion. Drag to move, activate to greet."))
+            f.click("More")
+            f.capture("public-notes-320-font2.png")
+            f.assertLabelFits("Notes")
         }
     }
 
     @Test
-    fun narrow_double_font_calculator_keeps_keys_result_and_settings_reachable() {
+    fun narrow_double_font_calculator_keeps_keys_history_and_settings_reachable() {
         var settings = 0
         present(content = { CalculatorScreen(onOpenSettings = { settings++ }) }) { f ->
             for (key in listOf("2", "Add", "3", "Equals")) f.click(key)
@@ -89,117 +77,158 @@ class PublicShellPresentationTest {
             f.reveal("Equals")
             f.assertLabelFits("=")
             f.capture("public-calculator-keys-320-font2.png")
+            f.click("History")
+            assertTrue(f.await { f.has("Use") })
+            f.click("Use")
+            assertTrue(f.await { f.has("Calculator result: 5") })
         }
     }
 
     @Test
-    fun public_selector_has_all_shells_and_a_visible_vault_entry_at_double_font() {
-        val selected = mutableStateOf(PublicShell.NOTES)
+    fun calculator_consumes_exact_code_only_on_equals_without_history() {
+        var entries = 0
+        present(content = { CalculatorScreen(onOpenSettings = {}, onSubmitCode = { if (it == "01234567") { entries++; true } else false }) }) { f ->
+            f.click("2")
+            f.click("Add")
+            for (digit in "01234567") f.click(digit.toString())
+            f.click("Equals")
+            assertEquals(0, entries)
+            f.click("Clear all")
+            for (digit in "01234567") f.click(digit.toString())
+            assertEquals(0, entries)
+            f.click("Equals")
+            assertEquals(1, entries)
+            assertTrue(f.await { f.has("Calculator result: 0") })
+            f.click("History")
+            assertFalse(f.has("01234567"))
+            assertTrue(f.await { f.has("1234569") })
+        }
+    }
+
+    @Test
+    fun discreet_settings_offer_storage_and_accessible_recovery_only() {
         var opens = 0
         var backs = 0
-        present(content = { PublicSettingsScreen(onBack = { backs++ }, onOpenVault = { opens++ },
-            selectedShell = selected.value, onSelectShell = { selected.value = it }) }) { f ->
-            for (shell in PublicShell.entries) {
-                f.click(shell.label)
-                assertEquals(shell, selected.value)
-                assertTrue(f.await { f.isSelected(shell.label) })
-            }
-            f.capture("public-shell-selector-320-font2.png")
-            f.click(Disclosure.VAULT_ENTRY)
+        present(content = { PublicSettingsScreen(onBack = { backs++ }, onOpenVault = { opens++ }, discreet = true) }) { f ->
+            assertFalse(f.has(Disclosure.VAULT_ENTRY))
+            f.click("About")
+            val version = "Version " + dev.po4yka.chur.app.publicshell.PublicPresentation.version
+            f.hold(version)
             assertEquals(1, opens)
-            f.assertLabelFits(Disclosure.VAULT_ENTRY)
-            f.capture("public-shell-vault-entry-320-font2.png")
-            assertTrue(f.has(PUBLIC_CAMERA_DISCLOSURE))
+            f.assertLabelFits(version)
+            f.capture("public-settings-320-font2.png")
             f.click("Back")
             assertEquals(1, backs)
         }
     }
 
     @Test
-    fun camera_requires_public_confirmation_and_explicit_save_and_delete() {
-        val capture = mutableStateOf(false)
+    fun camera_discloses_before_capture_and_confirms_gallery_deletion() {
         val selected = mutableStateOf<String?>(null)
         val acknowledged = mutableStateOf(false)
         val photos = mutableStateOf(listOf(PublicCameraPhoto("sample", "Public sample photo")))
-        // UI-owned pixels stay alive for pending Compose frames. This is not a native capture.
-        val preview = Bitmap.createBitmap(96, 64, Bitmap.Config.ARGB_8888).apply {
-            eraseColor(0xFF2764A5.toInt())
-        }.asImageBitmap()
+        val preview = Bitmap.createBitmap(96, 64, Bitmap.Config.ARGB_8888).apply { eraseColor(0xFF2764A5.toInt()) }.asImageBitmap()
         var captures = 0
-        var saves = 0
-        var discards = 0
-        var settings = 0
         var deletes = 0
         present(content = {
-            CameraScreen(preview = preview, hasCapture = capture.value, busy = false, message = null,
-                showFirstWriteDisclosure = !acknowledged.value,
-                onAcknowledgeDisclosure = { acknowledged.value = true },
-                onCapture = { captures++; capture.value = true },
-                onSave = { saves++; capture.value = false },
-                onDiscard = { discards++; capture.value = false }, onOpenSettings = { settings++ },
-                photos = photos.value, selectedPhotoId = selected.value,
-                onOpenPhoto = { selected.value = it }, onClosePhoto = { selected.value = null },
+            CameraScreen(preview = preview, hasCapture = false, busy = false, message = null,
+                showFirstWriteDisclosure = !acknowledged.value, onAcknowledgeDisclosure = { acknowledged.value = true },
+                onCapture = { captures++ }, onOpenSettings = {}, photos = photos.value, selectedPhotoId = selected.value,
+                thumbnail = { preview }, onOpenPhoto = { selected.value = it }, onClosePhoto = { selected.value = null },
                 onDeletePhoto = { deletes++; photos.value = photos.value.filterNot { p -> p.id == it }; selected.value = null })
         }) { f ->
-            assertTrue(f.await { f.has(PUBLIC_CAMERA_DISCLOSURE) })
-            f.click("Settings")
-            assertEquals(1, settings)
             f.click("Take photo")
-            assertTrue(f.await { f.has("Public camera") })
+            assertTrue(f.await { f.has("Data storage") })
             assertEquals(0, captures)
-            f.capture("public-camera-disclosure-320-font2.png", dialogTitle = "Public camera")
+            f.capture("public-camera-disclosure-320-font2.png", dialogTitle = "Data storage")
             f.click("Cancel")
-            assertEquals(0, captures)
             assertFalse(acknowledged.value)
             f.click("Take photo")
-            f.click("Continue")
-            assertEquals(1, captures)
+            f.click("Got it")
             assertTrue(acknowledged.value)
-            assertEquals(0, saves)
-            f.reveal("Save photo")
-            f.assertLabelFits("Save photo")
-            f.capture("public-camera-review-320-font2.png")
-            f.click("Settings")
-            assertEquals(2, settings)
-            f.click("Save photo")
-            assertEquals(1, saves)
-            assertEquals(0, discards)
+            f.click("Take photo")
+            assertTrue(f.await { captures == 1 })
+            f.capture("public-camera-320-font2.png")
+            f.click("Gallery")
             f.click("Public sample photo")
             assertEquals("sample", selected.value)
-            f.click("Delete photo")
-            assertTrue(f.await { f.has("Delete public photo?") })
+            f.click("Delete")
+            assertTrue(f.await { f.has("Delete selected files?") })
             f.click("Cancel")
             assertEquals(0, deletes)
-            assertEquals(1, photos.value.size)
-            f.click("Delete photo")
-            f.capture("public-camera-delete-320-font2.png", dialogTitle = "Delete public photo?")
             f.click("Delete")
+            f.capture("public-camera-delete-320-font2.png", dialogTitle = "Delete selected files?")
+            f.confirm("Delete")
             assertEquals(1, deletes)
             assertTrue(photos.value.isEmpty())
         }
     }
 
-    private fun present(content: @Composable () -> Unit, test: (Fixture) -> Unit) {
+    @Test
+    fun silent_video_status_does_not_overlap_permission_message() {
+        val status = "Microphone access is off. Video will have no sound."
+        present(content = {
+            CameraScreen(preview = null, hasCapture = false, busy = false, message = status,
+                showFirstWriteDisclosure = false, onAcknowledgeDisclosure = {}, onCapture = {},
+                onOpenSettings = {}, videoMode = true, sound = false)
+        }) { f ->
+            assertTrue(f.await { f.has(status) && f.has("No sound") })
+            f.assertVerticallySeparated(status, "No sound")
+            f.capture("public-camera-microphone-denied-320-font2.png")
+        }
+    }
+
+    @Test
+    fun public_screens_render_in_both_languages_themes_and_adaptive_sizes() {
+        val original = java.util.Locale.getDefault()
+        val originalList = android.os.LocaleList.getDefault()
+        try {
+            for (language in listOf("en", "ru")) for (dark in listOf(false, true)) {
+                java.util.Locale.setDefault(java.util.Locale.forLanguageTag(language))
+                android.os.LocaleList.setDefault(android.os.LocaleList(java.util.Locale.forLanguageTag(language)))
+                for ((width, height) in listOf(320 to 640, 640 to 320, 700 to 800)) {
+                    val suffix = "$language-${if (dark) "dark" else "light"}-$width-$height"
+                    present(width, height, 1f, dark, language, content = { CalculatorScreen(onOpenSettings = {}) }) { f ->
+                        f.click("2"); f.click(if (language == "ru") "Прибавить" else "Add")
+                        f.capture("matrix-calculator-$suffix.png")
+                    }
+                    present(width, height, 1f, dark, language, content = { NotesScreen(notes = emptyList(), query = "", onQueryChange = {}, onOpen = {}, onCreate = {}, onOpenSettings = {}) }) { f ->
+                        assertTrue(f.await { f.has(if (language == "ru") "Поиск заметок" else "Search notes") })
+                        f.capture("matrix-notes-$suffix.png")
+                    }
+                    present(width, height, 1f, dark, language, content = { CameraScreen(preview = null, hasCapture = false, busy = false, message = null,
+                        showFirstWriteDisclosure = false, onAcknowledgeDisclosure = {}, onCapture = {}, onOpenSettings = {}) }) { f ->
+                        f.click(if (language == "ru") "Снять фото" else "Take photo")
+                        f.capture("matrix-camera-$suffix.png")
+                    }
+                }
+            }
+        } finally { java.util.Locale.setDefault(original); android.os.LocaleList.setDefault(originalList) }
+    }
+
+    private fun present(width: Int = 320, height: Int = 640, scale: Float = 2f, dark: Boolean = false, language: String = "en", content: @Composable () -> Unit, test: (Fixture) -> Unit) {
         val activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         try {
             val f = Fixture(activity)
             f.main {
+                android.os.LocaleList.setDefault(android.os.LocaleList(java.util.Locale.forLanguageTag(language)))
                 val density = activity.resources.displayMetrics.density
                 val config = Configuration(activity.resources.configuration).apply {
-                    screenWidthDp = 320; screenHeightDp = 640; fontScale = 2f
+                    screenWidthDp = width; screenHeightDp = height; fontScale = scale; setLocale(java.util.Locale.forLanguageTag(language))
                 }
                 val context = ContextThemeWrapper(activity, activity.theme).apply { applyOverrideConfiguration(config) }
                 f.view = ComposeView(context).apply {
                     setLayerType(View.LAYER_TYPE_SOFTWARE, null)
                     setContent {
-                        CompositionLocalProvider(LocalDensity provides Density(density, 2f), LocalConfiguration provides config) {
-                            ChurTheme(dark = false, content = content)
+                        val rememberStore = androidx.compose.runtime.remember { dev.po4yka.chur.app.publicshell.PublicUtilityStore().apply { setAppearance(if (dark) "dark" else "light") } }
+                        CompositionLocalProvider(LocalDensity provides Density(density, scale), LocalConfiguration provides config) {
+                            dev.po4yka.chur.app.publicshell.PublicUtilityTheme(rememberStore, content)
                         }
                     }
                 }
                 activity.setContentView(FrameLayout(activity).apply {
-                    addView(f.view, FrameLayout.LayoutParams((320 * density).toInt(), (640 * density).toInt()))
+                    addView(f.view, FrameLayout.LayoutParams((width * density).toInt(), (height * density).toInt()))
                 })
             }
             test(f)
@@ -235,9 +264,14 @@ class PublicShellPresentationTest {
                     val node = requireNotNull(find(label))
                     val top = node.positionInWindow.y
                     val bottom = top + node.size.height
-                    val position = IntArray(2); view.getLocationOnScreen(position)
-                    val low = position[1] + view.height - 1f
-                    val high = position[1] + if (label == "Settings" || label == "Back" || label == "Calculator") 0f
+                    val window = WindowInspector.getGlobalWindowViews().first { root ->
+                        root.roots().any { r -> r.semanticsOwner.getAllSemanticsNodes(mergingEnabled = true).any { it.id == node.id } }
+                    }
+                    val mainWindow = window === activity.window.decorView
+                    val position = IntArray(2); view.getLocationInWindow(position)
+                    val low = if (mainWindow) position[1] + view.height - 1f else window.height - 1f
+                    val high = if (!mainWindow) 0f else position[1] +
+                        if (label in listOf("Settings", "Back", "Calculator", "More")) 0f
                         else 64 * view.resources.displayMetrics.density
                     visible = top >= high && bottom <= low && bottom > top
                     if (!visible) {
@@ -258,6 +292,19 @@ class PublicShellPresentationTest {
                 val node = nodes().first { label in it.labels && SemanticsActions.OnClick in it.config }
                 assertTrue(node.config[SemanticsActions.OnClick].action?.invoke() == true)
             }
+            frames()
+        }
+        fun hold(label: String) {
+            reveal(label)
+            main { assertTrue(requireNotNull(find(label)).config[SemanticsActions.OnLongClick].action?.invoke() == true) }
+        }
+        fun confirm(label: String) {
+            main { val node = nodes().last { label in it.labels && SemanticsActions.OnClick in it.config }; assertTrue(node.config[SemanticsActions.OnClick].action?.invoke() == true) }
+        }
+        fun assertVerticallySeparated(upper: String, lower: String) = main {
+            val first = requireNotNull(find(upper)).boundsInWindow
+            val second = requireNotNull(find(lower)).boundsInWindow
+            assertTrue("Status labels overlap: $first and $second", first.bottom <= second.top)
         }
         fun assertLabelFits(label: String) = main {
             val node = nodes(false).first { n -> n.config.getOrNull(SemanticsProperties.Text)?.any { it.text == label } == true &&

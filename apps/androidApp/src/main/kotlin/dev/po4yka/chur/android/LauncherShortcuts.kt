@@ -80,8 +80,12 @@ internal object LauncherToken {
 }
 
 internal fun launcherShortcutInfos(context: Context): List<ShortcutInfo> =
-    LauncherAction.entries.mapIndexed { rank, action ->
+    (if (PublicLauncherPresentation.enabled(context)) listOf(LauncherAction.PUBLIC_NOTES, LauncherAction.PUBLIC_CALCULATOR, LauncherAction.PUBLIC_CAMERA)
+        else LauncherAction.entries.filter { it.publicShell == null }).mapIndexed { rank, action ->
         val (label, icon) = when (action) {
+            LauncherAction.PUBLIC_NOTES -> R.string.public_new_note to R.drawable.ic_public_notes
+            LauncherAction.PUBLIC_CALCULATOR -> R.string.public_calculator to R.drawable.ic_public_calculator
+            LauncherAction.PUBLIC_CAMERA -> R.string.public_camera to R.drawable.ic_public_camera
             LauncherAction.IMPORT -> R.string.launcher_import to R.drawable.ic_launcher_import
             LauncherAction.SEARCH -> R.string.launcher_search to R.drawable.ic_launcher_search
             LauncherAction.LOCK_AND_HIDE -> R.string.launcher_lock_and_hide to R.drawable.ic_launcher_lock
@@ -93,7 +97,7 @@ internal fun launcherShortcutInfos(context: Context): List<ShortcutInfo> =
             else -> label
         }
         ShortcutInfo.Builder(context, action.shortcutId)
-            .setActivity(ComponentName(context, MainActivity::class.java))
+            .setActivity(PublicLauncherPresentation.component(context))
             .setShortLabel(context.getString(shortLabel))
             .setLongLabel(context.getString(label))
             .setIcon(Icon.createWithResource(context, icon))
@@ -144,6 +148,9 @@ internal object LauncherShortcuts {
             Log.w("ChurShortcuts", "App actions refresh was rate limited.")
             return
         }
+        val obsolete = manager.pinnedShortcuts.filter { it.id !in all.map { item -> item.id } }.map { it.id }
+        if (obsolete.isNotEmpty()) manager.disableShortcuts(obsolete)
+        manager.enableShortcuts(all.map { it.id })
         // Also update mutable pinned copies omitted from a small launcher's menu.
         val pinnedIds = manager.pinnedShortcuts.map { it.id }.toSet()
         val pinnedOnly = all.filter { it.id in pinnedIds && it.id !in visible.map { item -> item.id } }

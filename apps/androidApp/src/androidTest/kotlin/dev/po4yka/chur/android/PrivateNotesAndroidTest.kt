@@ -295,7 +295,7 @@ class PrivateNotesAndroidTest {
                                     onClose = {}, onLock = { controller.lock() },
                                     onPanic = { fixture.scope.launch { vault.lock(LockReason.PANIC) } }, onTouch = {}, onExport = {}, systemBack = { _, _ -> },
                                     lockOwner = controller)
-                                else NotesScreen(listOf(PUBLIC_NOTE), "", {}, {}, {}, {})
+                                else NotesScreen(notes = listOf(PUBLIC_NOTE), query = "", onQueryChange = {}, onOpen = {}, onCreate = {}, onOpenSettings = {})
                             }
                         }
                     }

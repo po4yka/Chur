@@ -1,5 +1,8 @@
 # App icon actions
 
+Discreet Mode publishes only New note, Calculator, and Photo. These actions open public tools without unlocking a vault, and respect the whole-app gate. The fixed private actions below apply only outside Discreet Mode. iOS registers actions dynamically so no static private label survives a mode change. Android disables obsolete pinned actions; a launcher may retain their old labels. No shortcut contains a transition code.
+
+
 > **Status:** Accepted implementation contract; physical-device and release gates remain separate
 
 Touch and hold Chur's Home Screen or launcher icon to open the system menu. Chur offers four fixed commands in priority order: **Import**, **Search**, **Lock and hide**, and **New private note**. A launcher may display fewer commands. The same capabilities are available inside the app.

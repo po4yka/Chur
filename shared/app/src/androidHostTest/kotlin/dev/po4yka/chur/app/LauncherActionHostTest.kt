@@ -245,6 +245,47 @@ class LauncherActionHostTest {
         assertTrue(controller.acknowledgeLauncherAction(second.token, second.generation))
     }
 
+    @Test
+    fun public_shortcuts_work_without_a_vault_and_new_note_is_delivered_once() = scenario(start = false) {
+        assertTrue(controller.requestLauncherAction(LauncherAction.PUBLIC_NOTES))
+        controller.start()
+        assertEquals(AppRoute.PublicShell, controller.route.value)
+        assertIs<VaultState.NoVault>(controller.vaultState.value)
+        assertNotNull(controller.takePublicNoteRequest())
+        assertNull(controller.takePublicNoteRequest())
+        assertTrue(controller.requestLauncherAction(LauncherAction.PUBLIC_CAMERA))
+        assertEquals(PublicShell.CAMERA, controller.publicShell.value)
+        assertNull(controller.launcherRequest.value)
+    }
+
+    @Test
+    fun a_public_shortcut_revokes_inflight_authentication_and_respects_the_whole_app_gate() = scenario {
+        create()
+        lock()
+        controller.openVaultEntry()
+        val paused = StandardTestDispatcher()
+        Dispatchers.setMain(paused)
+        try {
+            controller.unlock(PASSWORD)
+            assertTrue(controller.requestLauncherAction(LauncherAction.PUBLIC_CALCULATOR))
+            assertEquals(AppRoute.PublicShell, controller.route.value)
+        } finally {
+            Dispatchers.setMain(Dispatchers.Unconfined)
+            paused.scheduler.runCurrent()
+        }
+        waitForAttempt()
+        withTimeout(10_000) { controller.vaultState.first { it is VaultState.Locked } }
+        assertEquals(AppRoute.PublicShell, controller.route.value)
+        controller.openVaultEntry()
+        controller.unlock(PASSWORD)
+        waitForAttempt()
+        controller.toggleAppLock()
+        withTimeout(10_000) { controller.appLockEnabled.first { it } }
+        lock()
+        assertTrue(controller.requestLauncherAction(LauncherAction.PUBLIC_CAMERA))
+        assertEquals(AppRoute.AppUnlock, controller.route.value)
+    }
+
     private fun scenario(start: Boolean = true, appLock: Boolean = false, test: suspend Fixture.() -> Unit) = runBlocking {
         Dispatchers.setMain(Dispatchers.Unconfined)
         val root = File(System.getProperty("java.io.tmpdir"), "chur-launcher-${System.nanoTime()}")

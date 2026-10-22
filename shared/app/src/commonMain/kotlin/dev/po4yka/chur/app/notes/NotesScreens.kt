@@ -1,6 +1,11 @@
 package dev.po4yka.chur.app.notes
 
 import dev.po4yka.chur.app.ExcludeWindowFromCapture
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
+import dev.po4yka.chur.app.publicshell.utilityText
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +23,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -51,8 +57,6 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import dev.po4yka.chur.app.spirit.SpiritOverlay
-import dev.po4yka.chur.app.spirit.shouldShowSpiritInNotes
 import dev.po4yka.chur.app.theme.BackGlyph
 import dev.po4yka.chur.app.theme.ChurSpacing
 import dev.po4yka.chur.app.theme.DestructiveButton
@@ -88,6 +92,8 @@ fun NotesScreen(
     notes: List<Note>,
     query: String,
     onQueryChange: (String) -> Unit,
+    onSubmitSearch: () -> Unit = {},
+    onBulkAction: suspend (List<Note>, Boolean?) -> Unit = { _, _ -> },
     onOpen: (Note) -> Unit,
     onCreate: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -101,13 +107,9 @@ fun NotesScreen(
     onPurge: suspend (String) -> Unit = { error("purge unavailable") },
 ) {
     val scope = rememberCoroutineScope()
-    var spiritControlsHeight by remember { mutableStateOf(0) }
-    val spiritDensity = LocalDensity.current
-    var spiritEnabled by remember { mutableStateOf(false) }
-    // Read the IME inset through derived state: the inset animates every frame, but
-    // the screen only needs to recompose when the keyboard appears or disappears.
-    val ime = WindowInsets.ime
-    val keyboardVisible by remember(ime, spiritDensity) { derivedStateOf { ime.getBottom(spiritDensity) > 0 } }
+    var tools by remember { mutableStateOf(false) }
+    var selecting by remember { mutableStateOf(false) }
+    var selection by remember { mutableStateOf(setOf<String>()) }
     var packageBusy by remember { mutableStateOf(false) }
     var packageFailed by remember { mutableStateOf(false) }
     var importFailed by remember { mutableStateOf(false) }
@@ -117,59 +119,28 @@ fun NotesScreen(
     var tag by remember { mutableStateOf("") }
     var pendingPurge by remember { mutableStateOf<Note?>(null) }
     if (filters) AlertDialog(onDismissRequest = { filters = false },
-        title = { ExcludeWindowFromCapture(); Text("Folders and tags") },
+        title = { ExcludeWindowFromCapture(); Text(utilityText("Folders and tags", "Папки и теги")) },
         text = { Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
             NoteFilterFields(folder, tag, !packageBusy, onApply = { f, t -> folder = f; tag = t; filters = false })
         } },
-        confirmButton = { TextButton(onClick = { filters = false }) { Text("Close") } })
+        confirmButton = { TextButton(onClick = { filters = false }) { Text(utilityText("Close", "Закрыть")) } })
 
     pendingPurge?.let { note -> AlertDialog(onDismissRequest = { pendingPurge = null },
-        title = { ExcludeWindowFromCapture(); Text("Delete this note permanently?") },
-        text = { Text("The note, its retained versions and all their files will be removed. You cannot undo this.") },
+        title = { ExcludeWindowFromCapture(); Text(utilityText("Delete this note permanently?", "Удалить заметку навсегда?")) },
+        text = { Text(utilityText("The note, its retained versions and all their files will be removed. You cannot undo this.", "Заметка, её версии и вложения будут удалены. Это действие нельзя отменить.")) },
         confirmButton = { TextButton(enabled = !packageBusy, onClick = {
             packageBusy = true
             scope.launch { try { onPurge(note.id); pendingPurge = null; packageFailed = false
             } catch (cancelled: CancellationException) { throw cancelled
             } catch (_: Exception) { packageFailed = true
             } finally { packageBusy = false } }
-        }) { Text("Delete permanently") } },
-        dismissButton = { TextButton(onClick = { pendingPurge = null }) { Text("Cancel") } }) }
-    val colors = LocalChurColors.current
-    Scaffold(
-        containerColor = colors.canvas,
-        topBar = {
-            TopAppBar(
-                title = { Text("Notes") },
-                actions = {
+        }) { Text(utilityText("Delete permanently", "Удалить навсегда")) } },
+        dismissButton = { TextButton(onClick = { pendingPurge = null }) { Text(utilityText("Cancel", "Отмена")) } }) }
+                if (tools) ModalBottomSheet(onDismissRequest = { tools = false }) {
+                Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()).padding(16.dp)) {
                     NoteImportAction(onImported = onImport, onFailure = { importFailed = true })
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(SettingsGlyph, contentDescription = "Settings")
-                    }
-                },
-            )
-        },
-        floatingActionButton = {
-            if (!trash && notes.isNotEmpty()) {
-                FloatingActionButton(onClick = onCreate) {
-                    Icon(PlusGlyph, contentDescription = "New note")
-                }
-            }
-        },
-    ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                FlowRow(Modifier.onSizeChanged { spiritControlsHeight = it.height }) {
-                    TextButton(onClick = { spiritEnabled = !spiritEnabled }) {
-                        Text(if (spiritEnabled) "Hide Chur" else "Show Chur")
-                    }
-                    TextButton(enabled = !packageBusy, onClick = { trash = !trash; if (trash) onRefreshTrash() }) {
-                        Text(if (trash) "Active notes" else "Trash")
-                    }
-                    TextButton(enabled = !packageBusy && !filters, onClick = { filters = true }) { Text("Folders and tags") }
-                }
-                NoteFilterSummary(folder, tag, !packageBusy && !filters) { folder = ""; tag = "" }
-                if (importFailed) Text("The Markdown file could not be imported. Use UTF-8 text up to 256 KiB.", color = colors.error)
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                    TextButton(onClick = { selecting = !selecting; selection = emptySet(); tools = false }) { Text(utilityText("Select notes", "Выбрать заметки")) }
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
                     NoteBinaryImportAction("Import note package", NoteAttachments.MAX_PACKAGE_BYTES, enabled = !packageBusy,
                         onImported = { _, bytes ->
                             packageBusy = true
@@ -182,11 +153,68 @@ fun NotesScreen(
                                 } finally { bytes.fill(0); packageBusy = false }
                             }
                         }, onFailure = { packageFailed = true })
-                    if (packageBusy) Text("Importing…")
+                    if (packageBusy) Text(utilityText("Importing…", "Импорт…"))
                 }
-                if (packageFailed) Text("The note operation failed. Your saved notes are unchanged; try again.", color = colors.error)
+                }
+                }
+    val colors = LocalChurColors.current
+    Scaffold(
+        containerColor = colors.canvas,
+        topBar = {
+            TopAppBar(
+                title = { Text(utilityText("Notes", "Заметки")) },
+                actions = {
+                    TextButton(onClick = { tools = !tools }) { Text(utilityText("More", "Ещё")) }
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(SettingsGlyph, contentDescription = utilityText("Settings", "Настройки"))
+                    }
+                },
+            )
+        },
+        floatingActionButton = {
+            if (!trash && notes.isNotEmpty()) {
+                FloatingActionButton(onClick = onCreate) {
+                    Icon(PlusGlyph, contentDescription = utilityText("New note", "Новая заметка"))
+                }
+            }
+        },
+    ) { padding ->
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                FlowRow {
+                    TextButton(enabled = !packageBusy, onClick = { trash = !trash; if (trash) onRefreshTrash() }) {
+                        Text(if (trash) utilityText("Active notes", "Заметки") else utilityText("Trash", "Корзина"))
+                    }
+                    TextButton(enabled = !packageBusy && !filters, onClick = { filters = true }) { Text(utilityText("Folders and tags", "Папки и теги")) }
+                }
+                NoteFilterSummary(folder, tag, !packageBusy && !filters) { folder = ""; tag = "" }
+                if (importFailed) Text("The Markdown file could not be imported. Use UTF-8 text up to 256 KiB.", color = colors.error)
+                if (packageFailed) Text(utilityText("The action could not be completed. Check your notes and try again.", "Не удалось завершить действие. Проверьте заметки и повторите попытку."), color = colors.error)
                 if (showFirstWriteDisclosure) {
                     FirstWriteDisclosure(onAcknowledge = onAcknowledgeDisclosure)
+                }
+                OutlinedTextField(value = query, onValueChange = onQueryChange, singleLine = true,
+                    label = { Text(utilityText("Search notes", "Поиск заметок")) },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { onSubmitSearch() }),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = ChurSpacing.gutter),
+                    colors = churOutlinedTextFieldColors())
+                if (selecting && !trash) {
+                    FlowRow {
+                        TextButton(onClick = { selection = notes.map { it.id }.toSet() }) { Text(utilityText("Select all", "Выбрать все")) }
+                        listOf(true to "Pin", false to "Unpin", null to "Trash").forEach { (pin, label) ->
+                            TextButton(enabled = selection.isNotEmpty() && !packageBusy, onClick = {
+                                packageBusy = true
+                                scope.launch {
+                                    try { onBulkAction(notes.filter { it.id in selection }, pin); selection = emptySet(); selecting = false; packageFailed = false }
+                                    catch (cancelled: CancellationException) { throw cancelled }
+                                    catch (_: Exception) { packageFailed = true }
+                                    finally { packageBusy = false }
+                                }
+                            }) { Text(label) }
+                        }
+                        TextButton(onClick = { selecting = false; selection = emptySet() }) { Text(utilityText("Done", "Готово")) }
+                    }
                 }
                 val source = if (trash) trashedNotes else notes
                 if (source.isEmpty() && !trash) {
@@ -195,17 +223,9 @@ fun NotesScreen(
                         onCreate()
                     })
                 } else {
-                    OutlinedTextField(
-                        value = query,
-                        onValueChange = onQueryChange,
-                        singleLine = true,
-                        label = { Text("Search notes") },
-                        modifier = Modifier.fillMaxWidth().padding(ChurSpacing.gutter),
-                        colors = churOutlinedTextFieldColors(),
-                    )
                     val visible = NoteOrganization.filter(Notes.search(source, query), folder.takeIf { it.isNotEmpty() }, tag.takeIf { it.isNotEmpty() })
                     if (visible.isEmpty()) {
-                        if (trash) Text("Trash is empty or no notes match these filters.", modifier = Modifier.padding(ChurSpacing.gutter))
+                        if (trash) Text(utilityText("Trash is empty or no notes match these filters.", "Корзина пуста или нет заметок по этим фильтрам."), modifier = Modifier.padding(ChurSpacing.gutter))
                         else EmptyNotes(hasQuery = true)
                     } else {
                         LazyColumn(
@@ -216,7 +236,12 @@ fun NotesScreen(
                             verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
                         ) {
                             items(visible, key = { it.id }) { note ->
-                                if (!trash) NoteRow(note = note, onClick = { onOpen(note) })
+                                if (!trash) Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (selecting) Checkbox(note.id in selection, onCheckedChange = { selected -> selection = if (selected) selection + note.id else selection - note.id })
+                                    Box(Modifier.weight(1f)) { NoteRow(note = note, onClick = {
+                                        if (selecting) selection = if (note.id in selection) selection - note.id else selection + note.id else onOpen(note)
+                                    }, onLongClick = { selecting = true; selection = selection + note.id }) }
+                                }
                                 else Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(ChurSpacing.two)) {
                                     Text(note.displayTitle.ifBlank { "Untitled" })
                                     Text(note.preview, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -227,8 +252,8 @@ fun NotesScreen(
                                             } catch (cancelled: CancellationException) { throw cancelled
                                             } catch (_: Exception) { packageFailed = true
                                             } finally { packageBusy = false } }
-                                        }) { Text("Restore note") }
-                                        TextButton(enabled = !packageBusy, onClick = { pendingPurge = note }) { Text("Delete permanently") }
+                                        }) { Text(utilityText("Restore note", "Восстановить")) }
+                                        TextButton(enabled = !packageBusy, onClick = { pendingPurge = note }) { Text(utilityText("Delete permanently", "Удалить навсегда")) }
                                     }
                                 } }
                             }
@@ -236,14 +261,7 @@ fun NotesScreen(
                     }
                 }
             }
-            if (shouldShowSpiritInNotes(spiritEnabled, query.isNotBlank(), keyboardVisible, trash,
-                    filters || pendingPurge != null, packageBusy, showFirstWriteDisclosure)) {
-                // Top bar remains outside the hit region; reserve the bottom FAB strip.
-                SpiritOverlay(
-                    Modifier.fillMaxSize().padding(top = with(spiritDensity) { spiritControlsHeight.toDp() }, bottom = 88.dp),
-                    onDismiss = { spiritEnabled = false },
-                )
-            }
+
         }
     }
 }
@@ -266,7 +284,7 @@ private fun FirstWriteDisclosure(onAcknowledge: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
         ) {
             Text(
-                text = Disclosure.FIRST_WRITE,
+                text = utilityText(Disclosure.FIRST_WRITE, "Заметки не зашифрованы приложением. Их может читать любой, у кого есть доступ к разблокированному устройству. Они входят в системную резервную копию."),
                 style = MaterialTheme.typography.bodyMedium,
                 color = colors.ink,
             )
@@ -274,16 +292,16 @@ private fun FirstWriteDisclosure(onAcknowledge: () -> Unit) {
                 onClick = onAcknowledge,
                 modifier = Modifier.align(Alignment.End),
             ) {
-                Text("Got it")
+                Text(utilityText("Got it", "Понятно"))
             }
         }
     }
 }
 
 @Composable
-private fun NoteRow(note: Note, onClick: () -> Unit) {
+private fun NoteRow(note: Note, onClick: () -> Unit, onLongClick: () -> Unit) {
     val colors = LocalChurColors.current
-    Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+    Card(modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick, onLongClickLabel = utilityText("Select note", "Выбрать заметку"))) {
         Column(modifier = Modifier.padding(ChurSpacing.three)) {
             Text(
                 text = note.displayTitle.ifBlank { "Untitled" },
@@ -300,7 +318,7 @@ private fun NoteRow(note: Note, onClick: () -> Unit) {
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (note.pinned) Text("Pinned", style = MaterialTheme.typography.labelSmall)
+            if (note.pinned) Text(utilityText("Pinned", "Закреплено"), style = MaterialTheme.typography.labelSmall)
             note.folder?.let { Text("Folder: $it", style = MaterialTheme.typography.labelSmall) }
             if (note.tags.isNotEmpty()) Text(note.tags.joinToString(" · ") { "#$it" }, style = MaterialTheme.typography.labelSmall)
             if (note.attachments.isNotEmpty()) Text("${note.attachments.size} attachments", style = MaterialTheme.typography.labelSmall)
@@ -324,7 +342,7 @@ private fun EmptyNotes(hasQuery: Boolean, onCreate: (() -> Unit)? = null) {
             modifier = Modifier.padding(ChurSpacing.gutterExpanded),
         ) {
             Text(
-                text = if (hasQuery) "No notes match" else "No notes yet",
+                text = if (hasQuery) utilityText("No notes match", "Заметки не найдены") else utilityText("No notes yet", "Пока нет заметок"),
                 style = MaterialTheme.typography.titleMedium,
             )
             Text(
@@ -334,12 +352,12 @@ private fun EmptyNotes(hasQuery: Boolean, onCreate: (() -> Unit)? = null) {
                     // "Notes stay on this device" read as a privacy
                     // assurance for content `DISCREET_MODE.md` requires be
                     // disclosed as unprotected and platform-backed-up.
-                    Disclosure.EMPTY_STATE
+                    utilityText(Disclosure.EMPTY_STATE, "Запишите что-нибудь.")
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = colors.inkMuted,
             )
-            onCreate?.let { Button(onClick = it) { Text("Create note") } }
+            onCreate?.let { Button(onClick = it) { Text(utilityText("Create note", "Создать заметку")) } }
         }
     }
 }
@@ -380,6 +398,8 @@ private fun EmptyNotes(hasQuery: Boolean, onCreate: (() -> Unit)? = null) {
 @Composable
 fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) -> Unit, onBack: () -> Unit,
     onOpenSettings: () -> Unit,
+    showFirstWriteDisclosure: Boolean = false,
+    onAcknowledgeDisclosure: () -> Unit = {},
     savedNote: Note? = null, writeFailed: Boolean = false,
     onAddAttachment: suspend (Note, String, ByteArray) -> NoteAttachment = { _, _, _ -> error("attachments unavailable") },
     onReadAttachment: suspend (String) -> ByteArray = { error("attachments unavailable") },
@@ -411,6 +431,7 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
         return
     }
     var exportFailed by remember { mutableStateOf(false) }
+    var details by remember { mutableStateOf(false) }
     val exit = remember(open.note.id) { PublicNoteExitGuard() }
     fun currentDraftNote(): Note? = draft?.let { (currentTitle, currentBody) ->
         open.note.copy(title = currentTitle, body = currentBody, pinned = pinned,
@@ -470,12 +491,12 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
                     }
                 }) { Text("Move to Trash") }
             },
-            dismissButton = { TextButton(onClick = { confirmingDelete = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { confirmingDelete = false }) { Text(utilityText("Cancel", "Отмена")) } },
         )
     }
 
     history?.let { versions -> AlertDialog(onDismissRequest = { if (!attachmentBusy) history = null },
-        title = { ExcludeWindowFromCapture(); Text("Version history") },
+        title = { ExcludeWindowFromCapture(); Text(utilityText("Version history", "История версий")) },
         text = { LazyColumn(Modifier.height(360.dp)) {
             item { Text("Up to 20 previous versions and 64 MiB of historical files are retained. Restoring creates a new current version.") }
             if (versions.isEmpty()) item { Text("No previous versions yet.") }
@@ -492,7 +513,7 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
                 TextButton(enabled = !attachmentBusy, onClick = { restoreConfirm = true }) { Text("Restore this version") }
             } }
         } },
-        confirmButton = { TextButton(enabled = !attachmentBusy, onClick = { history = null; selectedVersion = null }) { Text("Close") } }) }
+        confirmButton = { TextButton(enabled = !attachmentBusy, onClick = { history = null; selectedVersion = null }) { Text(utilityText("Close", "Закрыть")) } }) }
     if (restoreConfirm) AlertDialog(onDismissRequest = { if (!attachmentBusy) restoreConfirm = false },
         title = { ExcludeWindowFromCapture(); Text("Restore this version?") },
         text = { Text("Its text, folder, tags and files become current. The current version is retained within history limits.") },
@@ -508,7 +529,7 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
                 } finally { attachmentBusy = false; restoringHistory = false }
             }
         }) { Text("Restore version") } },
-        dismissButton = { TextButton(enabled = !attachmentBusy, onClick = { restoreConfirm = false }) { Text("Cancel") } })
+        dismissButton = { TextButton(enabled = !attachmentBusy, onClick = { restoreConfirm = false }) { Text(utilityText("Cancel", "Отмена")) } })
 
     pendingRemoval?.let { id ->
         AlertDialog(onDismissRequest = { if (!attachmentBusy) pendingRemoval = null },
@@ -522,24 +543,23 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
                     } catch (_: Exception) { attachmentFailed = true
                     } finally { attachmentBusy = false }
                 }
-            }) { Text("Remove") } },
-            dismissButton = { TextButton(enabled = !attachmentBusy, onClick = { pendingRemoval = null }) { Text("Cancel") } })
+            }) { Text(utilityText("Remove", "Удалить")) } },
+            dismissButton = { TextButton(enabled = !attachmentBusy, onClick = { pendingRemoval = null }) { Text(utilityText("Cancel", "Отмена")) } })
     }
     val colors = LocalChurColors.current
     Scaffold(
         containerColor = colors.canvas,
         topBar = {
             TopAppBar(
-                title = { Text("Note") },
+                title = { Text(utilityText("Note", "Заметка")) },
                 navigationIcon = {
                     IconButton(enabled = !attachmentBusy, onClick = requestBack) {
-                        Icon(BackGlyph, contentDescription = "Back")
+                        Icon(BackGlyph, contentDescription = utilityText("Back", "Назад"))
                     }
                 },
                 actions = {
-                    IconButton(enabled = !exit.requested && !attachmentBusy, onClick = { requestLeave(true) }) { Icon(SettingsGlyph, contentDescription = "Settings") }
-                    PublicNoteExportAction(title, body, format == NoteFormat.MARKDOWN, enabled = !exit.requested && !attachmentBusy, onFailure = { exportFailed = true })
-                    TextButton(enabled = !exit.requested && !attachmentBusy, onClick = { confirmingDelete = true }) { Text("Trash") }
+                    IconButton(enabled = !exit.requested && !attachmentBusy, onClick = { requestLeave(true) }) { Icon(SettingsGlyph, contentDescription = utilityText("Settings", "Настройки")) }
+                    TextButton(onClick = { details = !details }) { Text(utilityText("More", "Ещё")) }
                 },
             )
         },
@@ -548,23 +568,24 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
             modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(ChurSpacing.gutter),
             verticalArrangement = Arrangement.spacedBy(ChurSpacing.two),
         ) {
+            if (showFirstWriteDisclosure) FirstWriteDisclosure(onAcknowledgeDisclosure)
             OutlinedTextField(
                 value = title,
                 onValueChange = { changed -> draft?.let { draft = changed to it.second } },
                 enabled = !exit.requested && !attachmentBusy,
                 singleLine = true,
-                label = { Text("Title") },
+                label = { Text(utilityText("Title", "Заголовок")) },
                 modifier = Modifier.fillMaxWidth(),
                 colors = churOutlinedTextFieldColors(),
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(pinned, onCheckedChange = { pinned = it }, enabled = !exit.requested && !attachmentBusy)
-                Text("Pinned")
+                if (details) Checkbox(pinned, onCheckedChange = { pinned = it }, enabled = !exit.requested && !attachmentBusy)
+                if (details) Text(utilityText("Pinned", "Закреплено"))
                 val saved = samePublicNoteContent(current, savedNote)
-                Text(if (writeFailed) "Save failed" else if (saved) "Saved" else "Unsaved", modifier = Modifier.weight(1f))
-                if (writeFailed) TextButton(onClick = { currentDraftNote()?.let(onSave) }) { Text("Retry") }
+                Text(if (writeFailed) utilityText("Save failed", "Ошибка сохранения") else if (saved) utilityText("Saved", "Сохранено") else utilityText("Saving…", "Сохранение…"), modifier = Modifier.weight(1f))
+                if (writeFailed) TextButton(onClick = { currentDraftNote()?.let(onSave) }) { Text(utilityText("Retry", "Повторить")) }
             }
-            if (exportFailed) Text("The file could not be exported. Try again.", color = colors.error)
+            if (exportFailed) Text(utilityText("The file could not be exported. Try again.", "Не удалось экспортировать файл. Повторите попытку."), color = colors.error)
             MarkdownEditor(body, { changed -> draft?.let { draft = it.first to changed } }, format == NoteFormat.MARKDOWN,
                 { formatName = if (it) NoteFormat.MARKDOWN.name else NoteFormat.PLAIN_TEXT.name }, Modifier.fillMaxWidth().height(400.dp), enabled = !exit.requested && !attachmentBusy,
                 attachmentIds = attachments.map { it.id }.toSet(),
@@ -573,6 +594,9 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
                     onReadAttachment(id)
                 })
             val clean = samePublicNoteContent(current, savedNote)
+            if (details) {
+            PublicNoteExportAction(title, body, format == NoteFormat.MARKDOWN, enabled = !exit.requested && !attachmentBusy, onFailure = { exportFailed = true })
+            TextButton(enabled = !exit.requested && !attachmentBusy, onClick = { confirmingDelete = true }) { Text(utilityText("Trash", "Корзина")) }
             NoteOrganizationFields(savedNote?.folder.orEmpty(), savedNote?.tags.orEmpty(), clean && !attachmentBusy && !exit.requested,
                 onApply = { folder, tags ->
                     attachmentBusy = true
@@ -589,9 +613,12 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
                 } catch (cancelled: CancellationException) { throw cancelled
                 } catch (_: Exception) { attachmentFailed = true
                 } finally { attachmentBusy = false } }
-            }) { Text("Version history") }
-            Text("Images and attachments", style = MaterialTheme.typography.titleMedium)
-            Text("Files in public notes are unencrypted.", style = MaterialTheme.typography.bodySmall)
+            }) { Text(utilityText("Version history", "История версий")) }
+            }
+            TextButton(onClick = { details = !details }) { Text(utilityText(utilityText("Images and attachments", "Изображения и файлы"), "Изображения и файлы")) }
+            if (details) {
+            Text(utilityText("Images and attachments", "Изображения и файлы"), style = MaterialTheme.typography.titleMedium)
+
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
                 NoteBinaryImportAction("Add image or file", NoteAttachments.MAX_FILE_BYTES,
                     enabled = !exit.requested && !attachmentBusy && attachments.size < NoteAttachments.MAX_ATTACHMENTS,
@@ -615,8 +642,9 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
                     label = "Export note package", load = { onExportPackage(requireNotNull(currentDraftNote())) },
                     onFailure = { attachmentFailed = true })
             }
-            if (attachmentBusy) Text("Updating attachments…")
-            if (attachmentFailed) Text("The attachment operation failed. Your note is still here. Try again.", color = colors.error)
+            }
+            if (attachmentBusy) Text(utilityText("Updating attachments…", "Обновление вложений…"))
+            if (attachmentFailed) Text(utilityText("The attachment operation failed. Your note is still here. Try again.", "Не удалось обновить вложения. Заметка сохранена. Повторите попытку."), color = colors.error)
             attachments.forEach { attachment ->
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(ChurSpacing.two)) {
@@ -629,7 +657,7 @@ fun NoteEditorScreen(open: OpenNote, onSave: (Note) -> Unit, onRemove: (String) 
                                 enabled = !exit.requested && !attachmentBusy, load = { onReadAttachment(attachment.id) },
                                 onFailure = { attachmentFailed = true })
                             TextButton(enabled = !exit.requested && !attachmentBusy, onClick = { pendingRemoval = attachment.id }) {
-                                Text("Remove attachment")
+                                Text(utilityText("Remove attachment", "Удалить вложение"))
                             }
                         }
                     }

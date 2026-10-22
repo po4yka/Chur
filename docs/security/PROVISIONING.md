@@ -16,9 +16,9 @@ First launch opens the public shell. It does not open a vault flow.
 
 - no vault exists and none is created until the user asks for one;
 - the public shell is usable immediately, with no account, no permission prompt, and no vault-key generation;
-- Notes is the default. Public Settings offers Notes, Calculator, and Camera; the public preference survives restart and is shared by all vault identities. Unknown values fall back to Notes. See [`../product/DISCREET_MODE.md`](../product/DISCREET_MODE.md);
+- Notes is the default. Authenticated Settings offers Notes, Calculator, and Camera; the public preference survives restart and is shared by all vault identities. Unknown values fall back to Notes. See [`../product/DISCREET_MODE.md`](../product/DISCREET_MODE.md);
 - the public-shell disclosure required by [`../product/DISCREET_MODE.md`](../product/DISCREET_MODE.md) is shown the first time the user writes public-shell content, not during vault creation;
-- the route to vault creation is a visible settings entry. No hidden entry gesture is implemented. A future gesture must preserve the visible route.
+- the route to vault creation is a visible settings entry. After setup, users can enable a transition code through a real entry and authentication trial. See Discreet Mode for the About fallback.
 
 After a vault exists, its owner may opt in to a whole-app gate. This choice is made inside an unlocked vault. At the next launch and after backgrounding, the app accepts the vault password or PIN, recovery phrase, or enrolled device factor, then closes the temporary vault session before it shows the public shell. The default remains the public shell without this gate.
 
@@ -65,7 +65,7 @@ The device slot is offered after the vault is `ACTIVE`, never before.
 
 At the end of creation the application shows how to reach the vault again and confirms the user can do it.
 
-- the visible settings entry of §2 always works and cannot be removed in v1;
+- the visible settings entry remains until Discreet Mode is enabled; the About version action then opens normal authentication as a fallback;
 - an optional hidden gesture or route is configured later, from an unlocked session, under the constraints of [`../product/DISCREET_MODE.md`](../product/DISCREET_MODE.md);
 - the accessible alternative that document requires is offered in the same step, not buried as a separate setting.
 

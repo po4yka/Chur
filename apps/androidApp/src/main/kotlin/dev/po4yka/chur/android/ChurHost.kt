@@ -137,6 +137,8 @@ internal class ChurHost private constructor(context: Context) {
             ),
         deviceSlotPolicy = deviceSlotPolicy,
         appLockSetting = appLockSetting,
+        publicUtilities = dev.po4yka.chur.app.publicshell.publicUtilityStore(
+            File(context.publicShellFile("notes.json")).parent!!, context.noBackupFilesDir.resolve("public-utility-settings").path),
         publicShellSetting = PublicShellSetting(
             reader = {
                 File(context.publicShellFile("shell.txt")).takeIf { it.isFile && it.length() <= 32 }?.readText()

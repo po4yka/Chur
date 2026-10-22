@@ -3,8 +3,9 @@ import XCTest
 @testable import ChurScratch
 
 final class LauncherQuickActionTests: XCTestCase {
-    func testOnlyFourExactContentFreeTypesAreAccepted() {
+    func testOnlyExactContentFreeTypesAreAccepted() {
         XCTAssertEqual(LauncherQuickAction.allCases.map(\.rawValue), [
+            "dev.po4yka.chur.action.public-notes", "dev.po4yka.chur.action.public-calculator", "dev.po4yka.chur.action.public-camera",
             "dev.po4yka.chur.action.import", "dev.po4yka.chur.action.search",
             "dev.po4yka.chur.action.lock-and-hide", "dev.po4yka.chur.action.new-private-note",
         ])
@@ -89,16 +90,10 @@ final class LauncherQuickActionTests: XCTestCase {
         XCTAssertEqual(results, [false])
     }
 
-    func testStaticRegistrationMatchesAllowlistAndHasNoPayload() throws {
+    func testPrivateShortcutsAreNotStaticallyExposed() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let plist = try XCTUnwrap(try PropertyListSerialization.propertyList(
             from: Data(contentsOf: root.appendingPathComponent("Info.plist")), format: nil) as? [String: Any])
-        let items = try XCTUnwrap(plist["UIApplicationShortcutItems"] as? [[String: String]])
-        XCTAssertEqual(items.map { $0["UIApplicationShortcutItemType"] }, LauncherQuickAction.allCases.map(\.rawValue))
-        XCTAssertEqual(items.map { $0["UIApplicationShortcutItemTitle"] }, ["Import", "Search", "Lock and hide", "New private note"])
-        for item in items {
-            XCTAssertEqual(Set(item.keys), ["UIApplicationShortcutItemType", "UIApplicationShortcutItemTitle", "UIApplicationShortcutItemIconSymbolName"])
-            XCTAssertFalse(try XCTUnwrap(item["UIApplicationShortcutItemIconSymbolName"]).isEmpty)
-        }
+        XCTAssertNil(plist["UIApplicationShortcutItems"])
     }
 }

@@ -1,60 +1,18 @@
 package dev.po4yka.chur.app.notes
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Card
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.runtime.Composable
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.PublicShell
-import dev.po4yka.chur.app.publicshell.PUBLIC_CAMERA_DISCLOSURE
+import dev.po4yka.chur.app.publicshell.*
 import dev.po4yka.chur.app.theme.BackGlyph
-import dev.po4yka.chur.app.theme.ChurSpacing
-import dev.po4yka.chur.app.theme.LocalChurColors
 
-/**
- * The public shell's own settings, `docs/product/DISCREET_MODE.md`.
- *
- * It carries the public screen choice, the disclosure, and the visible vault entry.
- *
- * The permanent disclosure that section requires, beside the entry that reaches
- * the vault: public-shell content is not encrypted by Chur and is in the
- * platform backup, and vault content is encrypted, is excluded from that
- * backup, and leaves the device only in a package the user makes. Putting the
- * two sentences beside each other is the point — the statement is about the
- * difference, and a disclosure the user reads without the comparison does not
- * tell them what to do about it.
- *
- * The vault entry itself, which [`../security/PROVISIONING.md`] §2 requires and
- * which "Do not dynamically remove all discoverable means of reopening or
- * managing the feature" forbids removing. `DISCREET_MODE.md`'s "The v1
- * decision" makes this route the session gate: visible, documented, and not a
- * secret.
- *
- * It reads no private state and shows no count. Every settings surface below
- * this line is public, and §10 of [`../security/DECOY_VAULT.md`] requires that
- * no surface reachable from a session differ by whether a sibling identity
- * exists — a public screen that named the vault's contents would differ.
- */
+/** Ordinary utility settings. Recovery still uses the normal authentication gate. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PublicSettingsScreen(
@@ -64,84 +22,42 @@ fun PublicSettingsScreen(
     onSelectShell: (PublicShell) -> Unit = {},
     error: String? = null,
     onEncryptExternalFiles: (() -> Unit)? = null,
+    discreet: Boolean = false,
 ) {
-    val colors = LocalChurColors.current
-    Scaffold(
-        containerColor = colors.canvas,
-        topBar = {
-            TopAppBar(
-                title = { Text("Settings") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(BackGlyph, contentDescription = "Back")
-                    }
-                },
-            )
-        },
-    ) { padding ->
-        Column(
-            modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(ChurSpacing.gutter),
-            verticalArrangement = Arrangement.spacedBy(ChurSpacing.three),
-        ) {
-            Text("Public screen", style = MaterialTheme.typography.titleMedium)
-            Column(Modifier.fillMaxWidth().selectableGroup()) {
-                PublicShell.entries.forEach { shell ->
-                    Row(
-                        Modifier.fillMaxWidth().heightIn(min = 56.dp)
-                            .selectable(selected = selectedShell == shell, role = Role.RadioButton, onClick = { onSelectShell(shell) })
-                            .padding(horizontal = ChurSpacing.two),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RadioButton(selected = selectedShell == shell, onClick = null)
-                        Text(shell.label, modifier = Modifier.padding(start = ChurSpacing.two))
-                    }
+    val store = LocalPublicUtilities.current
+    val appearance by store.appearance.collectAsState()
+    var failure by remember { mutableStateOf<String?>(null) }
+    var about by remember { mutableStateOf(false) }
+    Scaffold(topBar = { TopAppBar(title = { Text(utilityText("Settings", "Настройки")) }, navigationIcon = {
+        IconButton(onClick = onBack) { Icon(BackGlyph, utilityText("Back", "Назад")) }
+    }) }) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Text(utilityText("Appearance", "Оформление"), style = MaterialTheme.typography.titleMedium)
+            listOf("system" to utilityText("System", "Системная"), "light" to utilityText("Light", "Светлая"), "dark" to utilityText("Dark", "Тёмная")).forEach { (key, label) ->
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    RadioButton(selected = appearance == key, onClick = {
+                        try { store.setAppearance(key); failure = null } catch (_: Exception) { failure = utilityText("Settings could not be saved.", "Не удалось сохранить настройки.") }
+                    })
+                    Text(label)
                 }
             }
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            Card(onClick = onOpenVault, modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    modifier = Modifier.padding(ChurSpacing.three),
-                    verticalArrangement = Arrangement.spacedBy(ChurSpacing.one),
-                ) {
-                    Text(
-                        text = Disclosure.VAULT_ENTRY,
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    Text(
-                        text = "Open the encrypted vault.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = colors.inkMuted,
-                    )
-                }
+            HorizontalDivider()
+            Text(utilityText("Data storage", "Хранение данных"), style = MaterialTheme.typography.titleMedium)
+            Text(utilityText(Disclosure.SETTINGS, "Заметки, история вычислений, фото и видео не зашифрованы приложением. Их может просматривать любой, у кого есть доступ к разблокированному устройству. Эти данные входят в системную резервную копию."))
+            if (!discreet) {
+                // Existing installations keep their entry until the user tests and enables discreet mode.
+                TextButton(onClick = onOpenVault) { Text(utilityText(Disclosure.VAULT_ENTRY, "Приватное хранилище")) }
             }
-            Text(
-                "In the vault, tap the lock to hide private content immediately. " +
-                    "You can also hold the lock or choose Lock and hide in a dialog or menu. " +
-                    "Chur returns to your public screen, or the app lock when Lock whole app is on.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = colors.inkMuted,
-            )
-            onEncryptExternalFiles?.let { encrypt ->
-                Card(onClick = encrypt, modifier = Modifier.fillMaxWidth()) {
-                    Column(
-                        modifier = Modifier.padding(ChurSpacing.three),
-                        verticalArrangement = Arrangement.spacedBy(ChurSpacing.one),
-                    ) {
-                        Text("Encrypt external files", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "Write a password-protected archive without adding files to the library. Original files stay in place.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = colors.inkMuted,
-                        )
-                    }
-                }
+            ListItem(headlineContent = { Text(utilityText("About", "О приложении")) },
+                modifier = Modifier.combinedClickable(onClick = { about = !about }))
+            if (about) {
+                Text(utilityText(selectedShell.label, when (selectedShell) { PublicShell.NOTES -> "Заметки"; PublicShell.CALCULATOR -> "Калькулятор"; PublicShell.CAMERA -> "Камера" }), style = MaterialTheme.typography.titleMedium)
+                Text(utilityText("Version ", "Версия ") + PublicPresentation.version, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    .combinedClickable(onClick = {}, onLongClickLabel = utilityText("Open access", "Открыть доступ"), onLongClick = onOpenVault)
+                    .padding(vertical = 12.dp))
             }
-            Text(
-                text = Disclosure.SETTINGS,
-                style = MaterialTheme.typography.bodyMedium,
-                color = colors.inkMuted,
-            )
-            Text(PUBLIC_CAMERA_DISCLOSURE, style = MaterialTheme.typography.bodyMedium, color = colors.inkMuted)
+            (failure ?: error)?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         }
     }
 }

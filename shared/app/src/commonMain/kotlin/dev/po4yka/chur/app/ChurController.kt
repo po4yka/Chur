@@ -86,6 +86,7 @@ class ChurController(
     private val deviceSlotPolicy: DeviceSlotPolicySetting = DeviceSlotPolicySetting.unset(),
     private val appLockSetting: AppLockSetting = AppLockSetting.unset(),
     private val publicShellSetting: PublicShellSetting = PublicShellSetting.unset(),
+    val publicUtilities: dev.po4yka.chur.app.publicshell.PublicUtilityStore = dev.po4yka.chur.app.publicshell.PublicUtilityStore(),
     /** The auto-lock choice of `DESIGN.md` §14.4, which sets the idle limit. */
     private val autoLockSetting: AutoLockSetting = AutoLockSetting.unset(),
     private val clock: () -> Long,
@@ -225,18 +226,61 @@ class ChurController(
     private val _publicShell = MutableStateFlow(runCatching { publicShellSetting.read() }.getOrDefault(PublicShell.NOTES))
     private val _publicShellError = MutableStateFlow<String?>(null)
     val publicShell: StateFlow<PublicShell> = _publicShell.asStateFlow()
+    private val _preferredPublicShell = MutableStateFlow(_publicShell.value)
+    val preferredPublicShell = _preferredPublicShell.asStateFlow()
     val publicShellError: StateFlow<String?> = _publicShellError.asStateFlow()
+    private val _publicNoteRequest = MutableStateFlow(0L)
+    val publicNoteRequest = _publicNoteRequest.asStateFlow()
+    fun takePublicNoteRequest(): Note? {
+        if (_route.value != AppRoute.PublicShell || _publicShell.value != PublicShell.NOTES || _publicNoteRequest.value == 0L) return null
+        _publicNoteRequest.value = 0L
+        return Note("note-${clock()}-${kotlin.random.Random.nextLong()}", "", "", clock())
+    }
 
     /** A public preference. It never opens or changes a vault. */
     fun setPublicShell(shell: PublicShell) {
-        if (_route.value != AppRoute.PublicSettings) return
+        if (_route.value != AppRoute.Vault || repository.state.value !is VaultState.Unlocked) return
         try {
             publicShellSetting.write(shell)
             _publicShell.value = shell
+            _preferredPublicShell.value = shell
+            refreshPublicPresentation()
             _publicShellError.value = null
         } catch (_: Exception) {
             _publicShellError.value = "The public screen could not be changed. Try again."
         }
+    }
+
+    fun refreshPublicPresentation() {
+        dev.po4yka.chur.app.publicshell.PublicPresentation.apply?.invoke(publicUtilities.discreet.value, _preferredPublicShell.value.storedValue)
+    }
+    // A setup trial retains a digest only, and cannot enable the mode before real authentication.
+    private var trialDigest: String? = null
+    private var trialSubmitted = false
+    fun beginDiscreetSetup(code: String) {
+        check(_route.value == AppRoute.Vault && repository.state.value is VaultState.Unlocked)
+        require(dev.po4yka.chur.app.publicshell.PublicUtilityStore.validCode(code))
+        lock()
+        trialDigest = dev.po4yka.chur.app.publicshell.publicCodeDigest(code)
+        trialSubmitted = false
+    }
+    fun disableDiscreetMode() {
+        check(_route.value == AppRoute.Vault && repository.state.value is VaultState.Unlocked)
+        trialDigest = null
+        trialSubmitted = false
+        publicUtilities.disable()
+        refreshPublicPresentation()
+    }
+    fun matchesPublicCode(code: String): Boolean =
+        dev.po4yka.chur.app.publicshell.PublicUtilityStore.validCode(code) &&
+            (trialDigest?.let { it == dev.po4yka.chur.app.publicshell.publicCodeDigest(code) } ?: publicUtilities.matches(code))
+
+    fun submitPublicCode(code: String): Boolean {
+        if (_route.value != AppRoute.PublicShell || !matchesPublicCode(code)) return false
+        val tested = trialDigest != null
+        openVaultEntry()
+        trialSubmitted = tested
+        return true
     }
 
     /** The external camera is an app-requested activity, like the photo picker. */
@@ -473,6 +517,14 @@ class ChurController(
         ) {
             post("Finish or cancel the current action first.")
             return false
+        }
+        action.publicShell?.let { shell ->
+            clearLauncherAction()
+            if (_route.value in setOf(AppRoute.Vault, AppRoute.Unlock, AppRoute.AppUnlock)) lock()
+            _publicShell.value = shell
+            if (action == LauncherAction.PUBLIC_NOTES) _publicNoteRequest.value += 1L
+            if (_route.value == AppRoute.PublicSettings || _route.value == AppRoute.Unlock) setRoute(AppRoute.PublicShell)
+            return true
         }
         pendingLauncherAction = action
         launcherToken += 1
@@ -1008,6 +1060,7 @@ class ChurController(
      * save that has not started, `DISCREET_MODE.md`.
      */
     fun lock(reason: LockReason = LockReason.USER) {
+        trialSubmitted = false
         val drafts = if (reason == LockReason.PANIC) {
             lockDrafts.abort()
             emptyList()
@@ -1333,12 +1386,14 @@ class ChurController(
 
     /** Moves to a route the public shell offers. */
     fun goTo(next: AppRoute) {
+        if (next == AppRoute.PublicShell || next == AppRoute.PublicSettings) trialSubmitted = false
         if (next !in setOf(AppRoute.Unlock, AppRoute.AppUnlock, AppRoute.Recover, AppRoute.AppRecover)) clearLauncherAction()
         setRoute(next)
     }
 
     /** The route the visible settings entry of §2 leads to. */
     fun openVaultEntry() {
+        trialSubmitted = false
         setRoute(if (repository.state.value is VaultState.NoVault) {
             AppRoute.CreateVault
         } else {
@@ -2564,6 +2619,16 @@ class ChurController(
      * which is when it was opened, so an edited note moves up a list that
      * `Notes.ordered` sorts by it.
      */
+    suspend fun updatePublicNotes(selected: List<Note>, pinned: Boolean?) {
+        for (note in selected) {
+            if (pinned == null) trashPublicNote(note)
+            else publicNoteWrites.withLock {
+                val latest = notes.all().firstOrNull { it.id == note.id } ?: return@withLock
+                persistPublicNote(latest.copy(pinned = pinned))
+            }
+        }
+    }
+
     fun putNote(note: Note) = guarded {
         publicNoteWrites.withLock {
             try {
@@ -3169,7 +3234,18 @@ class ChurController(
             setRoute(AppRoute.PublicShell)
             privacy.setEnabled(needsPrivacyCover(repository.state.value, _route.value, _recoveryPhrase.value != null))
         } else {
-            enterVault()
+            val checkedDigest = trialDigest.takeIf { trialSubmitted }
+            trialDigest = null
+            trialSubmitted = false
+            var setupNotice: String? = null
+            if (checkedDigest != null) {
+                setupNotice = try {
+                    publicUtilities.configureDigest(checkedDigest)
+                    refreshPublicPresentation()
+                    "Entry checked. Discreet mode is enabled."
+                } catch (_: Exception) { "The entry was checked, but settings could not be saved. Try setup again." }
+            }
+            enterVault(notice = setupNotice)
         }
     }
 

@@ -9,6 +9,8 @@ Chur protects the confidentiality and integrity of private photos, videos, audio
 
 Chur does not turn a compromised unlocked operating system into a trusted execution environment.
 
+Discreet Mode can replace the ordinary visible entry with an explicit eight-digit transition code. This code only routes to normal authentication. It provides no protection against a person who knows the About fallback or inspects OS app information. Public notes, calculation history, photos, and videos are unencrypted app data and can enter system backup. They have no access to private keys or vault files.
+
 ## 2. Protected assets
 
 | Asset | Confidentiality | Integrity | Availability |

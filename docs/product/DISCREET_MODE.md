@@ -22,7 +22,7 @@ Discreet Mode makes Chur unobtrusive during ordinary device use. It is not the c
 
 ## Public shell
 
-The public shell must be functional rather than a static decoy screen. Public Settings offers Notes, Calculator, and Camera. Notes is the default. The choice is stored in public device preferences, is the same for every vault identity, and survives a restart. Switching screens does not delete Notes, public photos, or vault data. An unreadable or unknown choice falls back to Notes.
+The public shell is a daily-use application. Authenticated Settings offers Notes, Calculator, and Camera. Public Settings contains appearance, data storage, and About only. Notes is the default. The choice is stored in public device preferences, is the same for every vault identity, and survives a restart. Switching screens does not delete Notes, public photos, or vault data. An unreadable or unknown choice falls back to Notes.
 
 Public-shell requirements:
 
@@ -35,17 +35,19 @@ Public-shell requirements:
 
 ### Calculator
 
-Calculator performs decimal addition, subtraction, multiplication, and division. It supports sign changes, percentages, repeated equals, clear, and deletion of the last digit. Chaining executes in entry order. Results use at most 12 significant digits. Division by zero and results outside the supported finite range show a recoverable error. Calculator input is public UI state; it is not a vault credential or a secret entry gesture.
+The basic calculator preserves immediate execution, percentages, repeated equals, and a limit of 12 significant digits. Scientific mode has a separate expression draft and mathematical precedence, parentheses, powers, roots, logarithms, trigonometry, constants, and DEG/RAD. Domain errors and overflow are recoverable. Copy, number paste, hardware keyboard input, and a local decimal separator are supported. Public history retains at most 500 calculations, with reuse and deletion. Input drafts are not saved across process death. A recognized transition code is consumed before calculation or history storage.
+
+### Notes
+
+Notes keeps the existing Markdown format, attachments, folders, tags, pinned notes, trash, drafts, and version history. Search and text editing are primary. Organization, import, export, and version controls are in secondary panels. Failed writes retain the draft for retry. A migration must not replace an unsupported document version.
 
 ### Camera and public album
 
-Camera uses the platform's photo capture interface. Capture starts only after the user chooses Take photo. The first capture requires the public-data statement. The user then reviews the result and chooses Save photo or Discard photo. Cancellation, missing camera hardware or app, and denied camera access leave Settings and the vault entry available.
+Android uses CameraX; iOS uses AVFoundation. The preview starts after camera permission. Photo and video capture save automatically to the local public album. JPEG photos keep the supported capture resolution. Video uses H.264 with sound when microphone access is granted; recording without sound is explicitly indicated. Prefer 1080p at 30 frames per second when supported, with lower supported resolution as fallback. The first video with sound requests microphone access. The gallery supports thumbnails, photo zoom, video playback, selection, export, and confirmed deletion. System-library export and sharing require separate actions.
 
-Save photo writes only to Chur's local public album, not the system photo library or the vault. The album can list, open, and delete saved photos after a restart. Delete requires confirmation. Photos are normalized JPEGs with a maximum long edge of 4096 pixels; image metadata is removed. Storage is limited to 100 photos and 256 MiB. A failed or full save retains the reviewed capture for retry and does not replace earlier photos.
+The album remains under Android `filesDir/public/camera/` or iOS `Documents/public/camera/`. Existing JPEGs remain readable. There is no 100-photo or 256 MiB user quota. Capture checks available storage, uses pending files, validates the completed file, and moves it atomically into the album. Failed finalization retains the pending file for retry. Backgrounding stops recording and releases capture resources. A success message follows confirmed local persistence. Thumbnails have bounded dimensions; video bytes do not cross the Kotlin/Swift bridge.
 
-The album is under Android `filesDir/public/camera/` or iOS `Documents/public/camera/`. It is not encrypted by Chur and enters normal platform backup. Temporary capture and review files are separate from vault import/export scratch and are not album entries. Leaving the screen cancels pending work and discards unsaved captures; it does not delete saved album photos. An Android activity or process recreation discards an unfinished capture and reports that outcome.
-
-Android delegates capture to a camera app through a narrowly granted output URI. Its app-requested activity uses the existing picker lifecycle exception, with the idle timer as the backstop; explicit lock still closes it. iOS uses the native camera picker, asks for camera access only on Take photo, and cancels on real background or scene disconnect. Neither implementation requests microphone access or reads the system photo library. Camera hardware and permission behavior on physical devices require separate acceptance from simulator and fixture checks.
+Camera hardware, lenses, frame profiles, audio, orientation, interruption, and exported-file playback require physical-device acceptance on both platforms. Simulator checks cannot establish those results.
 
 Every public screen has a visible Settings control. Settings is a separate route: no Notes editor or camera preview remains composed behind it. No shell reveals a private count, identity, route, or thumbnail.
 
@@ -55,15 +57,15 @@ Public-shell content is not vault-protected. It is ordinary application data in 
 
 The optional whole-app gate controls access through the interface. It does not encrypt public-shell content or change its backup policy.
 
-- the first time the user writes public-shell content, the application states once that this content is not encrypted by Chur, and names the private vault as the protected alternative;
-- public-shell settings carry the same statement permanently, beside the entry that reaches the vault;
+- the first time the user writes public-shell content, the application states once that this content is not encrypted by this app and can enter system backup;
+- public-shell settings carry the same statement permanently under Data storage;
 - the copy must not present the disclosure as a security feature and must not imply that the public shell is private.
 
 Public-shell storage is included in the ordinary platform backup and private-vault storage is excluded from it without exception. Both halves are deliberate: a Notes surface that loses its content on device transfer is not functional, and an object store carried by a transport that chooses what to copy is not restorable. The two rules apply to disjoint directories and are implemented by [`../ANDROID.md`](../ANDROID.md) §13.4 and [`../IOS.md`](../IOS.md) §14.1. A change that places a vault path in a backup include set is a release blocker, and no public-shell backup rule may be widened to a path outside public storage.
 
 Settings that only an open vault can write (the device-slot policy, the whole-app lock and the auto-lock time) are not public-shell content. Their presence would show that a vault was set up, so Android keeps them in `noBackupFilesDir` and not in `public/`. A device that restores a backup starts with their defaults. Android cloud backup also requires end-to-end encryption by the transport (`disableIfNoEncryptionCapabilities`), so the public shell is not sent to a server that can read it.
 
-The settings statement carries both halves: public-shell content is backed up by the platform, and vault content is excluded from ordinary platform backup. Explicit full/selective archives use [`../format/BACKUP_FORMAT_V1.md`](../format/BACKUP_FORMAT_V1.md). Configured sync and collection sharing transfer encrypted content; explicit plaintext export leaves the vault boundary under its own disclosure.
+Public statements describe public storage only. Private Settings explains backup exclusion and encrypted archives. Explicit full/selective archives use [`../format/BACKUP_FORMAT_V1.md`](../format/BACKUP_FORMAT_V1.md).
 
 ## Session gate
 
@@ -76,20 +78,19 @@ A secret gesture, route, or credential may enter the vault unlock flow, but it m
 - accessible without relying on ambiguous or unsafe gestures;
 - separated from ordinary public-shell credentials.
 
-### The v1 decision
+### Configured transition code
 
-v1 offers **a documented visible route and no secret gesture**, and that is the answer to the open item this section reserved rather than a deferral of it.
+This contract replaces the earlier requirement for a permanently visible private entry. New and existing installations retain the visible setup entry until the user explicitly enables Discreet Mode from authenticated Settings. Setup records a pending digest, locks the session, and requires an actual public-app trigger followed by successful vault authentication before enabling the mode. A failed or cancelled trial does not enable it.
 
-Every candidate secret gesture fails one of the six requirements above, and fails it structurally rather than in its details. A gesture discoverable enough to satisfy "documented inside product settings/help" and "available to platform review" is discoverable enough for a coercer who has read either; one that is not discoverable fails "accessible without relying on ambiguous or unsafe gestures", and the accessible alternative the Accessibility section requires would restore the discoverability the secrecy was for. [`../security/DECOY_VAULT.md`](../security/DECOY_VAULT.md) §10 already settles what the product may claim here: the existence of the vault is public by design, so a hidden entrance buys presentation and not protection, and the protection is the credential.
+One user-selected eight-digit code applies to all three apps:
 
-The route is therefore the settings entry of the public shell, and it is:
+- Calculator: enter the exact digits, then press equals.
+- Notes: enter the exact digits in search, then submit the search.
+- Camera: hold the gallery thumbnail, enter the code, then submit.
 
-- visible, so nothing has to be remembered;
-- reversible, because it opens the unlock flow and creates nothing;
-- separate from the public shell's own content, which has no credential at all;
-- an ordinary focusable control, so it needs no accessible alternative because it is already one.
+Recognition occurs only on submission. A recognized code is not written to calculation history, saved UI state, analytics, or logs. Code configuration is versioned and stores a digest, outside public backup. It is a navigation preference, not a cryptographic credential.
 
-A later phase may add a configurable secret route. It would be an addition to this list, not a replacement for it: "Do not dynamically remove all discoverable means of reopening or managing the feature" below already forbids the replacement.
+About offers a fallback: hold Version, or use its equivalent accessibility action, to open normal authentication. Setup documents this route before the trial. The fallback does not bypass vault authentication. All long-press actions have TalkBack/VoiceOver actions. The OS, product documentation, and store listing can still disclose app identity and features.
 
 The feature layer receives an opaque session result. It should not branch on `isReal` or `isDecoy`.
 
@@ -137,7 +138,7 @@ The default launcher presentation uses the Chur name and silver mirror-charm ico
 
 Any alternate icon or launcher presentation must be user-selected, documented, reversible, and supported by platform APIs. The default store listing must accurately describe Chur as an encrypted private archive with optional discreet interfaces.
 
-Do not dynamically remove all discoverable means of reopening or managing the feature.
+Android switches among user-selected launcher activity aliases with public names and icons. iOS uses alternate icons and retains the installed app name. The About fallback remains available. OS settings, installed-package information, existing pinned shortcuts, and store records can retain product identity; this mode makes no concealment promise for them.
 
 ## App switcher and recents
 
@@ -174,7 +175,7 @@ Private data is excluded from:
 - voice-assistant indexing;
 - public deep-link parameters.
 
-[App icon actions](APP_ICON_ACTIONS.md) publish only four fixed generic capabilities: Import, Search, Lock and hide, and New private note. They disclose no private data or session state. Private navigation uses the normal session gate; Lock and hide performs panic lock and displays the public shell or the enabled whole-app gate. It does not change the launcher icon or promise to hide the product's vault functionality.
+[App icon actions](APP_ICON_ACTIONS.md) use New note, Calculator, and Photo in Discreet Mode. Outside that mode, the four generic private capabilities remain: Import, Search, Lock and hide, and New private note. They disclose no private data or session state. Private navigation uses the normal session gate; Lock and hide performs panic lock and displays the public shell or the enabled whole-app gate. No shortcut carries content, private identity, or authentication authority.
 
 A future private widget requires a dedicated threat model and locked-state rendering contract.
 

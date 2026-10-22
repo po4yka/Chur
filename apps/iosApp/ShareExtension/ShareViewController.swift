@@ -15,12 +15,12 @@ final class ShareViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
-        status.text = "Save an encrypted copy, then open Chur and unlock your vault to import it. Shared links are saved as text; Chur does not fetch them."
+        status.text = "Save this share, then open the app to complete import. Shared links are saved as text; the app does not fetch them."
         status.numberOfLines = 0
         status.font = .preferredFont(forTextStyle: .body)
         status.adjustsFontForContentSizeCategory = true
         status.textAlignment = .center
-        save.setTitle("Save to Chur", for: .normal)
+        save.setTitle("Save files", for: .normal)
         cancel.setTitle("Cancel", for: .normal)
         save.addTarget(self, action: #selector(saveItems), for: .touchUpInside)
         cancel.addTarget(self, action: #selector(cancelShare), for: .touchUpInside)
@@ -54,7 +54,7 @@ final class ShareViewController: UIViewController {
     }
     @objc private func saveItems() {
         guard !busy else { return }
-        busy = true; save.isEnabled = false; status.text = "Encrypting shared items…"
+        busy = true; save.isEnabled = false; status.text = "Saving shared items…"
         let items = extensionContext?.inputItems.compactMap { $0 as? NSExtensionItem } ?? []
         let providers = IncomingShareItems.providers(from: items)
         guard !providers.isEmpty, providers.count <= IncomingShareInbox.itemLimit else {
@@ -75,13 +75,13 @@ final class ShareViewController: UIViewController {
                 try inbox.finish(batch); completed = true
                 DispatchQueue.main.async {
                     guard self.active else { return }
-                    self.status.text = "Saved encrypted. Open Chur to import into your vault."
+                    self.status.text = "Saved. Open the app to complete import."
                     self.cancel.setTitle("Done", for: .normal)
                     self.cancel.removeTarget(self, action: #selector(self.cancelShare), for: .touchUpInside)
                     self.cancel.addTarget(self, action: #selector(self.complete), for: .touchUpInside)
                 }
             } catch {
-                DispatchQueue.main.async { self.fail("Could not save this share. Open Chur once to prepare sharing, then try again. Check available storage and share at most 4 GiB per file and 8 GiB in total.") }
+                DispatchQueue.main.async { self.fail("Could not save this share. Open the app once to prepare sharing, then try again. Check available storage and share at most 4 GiB per file and 8 GiB in total.") }
             }
         }
     }

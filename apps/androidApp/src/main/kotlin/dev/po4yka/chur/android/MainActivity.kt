@@ -66,6 +66,28 @@ class MainActivity : FragmentActivity() {
         // waiting for the first collection.
         host.privacy.setEnabled(host.controller.privacyCoverNeeded)
 
+        val weakActivity = java.lang.ref.WeakReference(this)
+        val publicContext = applicationContext
+        dev.po4yka.chur.app.publicshell.PublicPresentation.apply = { enabled, shell ->
+            PublicLauncherPresentation.apply(publicContext, enabled, shell)
+            val label = publicContext.getString(if (!enabled) R.string.app_name else when (shell) {
+                "calculator" -> R.string.public_calculator; "camera" -> R.string.public_camera; else -> R.string.public_notes
+            })
+            val icon = if (!enabled) R.mipmap.ic_launcher else when (shell) {
+                "calculator" -> R.drawable.ic_public_calculator; "camera" -> R.drawable.ic_public_camera; else -> R.drawable.ic_public_notes
+            }
+            weakActivity.get()?.let { activity ->
+                activity.title = label
+                val drawable = androidx.core.content.ContextCompat.getDrawable(publicContext, icon)
+                val bitmap = android.graphics.Bitmap.createBitmap(96, 96, android.graphics.Bitmap.Config.ARGB_8888)
+                drawable?.setBounds(0, 0, 96, 96)
+                drawable?.draw(android.graphics.Canvas(bitmap))
+                @Suppress("DEPRECATION")
+                activity.setTaskDescription(android.app.ActivityManager.TaskDescription(label, bitmap))
+            }
+        }
+        dev.po4yka.chur.app.publicshell.PublicPresentation.version = packageManager.getPackageInfo(packageName, 0).versionName ?: ""
+        host.controller.refreshPublicPresentation()
         val controller = host.controller
         val verdict = runGate(this)
         if (verdict is GateResult.Compatible) {

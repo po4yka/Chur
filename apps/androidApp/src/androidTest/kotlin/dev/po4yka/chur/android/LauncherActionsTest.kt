@@ -60,7 +60,7 @@ class LauncherActionsTest {
         assertEquals(listOf("import", "search", "lock-and-hide", "new-private-note"), shortcuts.map { it.id })
         assertEquals(listOf(0, 1, 2, 3), shortcuts.map { it.rank })
         shortcuts.forEach { shortcut ->
-            assertEquals(ComponentName(context, MainActivity::class.java), shortcut.activity)
+            assertEquals(PublicLauncherPresentation.component(context), shortcut.activity)
             val intent = requireNotNull(shortcut.intent)
             assertEquals(ComponentName(context, MainActivity::class.java), intent.component)
             assertEquals(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP, intent.flags)
@@ -85,6 +85,26 @@ class LauncherActionsTest {
         assertEquals(Intent.ACTION_MAIN, sanitized.action)
         assertNull(LauncherAction.fromExternalAction(sanitized.action))
         assertNull(sanitized.extras)
+    }
+
+    @Test
+    fun discreet_launcher_publishes_only_public_actions_and_selected_alias() {
+        val context = instrumentation.targetContext
+        val previous = PublicLauncherPresentation.component(context).shortClassName
+        try {
+            PublicLauncherPresentation.apply(context, true, "calculator")
+            assertEquals(".android.CalculatorLauncher", PublicLauncherPresentation.component(context).shortClassName)
+            val shortcuts = launcherShortcutInfos(context)
+            assertEquals(listOf("public-notes", "public-calculator", "public-camera"), shortcuts.map { it.id })
+            shortcuts.forEach {
+                assertEquals(PublicLauncherPresentation.component(context), it.activity)
+                assertTrue(LauncherAction.fromExternalAction(it.intent?.action)?.publicShell != null)
+                assertFalse(it.shortLabel.toString().contains("private", ignoreCase = true))
+            }
+        } finally {
+            val shell = when (previous) { ".android.CalculatorLauncher" -> "calculator"; ".android.CameraLauncher" -> "camera"; else -> "notes" }
+            PublicLauncherPresentation.apply(context, previous != ".android.DefaultLauncher", shell)
+        }
     }
 
     @Test
@@ -147,7 +167,7 @@ class LauncherActionsTest {
             LauncherShortcuts.refresh(activity) { completed.countDown() }
             assertTrue(completed.await(15, TimeUnit.SECONDS))
             val manager = activity.getSystemService(ShortcutManager::class.java)
-            val expected = LauncherAction.entries.take(manager.maxShortcutCountPerActivity).map { it.shortcutId }.toSet()
+            val expected = listOf("import", "search", "lock-and-hide", "new-private-note").take(manager.maxShortcutCountPerActivity).toSet()
             assertEquals(expected, manager.dynamicShortcuts.map { it.id }.toSet())
             manager.dynamicShortcuts.forEach { assertEquals(ComponentName(activity, MainActivity::class.java), it.intent?.component) }
         } finally {

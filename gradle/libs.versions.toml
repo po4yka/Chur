@@ -5,6 +5,7 @@
 # upgrades. Every version here is exact; none is a range.
 
 [versions]
+camerax = "1.6.2"
 filament = "1.77.3"
 # Toolchain
 jdk = "21"
@@ -58,6 +59,10 @@ haze = "2.0.1"
 markdownRenderer = "0.46.0"
 
 [libraries]
+androidx-camera-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "camerax" }
+androidx-camera-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref = "camerax" }
+androidx-camera-view = { module = "androidx.camera:camera-view", version.ref = "camerax" }
+androidx-camera-video = { module = "androidx.camera:camera-video", version.ref = "camerax" }
 haze-core = { module = "dev.chrisbanes.haze:haze", version.ref = "haze" }
 haze-blur = { module = "dev.chrisbanes.haze:haze-blur", version.ref = "haze" }
 haze-glass = { module = "dev.chrisbanes.haze:haze-glass", version.ref = "haze" }
