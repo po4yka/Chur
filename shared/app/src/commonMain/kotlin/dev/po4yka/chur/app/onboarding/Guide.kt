@@ -4,7 +4,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 enum class GuideStep(val target: String?, val informational: Boolean = false) {
-    PUBLIC_APP(null, true), CHOOSE(null), PRIVACY(null, true), CREATE("create"), RECOVERY("recovery"),
+    PUBLIC_APP(null, true), CHOOSE(null), PRIVACY(null, true), CREATE("create"), RESTORE("restore"), RESTORE_UNLOCK("restore-unlock"), RECOVERY("recovery"),
     IMPORT("import"), OPEN("open"), SEARCH("search"), LOCK("lock", true),
     AUTO_LOCK("auto-lock", true), UNLOCK("unlock-method", true), BACKUP("backup", true),
     DISCREET("discreet"), PET_GREET("pet"), PET_MOVE("pet"), PET_TREAT("treat"),
@@ -49,6 +49,15 @@ class GuideCoordinator(private val store: GuideStore = GuideStore(), freshInstal
             fresh
         }.getOrDefault(false)
         if (bootstrapAllowed) mutable.value = GuideSession(++serial, privateSteps)
+    }
+    fun chooseRestore() {
+        val current = session.value ?: return
+        if (current.publicOnly || current.step !in listOf(GuideStep.CREATE, GuideStep.RECOVERY)) return
+        mutable.value = GuideSession(++serial, listOf(GuideStep.RESTORE, GuideStep.RESTORE_UNLOCK) + privateSteps.drop(4))
+    }
+    fun returnToCreation() {
+        if (session.value?.step == GuideStep.RESTORE)
+            mutable.value = GuideSession(++serial, privateSteps.drop(2))
     }
     fun startPrivate() { mutable.value = GuideSession(++serial, privateSteps.drop(3).filter { it != GuideStep.RECOVERY }) }
     fun startPublic(shell: dev.po4yka.chur.app.PublicShell) {

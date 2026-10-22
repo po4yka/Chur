@@ -26,6 +26,7 @@ internal actual fun decodeForDisplay(original: ChurBuffer, maxEdgePx: Int): Imag
     if (jpegXlSignature(original.buffer)) {
         val decoder = runCatching { JpegXlDecoder.open(original) }.getOrNull() ?: return null
         try {
+            if (!displayDimensionsAllowed(decoder.width.toLong(), decoder.height.toLong())) return null
             val frame = decoder.renderFrame(0, maxEdgePx)
             return try { jpegXlFrameBitmap(frame) } finally { frame.close() }
         } catch (_: Exception) { return null }
@@ -33,6 +34,7 @@ internal actual fun decodeForDisplay(original: ChurBuffer, maxEdgePx: Int): Imag
     }
     return runCatching {
         ImageDecoder.decodeBitmap(ImageDecoder.createSource(original.buffer)) { decoder, info, _ ->
+            require(displayDimensionsAllowed(info.size.width.toLong(), info.size.height.toLong()))
             val edge = maxOf(info.size.width, info.size.height)
             if (edge > maxEdgePx) {
                 decoder.setTargetSize(

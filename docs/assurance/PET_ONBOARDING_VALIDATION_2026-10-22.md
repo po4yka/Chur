@@ -93,17 +93,92 @@ The iOS system icon confirmation can make the scene inactive after the trial
 succeeds. Normal privacy locking remains in force; UI acceptance checks normal
 re-entry after this system alert, rather than adding an onboarding exemption.
 
+## Archive restore follow-up
+
+Base revision: `31153f18`. The restore UI branch uses a 271,017-byte CHURBAK1
+package made by the production CLI, with one `restored-onboarding.png` image and
+one portable password slot. The damaged fixture contains only the first 32
+bytes of that package. Both platforms use the same encrypted bytes through their
+system file pickers. Fixtures are local under `/tmp/chur-restore-fixtures.iYQOcX`;
+no fixture vault or archive is included in Git.
+
+The initial guide had no restore-specific state or target. It kept the creation
+password tip on the restore form and authentication screen. The guide now selects
+the restore branch, highlights the real Choose backup file control, and waits for
+a successful restore before requesting normal authentication. Only a successful
+unlock advances to Library. It does not display a new recovery phrase for a
+restored vault. Old restore results cannot advance a replacement guide session.
+
+Visual inspection found a second defect after an early UI test passed: the
+restored CLI image opened as Preview unavailable. The CLI stores originals with
+unknown dimensions and no derivatives. Explicit viewing now tries a bounded
+original after derivatives when both catalog dimensions are zero. Grid prefetch
+does not use this exception. Native decoders validate the encoded image header
+against the existing edge and area limits before pixel allocation; encoded byte,
+output edge, integrity, and quarantine limits remain in force. UI tests now wait
+for the decoded photo's zoom semantics, not only the viewer route. iOS tests also
+reject oversized and zero-size encoded JPEG headers.
+
+Back on an empty installation now returns to creation and its guide. It no longer
+abandons the introduction through the public shell. Back from a restore started
+with an existing vault still returns to the public shell. Neither path replaces
+existing vault data.
+
+The UI tests check Back, picker cancellation, cleared credential input, wrong
+credentials, a truncated package, a valid retry, the separate authentication gate,
+restored content, continued search guidance, and removal of private guidance on
+lock. Android confirms the original filename through Info. See `DEVELOPMENT.md`
+for fixture creation and individual test selectors; every method requires its own
+fresh disposable installation.
+
+Follow-up checks observed:
+
+| Check | Result | Local log |
+| --- | --- | --- |
+| Shared-app Android host tests | 487 passed, no failures or skips | `/tmp/chur-restore-regression-final.log` |
+| Android app/test APK and lint | Assembly and lint passed; final host rerun passed after cleanup fix | `/tmp/chur-restore-preview-build.log`, `/tmp/chur-restore-regression-final.log` |
+| Shared-app Kotlin/Native tests and iOS arm64 compilation | 477 passed, no failures or skips; compilation passed | `/tmp/chur-restore-regression-final.log` |
+| Android restore UI journey, including decoded image | 1 passed, 27.233 seconds | `/tmp/chur-restore-android-ui4.log` |
+| iOS restore UI journey, app and extension build | 1 passed, 87.006 seconds; build passed | `/tmp/chur-restore-ios-ui8.log` |
+| Restore source review and secret scan | Clean P0 review; TruffleHog passed | `/tmp/chur-restore-complete-review.log` |
+
+The iOS result bundle is
+`/tmp/chur-pet-ios/Logs/Test/Test-Chur-2026.10.22_22-08-39-+0400.xcresult`.
+The final `restored-fixture-viewer` attachment shows the restored PNG and visible
+return-to-Library guidance. It was visually inspected. The earlier passing UI
+run is superseded by this result with decoded-image assertions. The final test
+handles Files' Cancel action in either the navigation bar or More menu and waits for the restore form after dismissal.
+Error messages use accessibility containers; the test does not assume a text-node
+role. Earlier selector failures did not require changing native picker behavior.
+The first preview-change host run also found a launcher test cleanup race: it
+reset Main after the Locked state arrived but before the cleanup job returned.
+The fixture now joins that job before shutdown and reset. This retains the
+concurrent-unlock assertion and does not add timing sleeps or retries.
+
+Android's early test failures were corrected to inspect the filename through Info
+and to use the accessible Lock now control. No assertion was removed to obtain a
+pass.
+
+The review command was
+`autoreview --mode local --output /tmp/chur-restore-complete-review.md --json-output /tmp/chur-restore-complete-review.json`.
+No P0 finding was reported or suppressed. Backup-exclusion and whitespace checks
+also passed. These checks cover the password-based full-backup branch on the
+emulator and simulator. Recovery-phrase restore, a selective archive through this
+UI, cancellation during a long restore, and third-party/cloud file providers were
+not exercised in this follow-up.
+
 ## Performance and acceptance limits
 
 On Android, the native TextureView delivered 22 frames in 1.1 seconds (within the 30fps cap) and zero new frames in a 1.1-second background interval after draining pending work. Six dispose/reopen cycles passed visible-pixel checks. PSS samples in KiB were `189733, 197445, 191221, 194853, 195509, 196645, 193909`. The final sample is 4,176 KiB above the initial sample; the samples are not monotonic. This does not establish zero retained memory or a long-running leak result. Evidence: `/tmp/chur-pet-proof/android-runtime.txt`.
 
 On iOS Simulator, six Settings-to-pet cycles changed process physical footprint from 93.7 MiB to 92.3 MiB. Peak footprint was 95.0 MiB. This is a bounded observation, not a long-running leak test. Local samples: `/tmp/chur-pet-proof/ios-memory-before-cycles.txt` and `/tmp/chur-pet-proof/ios-memory-after-cycles.txt`.
 
-Measured final debug artifacts: Android APK 119,063,332 bytes; iOS Simulator app bundle 157,594,010 bytes (sum of regular files). These are different package formats and must not be compared as platform efficiency measurements.
+Measured final debug artifacts: Android APK 119,063,932 bytes; iOS Simulator app bundle 157,599,082 bytes (sum of regular files). These are different package formats and must not be compared as platform efficiency measurements.
 
-The main private creation journey is complete on the Android emulator and iOS
-Simulator. The alternate archive-restore branch was not run as a full UI journey;
-no restore, backup export, or panic action was performed automatically.
+The main private creation journey and the password-based archive-restore UI branch
+are complete on the Android emulator and iOS Simulator. Restore ran only from
+explicit test UI actions; the guide did not start it. No backup export or panic
+action was performed automatically.
 
 Physical Android and iOS acceptance is still open. Full TalkBack/VoiceOver traversal, forced native renderer failure with PNG fallback, and sustained leak/thermal tests were not completed. iOS background GPU frame count was not measured; Android frame evidence must not be reported as iOS evidence.
 

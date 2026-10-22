@@ -2560,6 +2560,7 @@ class ChurController(
         restoreBackup(sourceFd, ArchiveCredential(password), close)
 
     fun restoreBackup(sourceFd: Int, credential: ArchiveCredential, close: (cancelled: Boolean) -> Unit) {
+        val guideToken = guide.session.value?.token
         val hold = retainArchiveCredential(credential)
         guarded {
             var bytes: ByteArray? = null
@@ -2584,6 +2585,7 @@ class ChurController(
                         throw ChurFailure(ChurStatus.fromValue(terminal), "the restore")
                     }
                     withContext(Dispatchers.Default) { repository.start() }
+                    guide.event(dev.po4yka.chur.app.onboarding.GuideStep.RESTORE, guideToken)
                     setRoute(AppRoute.Unlock)
                 }
             } finally {
@@ -3327,6 +3329,7 @@ class ChurController(
         val epoch = lockEpoch
         val initialQueryRevision = queryRevision
         privacy.setEnabled(true)
+        guide.event(dev.po4yka.chur.app.onboarding.GuideStep.RESTORE_UNLOCK)
         guide.event(dev.po4yka.chur.app.onboarding.GuideStep.CREATE)
         guide.event(dev.po4yka.chur.app.onboarding.GuideStep.RECOVERY)
         setRoute(AppRoute.Vault)
@@ -3421,6 +3424,8 @@ class ChurController(
      * attempt.
      */
     private fun setRoute(next: AppRoute) {
+        if (next == AppRoute.RestoreBackup) guide.chooseRestore()
+        if (next == AppRoute.CreateVault && _route.value == AppRoute.RestoreBackup) guide.returnToCreation()
         if (next != _route.value && (next == AppRoute.PublicShell || next == AppRoute.PublicSettings) &&
             guide.session.value?.publicOnly == false && guide.session.value?.step !in listOf(
                 dev.po4yka.chur.app.onboarding.GuideStep.CHOOSE, dev.po4yka.chur.app.onboarding.GuideStep.PRIVACY)) guide.conceal()

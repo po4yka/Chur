@@ -1947,7 +1947,7 @@ private fun IosRestoreRoute(controller: ChurController) {
                 }
             }
         },
-        onBack = { if (!running) controller.goTo(AppRoute.PublicShell) },
+        onBack = { if (!running) controller.goTo(if (controller.vaultState.value is VaultState.NoVault) AppRoute.CreateVault else AppRoute.PublicShell) },
         onCancel = controller::cancelActiveOperation,
     )
 }

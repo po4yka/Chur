@@ -188,6 +188,14 @@ Timeline uses encrypted thumbnail/preview assets. Full-resolution original is de
 
 Import makes no screen preview for a photograph whose long edge is at or below the 2048 px target of §12, so the viewer shows its original. A platform image decoder needs the whole encoded file in memory, so the viewer reads such an original, only when its long edge is 2048 px or less and its size is 32 MiB or less, with `read_at` into one caller-owned native buffer of that size ([`FFI_CONTRACT.md`](FFI_CONTRACT.md) §7). The decoder reads that buffer in place, and the viewer clears it after the decode. The original never becomes a Kotlin `ByteArray` or a Swift `Data` ([`FFI_CONTRACT.md`](FFI_CONTRACT.md) §6). The viewer never reads the original of a quarantined object.
 
+A restored CLI image can have no derivatives and unknown catalog dimensions.
+After trying derivatives, explicit viewing can read its original within the same
+32 MiB bound. This fallback applies only when both dimensions are zero; grid
+prefetch still requires measured dimensions. Android and iOS inspect the encoded
+header and enforce the §12 edge and area limits before allocating pixels. The
+rendered edge remains bounded by the preview or zoom target. Partial, invalid,
+oversized, and quarantined sources do not bypass those checks.
+
 The settled viewer page can animate native GIF and WebP on Android, and GIF, WebP, and APNG on iOS when the native decoder exposes multiple frames. Animation uses no plaintext file or whole-file managed array. Its encoded source is at most 32 MiB, its source canvas is at most 2048 px per edge, and its rendered long edge is at most 1024 px. The decoder closes before the native source buffer is cleared. Reduced motion starts animation paused. Unsupported or larger animations keep the still preview; the original remains exportable.
 
 A zoom can read an original of at most 32 MiB and decode at most a 4096 px long edge. This gives more detail without caching an unbounded full-resolution bitmap. Quarantined objects never use this path.

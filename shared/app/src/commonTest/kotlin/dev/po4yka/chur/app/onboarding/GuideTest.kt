@@ -3,6 +3,37 @@ package dev.po4yka.chur.app.onboarding
 import kotlin.test.*
 
 class GuideTest {
+    @Test fun restore_requires_its_result_then_authentication_and_never_shows_new_recovery_words() {
+        val guide = GuideCoordinator(freshInstall = true)
+        guide.event(GuideStep.CHOOSE); guide.event(GuideStep.PRIVACY)
+        val creationToken = guide.session.value!!.token
+        guide.chooseRestore()
+        assertEquals(GuideStep.RESTORE, guide.session.value?.step)
+        guide.event(GuideStep.CREATE, creationToken)
+        guide.event(GuideStep.RESTORE_UNLOCK)
+        assertEquals(GuideStep.RESTORE, guide.session.value?.step)
+        guide.event(GuideStep.RESTORE)
+        assertEquals(GuideStep.RESTORE_UNLOCK, guide.session.value?.step)
+        guide.event(GuideStep.RESTORE_UNLOCK)
+        assertEquals(GuideStep.IMPORT, guide.session.value?.step)
+        assertFalse(GuideStep.RECOVERY in guide.session.value!!.steps)
+    }
+    @Test fun leaving_restore_invalidates_its_result_and_preserves_the_creation_alternative() {
+        val guide = GuideCoordinator(freshInstall = true)
+        guide.event(GuideStep.CHOOSE); guide.event(GuideStep.PRIVACY); guide.chooseRestore()
+        val old = guide.session.value!!.token
+        guide.returnToCreation()
+        assertEquals(GuideStep.CREATE, guide.session.value?.step)
+        guide.chooseRestore()
+        guide.event(GuideStep.RESTORE, old)
+        assertEquals(GuideStep.RESTORE, guide.session.value?.step)
+        guide.conceal()
+        guide.event(GuideStep.RESTORE)
+        assertNull(guide.session.value)
+        guide.startPrivate(); guide.chooseRestore()
+        assertEquals(GuideStep.IMPORT, guide.session.value?.step)
+    }
+
     @Test fun outgoing_native_scene_cannot_remove_the_active_scenes_target() {
         val guide = GuideCoordinator()
         val outgoing = Any()

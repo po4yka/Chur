@@ -302,6 +302,11 @@ class LauncherActionHostTest {
             if (start) fixture.controller.start()
             fixture.test()
         } finally {
+            // Locked is published before the cleanup coroutine returns. Join it
+            // before replacing Main, including the concurrent-unlock test.
+            val cleanup = fixture.controller.javaClass.getDeclaredField("pendingLock")
+                .apply { isAccessible = true }.get(fixture.controller) as? Job
+            withTimeout(10_000) { cleanup?.join() }
             fixture.controller.shutdown()
             Dispatchers.resetMain()
             root.deleteRecursively()

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import dev.po4yka.chur.app.onboarding.guideTarget
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -152,7 +153,7 @@ fun UnlockScreen(
                 Button(
                     onClick = { submit() },
                     enabled = canUnlock,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().guideTarget("restore-unlock", canUnlock),
                 ) {
                     Text(if (busy) "Opening" else "Unlock")
                 }

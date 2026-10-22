@@ -2,6 +2,7 @@ package dev.po4yka.chur.app
 
 import dev.po4yka.chur.app.vault.stillSources
 import dev.po4yka.chur.app.vault.originalImageCandidate
+import dev.po4yka.chur.app.vault.displayDimensionsAllowed
 import dev.po4yka.chur.ffi.ObjectProjection
 import dev.po4yka.chur.ffi.StreamKind.GRID_PREVIEW
 import dev.po4yka.chur.ffi.StreamKind.ORIGINAL
@@ -24,6 +25,21 @@ class ViewerStillTest {
         plaintextSize = 2L * 1024 * 1024, width = 1200, height = 1600, durationMs = 0,
         favorite = false, state = 1, integritySummary = 4, thumbnailReady = true,
     )
+
+    @Test fun cli_backup_images_can_be_probed_only_in_the_viewer_with_all_other_bounds_kept() {
+        val unknown = photo.copy(width = 0, height = 0, thumbnailReady = false)
+        assertFalse(originalImageCandidate(unknown))
+        assertTrue(originalImageCandidate(unknown, allowUnknownDimensions = true))
+        for (refused in listOf(unknown.copy(width = -1), unknown.copy(width = 1),
+            unknown.copy(plaintextSize = 33L * 1024 * 1024), unknown.copy(integritySummary = 6), unknown.copy(mediaKind = 3))) {
+            assertFalse(originalImageCandidate(refused, allowUnknownDimensions = true))
+        }
+        assertTrue(displayDimensionsAllowed(1024, 1024))
+        assertFalse(displayDimensionsAllowed(0, 1024))
+        assertFalse(displayDimensionsAllowed(16_385, 1))
+        assertFalse(displayDimensionsAllowed(16_384, 16_384))
+        assertFalse(displayDimensionsAllowed(Long.MAX_VALUE, Long.MAX_VALUE))
+    }
 
     @Test
     fun a_synced_image_without_derivatives_can_use_a_bounded_original() {

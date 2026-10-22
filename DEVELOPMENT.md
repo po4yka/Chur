@@ -144,8 +144,9 @@ use another UID's content provider and temporary URI grants.
 production entry point and native core. Run each on a disposable device with a
 fresh Chur installation and English UI. The tests create a synthetic vault,
 confirm its recovery words, import a local image, search, review settings, and
-verify the discreet-mode trial through normal password authentication. They do
-not restore or export an archive, delete the source image, or use a test bypass.
+verify the discreet-mode trial through normal password authentication. The creation tests do not restore or export an archive, delete the source
+image, or use a test bypass. The separate restore tests use the real file picker
+and a CLI-produced encrypted backup; they do not export from the running app.
 The iOS keyboard Go action submits authentication. The system icon confirmation
 can lock the app; the test uses the normal code and password path again.
 Test logs and XCTest results can contain synthetic input; keep them local.
@@ -158,12 +159,12 @@ only that disposable Chur app before the next run; wait for Xcode to exit first.
 
 ```sh
 adb -s "$CHUR_TEST_SERIAL" shell am instrument -w \
-  -e class dev.po4yka.chur.android.PrivateOnboardingTest \
+  -e class dev.po4yka.chur.android.PrivateOnboardingTest#complete_private_tour_and_revoke_manual_replay_on_background \
   dev.po4yka.chur.test/androidx.test.runner.AndroidJUnitRunner
 xcodebuild -project apps/iosApp/Chur.xcodeproj -scheme Chur \
   -configuration Debug -destination "platform=iOS Simulator,id=$CHUR_TEST_SIMULATOR" \
   CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_IDENTITY=- \
-  -only-testing:ChurUITests/PrivateOnboardingTests test
+  -only-testing:ChurUITests/PrivateOnboardingTests/testFullPrivateOnboarding test
 ```
 
 Use `build-gate --` for the build commands on this workstation. Check the Android
@@ -171,6 +172,39 @@ instrumentation summary as well as the shell exit status: `am instrument` can
 exit zero when tests fail. Clear the disposable app data again before the launcher
 regression suite, which expects the default non-discreet state. UI tests do not replace physical-device, full screen
 reader, or performance acceptance.
+
+### Restore onboarding UI acceptance
+
+Run each restore test on a fresh disposable installation. Reuse the same
+synthetic backup on both platforms. Build the pinned `chur-cli`, then create the
+fixture through its production commands:
+
+```sh
+CHUR_RESTORE_FIXTURE=$(mktemp -d)
+export CHUR_PASSWORD='Onboarding-public-test-2026'
+cp apps/iosApp/Resources/chur_interactive_fallback.png "$CHUR_RESTORE_FIXTURE/restored-onboarding.png"
+chur-cli vault --root "$CHUR_RESTORE_FIXTURE/source" create
+chur-cli vault --root "$CHUR_RESTORE_FIXTURE/source" import "$CHUR_RESTORE_FIXTURE/restored-onboarding.png" --content-type image/png
+chur-cli backup --root "$CHUR_RESTORE_FIXTURE/source" create "$CHUR_RESTORE_FIXTURE/restore-onboarding.churbak"
+head -c 32 "$CHUR_RESTORE_FIXTURE/restore-onboarding.churbak" > "$CHUR_RESTORE_FIXTURE/truncated.churbak"
+unset CHUR_PASSWORD
+```
+
+Copy both `.churbak` files to Android Downloads. On the disposable iOS Simulator,
+copy them to `File Provider Storage/Chur restore fixtures` in the
+`group.com.apple.FileProvider.LocalStorage` container returned by
+`xcrun simctl get_app_container "$CHUR_TEST_SIMULATOR" com.apple.DocumentsApp groups`.
+This seeds Files only; it does not install vault data or bypass the picker.
+
+Use the preceding instrumentation/Xcode commands with these test selectors:
+
+- Android: `dev.po4yka.chur.android.PrivateOnboardingTest#restore_archive_cancel_retry_authenticate_and_continue_tour`.
+- iOS: `ChurUITests/PrivateOnboardingTests/testRestoreArchiveOnboarding`.
+
+Each method needs its own fresh installation. The tests cover Back, picker
+cancel, incorrect archive credentials, a truncated package, retry with the valid
+package, the separate authentication gate, restored content, continued guidance,
+and removal of guidance on lock. Keep the synthetic archives and test logs local.
 
 ### OCR assets and native dependencies
 

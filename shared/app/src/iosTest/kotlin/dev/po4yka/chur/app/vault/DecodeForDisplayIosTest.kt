@@ -24,6 +24,21 @@ class DecodeForDisplayIosTest {
         assertNull(decode(ByteArray(64), 2_048))
     }
 
+    @Test fun encoded_dimensions_are_checked_before_thumbnail_decode() {
+        val oversized = ROTATED.copyOf()
+        val frame = (0 until oversized.size - 8).first {
+            oversized[it] == 0xff.toByte() && oversized[it + 1] == 0xc0.toByte()
+        }
+        // SOF0: marker, length, precision, height, width. Both become 32767.
+        oversized[frame + 5] = 0x7f; oversized[frame + 6] = 0xff.toByte()
+        oversized[frame + 7] = 0x7f; oversized[frame + 8] = 0xff.toByte()
+        assertNull(decode(oversized, 2_048))
+        val unknown = ROTATED.copyOf()
+        unknown[frame + 5] = 0; unknown[frame + 6] = 0
+        unknown[frame + 7] = 0; unknown[frame + 8] = 0
+        assertNull(decode(unknown, 2_048))
+    }
+
     private fun decode(bytes: ByteArray, maxEdgePx: Int) = withChurBuffer(bytes.size) { buffer ->
         buffer.copyIn(bytes)
         decodeForDisplay(buffer, maxEdgePx)

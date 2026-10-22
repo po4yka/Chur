@@ -512,7 +512,7 @@ private fun RestoreRoute(controller: ChurController) {
             }
         }
     }
-    val back = { controller.goTo(AppRoute.PublicShell) }
+    val back = { controller.goTo(if (controller.vaultState.value is VaultState.NoVault) AppRoute.CreateVault else AppRoute.PublicShell) }
     BackHandler { if (!running) back() }
     RestoreBackupScreen(
         busy = running, error = formError, cancelled = cancelled, operation = operation,

@@ -129,6 +129,89 @@ class PrivateOnboardingTest {
         } finally { main { activity.finish() } }
     }
 
+    /** Seed the CLI-produced restore-onboarding.churbak and truncated.churbak in Downloads. */
+    @Test fun restore_archive_cancel_retry_authenticate_and_continue_tour() {
+        val activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        try {
+            assertTrue("Use a fresh disposable installation", await { has("Meet Chur") })
+            click("Chur")
+            click("Set up vault", guide = true)
+            click("Restore from a backup")
+            lesson("Enter the archive password")
+            click("Back")
+            lesson("Choose a strong password")
+            click("Restore from a backup")
+            field("Backup password or recovery phrase", password)
+            click("Choose backup file")
+            awaitPackage("com.google.android.documentsui")
+            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+            awaitPackage("dev.po4yka.chur")
+            lesson("Enter the archive password")
+            assertRestoreCredentialCleared()
+            fun chooseArchive(credential: String, name: String) {
+                field("Backup password or recovery phrase", credential)
+                click("Choose backup file")
+                awaitPackage("com.google.android.documentsui")
+                systemClick("Show roots")
+                systemClick("Downloads")
+                systemClick(name)
+                awaitPackage("dev.po4yka.chur")
+            }
+            chooseArchive("Wrong-public-fixture-password", "restore-onboarding.churbak")
+            assertTrue(await { has("Unable to unlock. Try again or use recovery.") })
+            lesson("Enter the archive password")
+            assertRestoreCredentialCleared()
+            assertFalse(has("Library"))
+            chooseArchive(password, "truncated.churbak")
+            assertTrue(await { has("The vault could not be verified. Restore it from a backup.") })
+            lesson("Enter the archive password")
+            assertRestoreCredentialCleared()
+            assertFalse(has("Library"))
+            chooseArchive(password, "restore-onboarding.churbak")
+            lesson("The archive is restored")
+            assertTrue(has("Unlock"))
+            assertFalse(has("Library"))
+            field("Password", password)
+            click("Unlock")
+            lesson("In Library, use Import")
+            assertFalse(has("Your recovery phrase"))
+            // Restored content is already present. Import is optional in the tour.
+            click("Skip step", guide = true)
+            lesson("Open an item in Library")
+            assertTrue(await {
+                var ready = false
+                main { ready = nodes().any { it.config.getOrNull(SemanticsActions.OnClick)?.label == "Open" } }
+                ready
+            })
+            main { assertTrue(nodes().first { it.config.getOrNull(SemanticsActions.OnClick)?.label == "Open" }
+                .config[SemanticsActions.OnClick].action?.invoke() == true) }
+            lesson("Return to Library and open Search")
+            assertTrue("Restored image pixels must be decoded", await {
+                var ready = false
+                main { ready = nodes().any { it.config.getOrNull(SemanticsProperties.StateDescription) == "Zoom 100%" } }
+                ready
+            })
+            assertFalse(has("Preview unavailable"))
+            click("Info")
+            assertTrue(await { has("restored-onboarding.png") })
+            click("Hide info")
+            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+            click("Search")
+            field("Search", "restored-onboarding")
+            lesson("Tap Lock to close the vault")
+            click("Lock now")
+            assertTrue(await { !has("Finish tutorial") })
+        } finally { main { activity.finish() } }
+    }
+    private fun assertRestoreCredentialCleared() {
+        main {
+            val field = nodes().first { "Backup password or recovery phrase" in it.labels && SemanticsActions.SetText in it.config }
+            assertEquals("", field.config[SemanticsProperties.EditableText].text)
+            assertTrue(SemanticsProperties.Disabled in find("Choose backup file")!!.config)
+        }
+    }
+
     private val SemanticsNode.labels get() = config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text } +
         config.getOrNull(SemanticsProperties.ContentDescription).orEmpty()
     private fun View.roots(): List<ViewRootForTest> = when (this) {

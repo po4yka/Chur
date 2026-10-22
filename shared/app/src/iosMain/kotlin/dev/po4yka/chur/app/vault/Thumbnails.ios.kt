@@ -8,6 +8,8 @@ import dev.po4yka.chur.ffi.JpegXlDecoder
 import dev.po4yka.chur.ffi.JpegXlFrame
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.LongVar
+import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.IntVar
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.get
@@ -20,6 +22,12 @@ import org.jetbrains.skia.ColorAlphaType
 import org.jetbrains.skia.ColorType
 import org.jetbrains.skia.Image
 import org.jetbrains.skia.ImageInfo
+import platform.CoreFoundation.CFDictionaryGetValue
+import platform.CoreFoundation.CFGetTypeID
+import platform.CoreFoundation.CFNumberGetTypeID
+import platform.CoreFoundation.CFNumberGetValue
+import platform.CoreFoundation.CFStringRef
+import platform.CoreFoundation.kCFNumberSInt64Type
 import platform.CoreFoundation.CFDictionaryCreateMutable
 import platform.CoreFoundation.CFDictionarySetValue
 import platform.CoreFoundation.CFNumberCreate
@@ -43,6 +51,9 @@ import platform.CoreGraphics.CGImageRelease
 import platform.CoreGraphics.CGRectMake
 import platform.CoreGraphics.kCGBitmapByteOrder32Big
 import platform.CoreGraphics.kCGColorSpaceSRGB
+import platform.ImageIO.CGImageSourceCopyPropertiesAtIndex
+import platform.ImageIO.kCGImagePropertyPixelWidth
+import platform.ImageIO.kCGImagePropertyPixelHeight
 import platform.ImageIO.CGImageSourceCreateThumbnailAtIndex
 import platform.ImageIO.CGImageSourceCreateWithDataProvider
 import platform.ImageIO.CGImageSourceRef
@@ -74,6 +85,7 @@ internal actual fun decodeForDisplay(original: ChurBuffer, maxEdgePx: Int): Imag
         return runCatching {
             val decoder = JpegXlDecoder.open(original)
             try {
+                if (!displayDimensionsAllowed(decoder.width.toLong(), decoder.height.toLong())) return null
                 val frame = decoder.renderFrame(0, maxEdgePx)
                 try { jpegXlFrameBitmap(frame) } finally { frame.close() }
             } finally { decoder.close() }
@@ -89,6 +101,7 @@ internal actual fun decodeForDisplay(original: ChurBuffer, maxEdgePx: Int): Imag
     CGDataProviderRelease(provider)
     if (source == null) return null
     val upright = try {
+        if (!displayHeaderAllowed(source)) return null
         uprightThumbnail(source, maxEdgePx)
     } finally {
         CFRelease(source)
@@ -98,6 +111,20 @@ internal actual fun decodeForDisplay(original: ChurBuffer, maxEdgePx: Int): Imag
     } finally {
         CGImageRelease(upright)
     }
+}
+
+@OptIn(ExperimentalForeignApi::class)
+private fun displayHeaderAllowed(source: CGImageSourceRef): Boolean = memScoped {
+    val properties = CGImageSourceCopyPropertiesAtIndex(source, 0u, null) ?: return@memScoped false
+    try {
+        fun dimension(key: CFStringRef?): Long {
+            val number = CFDictionaryGetValue(properties, key) ?: return 0
+            if (CFGetTypeID(number) != CFNumberGetTypeID()) return 0
+            val value = alloc<LongVar>()
+            return if (CFNumberGetValue(number.reinterpret(), kCFNumberSInt64Type, value.ptr)) value.value else 0
+        }
+        displayDimensionsAllowed(dimension(kCGImagePropertyPixelWidth), dimension(kCGImagePropertyPixelHeight))
+    } finally { CFRelease(properties) }
 }
 
 /**

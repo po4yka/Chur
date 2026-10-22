@@ -524,7 +524,7 @@ private fun RestoreArchiveContent(
                 Button(
                     onClick = { val entered = password; password = ""; onChoose(entered) },
                     enabled = !busy && password.isNotEmpty(),
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().guideTarget("restore", !busy && password.isNotEmpty()),
                 ) {
                     Text(if (busy) "Restoring" else "Choose backup file")
                 }

@@ -27,7 +27,9 @@ enum class ViewerStillState { Loading, Ready, Unavailable }
  * The original is read whole into one native buffer, so it is tried only when
  * the catalog says it is inside the screen-preview edge and
  * [ORIGINAL_BYTES_MAX]. An image without its previews, or one the catalog has
- * no size for, gets the derivatives only. So does a quarantined one: `CATALOG_SCHEMA_V1.md` §5.1
+ * no size for, tries the derivatives first. An explicit viewer can then probe
+ * a bounded original with unknown dimensions. A quarantined image uses only
+ * derivatives: `CATALOG_SCHEMA_V1.md` §5.1
  * says its container must not be presented or silently retried, as the
  * routes already do for playback. The test is for that value alone, because
  * [PresentedState.of] maps a trashed row to `CORRUPT` and the trash viewer
@@ -79,19 +81,25 @@ suspend fun viewerStill(
     }
     // Peer sync transfers originals only. Decode a bounded still when this host
     // has no derivatives, including images larger than the preview edge.
-    if (StreamKind.ORIGINAL !in sources && originalImageCandidate(projection)) {
+    if (StreamKind.ORIGINAL !in sources && originalImageCandidate(projection, allowUnknownDimensions = true)) {
         return decodeOriginal(vault, projection.objectId, if (highResolution) ZOOM_EDGE_MAX else ORIGINAL_EDGE_MAX)
     }
     return null
 }
 
-internal fun originalImageCandidate(projection: ObjectProjection): Boolean =
+/** Unknown dimensions are allowed only for explicit viewing, never grid prefetch. */
+internal fun originalImageCandidate(projection: ObjectProjection, allowUnknownDimensions: Boolean = false): Boolean =
     projection.mediaKind == MEDIA_CLASS_IMAGE &&
-        projection.width in 1..dev.po4yka.chur.imports.MediaBounds.IMAGE_EDGE_MAX &&
-        projection.height in 1..dev.po4yka.chur.imports.MediaBounds.IMAGE_EDGE_MAX &&
-        projection.width.toLong() * projection.height <= dev.po4yka.chur.imports.MediaBounds.IMAGE_AREA_MAX &&
+        (displayDimensionsAllowed(projection.width.toLong(), projection.height.toLong()) ||
+            allowUnknownDimensions && projection.width == 0 && projection.height == 0) &&
         projection.plaintextSize in 1..ORIGINAL_BYTES_MAX &&
         PresentedState.of(projection) != PresentedState.QUARANTINED
+
+/** Native decoders validate the encoded header before allocating image pixels. */
+internal fun displayDimensionsAllowed(width: Long, height: Long): Boolean =
+    width in 1..dev.po4yka.chur.imports.MediaBounds.IMAGE_EDGE_MAX.toLong() &&
+        height in 1..dev.po4yka.chur.imports.MediaBounds.IMAGE_EDGE_MAX.toLong() &&
+        width * height <= dev.po4yka.chur.imports.MediaBounds.IMAGE_AREA_MAX
 
 /**
  * Decodes the original of a small photograph, or `null` when it cannot.
