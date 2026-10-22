@@ -43,6 +43,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import dev.po4yka.chur.app.onboarding.guideTarget
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
@@ -396,7 +397,7 @@ fun MediaBrowser(
                 items(tiles, key = { it.projection.id }) { tile ->
                     DisposableEffect(tile.projection.id) { onDispose { bounds.remove(tile.projection.id) } }
                     MediaTile(tile, selecting, { click(tile) }, { toggleSelection(tile.projection) },
-                        dragModifier(tile).then(reorderActions(tile)).graphicsLayer {
+                        dragModifier(tile).then(reorderActions(tile)).then(if (tile == tiles.firstOrNull()) Modifier.guideTarget("open", !selecting) else Modifier).graphicsLayer {
                             if (dragged == tile.projection.id) { scaleX = 1.04f; scaleY = 1.04f; alpha = 0.8f }
                         }, if (hovered?.projection?.id == tile.projection.id && placement != null)
                             if (after) "Place after" else "Place before" else null)
@@ -420,7 +421,7 @@ fun MediaBrowser(
             listItems(tiles, key = { it.projection.id }) { tile ->
                 DisposableEffect(tile.projection.id) { onDispose { bounds.remove(tile.projection.id) } }
                 MediaRow(tile, selecting, { click(tile) }, { toggleSelection(tile.projection) },
-                    dragModifier(tile).then(reorderActions(tile)).graphicsLayer {
+                    dragModifier(tile).then(reorderActions(tile)).then(if (tile == tiles.firstOrNull()) Modifier.guideTarget("open", !selecting) else Modifier).graphicsLayer {
                         if (dragged == tile.projection.id) { scaleX = 1.02f; scaleY = 1.02f; alpha = 0.8f }
                     }, if (hovered?.projection?.id == tile.projection.id && placement != null)
                         if (after) "Place after" else "Place before" else null)
@@ -789,7 +790,7 @@ fun EmptyLibrary(onImport: (() -> Unit)?, modifier: Modifier = Modifier) {
                 color = colors.inkMuted,
                 textAlign = TextAlign.Center,
             )
-            if (onImport != null) Button(onClick = onImport) { Text("Import") }
+            if (onImport != null) Button(onClick = onImport, modifier = Modifier.guideTarget("import")) { Text("Import") }
         }
     }
 }

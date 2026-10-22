@@ -1,4 +1,4 @@
-@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 
 package dev.po4yka.chur.app.spirit
 
@@ -52,7 +52,10 @@ internal actual fun SpiritSurface(state: SpiritRenderState, modifier: Modifier) 
             renderers[view]?.update(state.clip, state.clipSerial, state.motionSerial, state.reducedMotion, state.dragX, state.dragY)
         },
         onRelease = { view -> renderers.remove(view)?.dispose() },
-        properties = UIKitInteropProperties(interactionMode = null, isNativeAccessibilityEnabled = false),
+        // Place the transparent Metal view over the canvas; the default interop
+        // hole exposes the host window color instead of the scene background.
+        properties = UIKitInteropProperties(interactionMode = null, isNativeAccessibilityEnabled = false,
+            placedAsOverlay = true),
     )
 }
 

@@ -451,7 +451,7 @@ Chur has four presentation domains.
 
 ### 4.1 Public shell
 
-The implemented public shells are Notes, Calculator, and Camera. Journal, public Files, or another utility would require separate product scope. It is a real workspace with its own data, navigation, empty states, editing behavior, and settings.
+The implemented public shells are Notes, Calculator, Camera, and the Chur pet. Journal, public Files, or another utility would require separate product scope. It is a real workspace with its own data, navigation, empty states, editing behavior, and settings.
 
 Requirements:
 

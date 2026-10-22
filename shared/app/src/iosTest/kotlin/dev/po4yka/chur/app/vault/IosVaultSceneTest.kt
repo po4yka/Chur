@@ -12,6 +12,7 @@ import dev.po4yka.chur.app.GateResult
 import dev.po4yka.chur.app.NoPrivacyCover
 import dev.po4yka.chur.vault.VaultState
 import kotlinx.cinterop.autoreleasepool
+import kotlinx.cinterop.useContents
 import kotlinx.coroutines.runBlocking
 import platform.Foundation.NSDate
 import platform.Foundation.dateByAddingTimeInterval
@@ -32,6 +33,56 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class IosVaultSceneTest {
+    @Test
+    fun guide_dock_has_space_below_native_vault_and_resets_without_private_route_restore() {
+        val chrome = IosVaultChrome()
+        val root = dev.po4yka.chur.app.ChurRootViewController(UIViewController(), chrome)
+        root.view.setFrame(platform.CoreGraphics.CGRectMake(0.0, 0.0, 402.0, 874.0))
+        chrome.setGuideInset(200.0)
+        root.viewDidLayoutSubviews()
+        assertEquals(674.0, chrome.presentationController.view.frame.useContents { size.height })
+        chrome.setGuideInset(0.0)
+        root.viewDidLayoutSubviews()
+        assertEquals(874.0, chrome.presentationController.view.frame.useContents { size.height })
+        chrome.clear()
+    }
+
+    @Test
+    fun native_controller_first_run_and_pet_trial_still_require_vault_authentication() {
+        val rootPath = NSTemporaryDirectory() + "chur-guide-" + NSUUID().UUIDString
+        assertTrue(NSFileManager.defaultManager.createDirectoryAtPath(rootPath, true, null, null))
+        val guide = dev.po4yka.chur.app.onboarding.GuideCoordinator(freshInstall = true)
+        val controller = ChurController(rootPath, NoPrivacyCover, NoExports, guide = guide, clock = { 1_700_000_000_000L })
+        try {
+            runBlocking { controller.vault.start() }
+            controller.chooseInitialShell(dev.po4yka.chur.app.PublicShell.PET)
+            assertEquals(dev.po4yka.chur.app.onboarding.GuideStep.PRIVACY, guide.session.value?.step)
+            guide.event(dev.po4yka.chur.app.onboarding.GuideStep.PRIVACY)
+            controller.openVaultEntry()
+            controller.create("Native-guide-public-fixture", offerRecovery = true)
+            await { controller.recoveryPhrase.value != null }
+            assertEquals(dev.po4yka.chur.app.onboarding.GuideStep.RECOVERY, guide.session.value?.step)
+            guide.skip()
+            assertNotNull(controller.recoveryPhrase.value)
+            assertTrue(controller.vaultState.value is VaultState.Creating)
+            controller.acknowledgeRecoveryPhrase()
+            await { controller.route.value == AppRoute.Vault && !controller.unlocking.value }
+            assertEquals(dev.po4yka.chur.app.onboarding.GuideStep.IMPORT, guide.session.value?.step)
+            controller.beginDiscreetSetup("01234567")
+            await { controller.vaultState.value is VaultState.Locked }
+            assertNull(guide.session.value)
+            assertTrue(controller.submitPublicCode("01234567"))
+            assertEquals(AppRoute.Unlock, controller.route.value)
+            assertFalse(controller.publicUtilities.discreet.value)
+            controller.unlock("Native-guide-public-fixture")
+            await { controller.route.value == AppRoute.Vault && !controller.unlocking.value }
+            assertTrue(controller.publicUtilities.discreet.value)
+            assertNull(guide.session.value)
+        } finally {
+            runBlocking { controller.shutdown() }
+            NSFileManager.defaultManager.removeItemAtPath(rootPath, null)
+        }
+    }
     @Test
     fun expanded_presentation_activates_both_leases_and_clear_retires_both_bodies() {
         val controller = inertController()

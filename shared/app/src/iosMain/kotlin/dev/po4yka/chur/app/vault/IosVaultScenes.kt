@@ -138,6 +138,7 @@ internal class IosVaultScenes(
             val owner = controllerOwner.get()
             val route = owner?.route?.collectAsState()?.value
             val state = owner?.vaultState?.collectAsState()?.value
+            val guideObscured = owner?.guideObscured?.collectAsState()?.value != false
             val focus = LocalFocusManager.current
             val chrome = chromeOwner.get()
             val scrollEnabled = lease.active && lease.scrollAllowed?.invoke() == true && chrome?.scrollInteractionEnabled == true
@@ -154,6 +155,8 @@ internal class IosVaultScenes(
             }
             ChurApp(gate = admissionGate, route = AppRoute.Vault) {
                 CompositionLocalProvider(
+                    dev.po4yka.chur.app.onboarding.LocalGuide provides
+                        owner?.guide?.takeIf { !guideObscured && lease.canAct() },
                     LocalIosVaultScenes provides currentStore,
                     LocalIosVaultScene provides lease,
                     LocalIosVaultChrome provides chromeOwner.get(),

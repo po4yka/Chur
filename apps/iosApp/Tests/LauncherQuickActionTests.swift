@@ -5,7 +5,7 @@ import XCTest
 final class LauncherQuickActionTests: XCTestCase {
     func testOnlyExactContentFreeTypesAreAccepted() {
         XCTAssertEqual(LauncherQuickAction.allCases.map(\.rawValue), [
-            "dev.po4yka.chur.action.public-notes", "dev.po4yka.chur.action.public-calculator", "dev.po4yka.chur.action.public-camera",
+            "dev.po4yka.chur.action.public-notes", "dev.po4yka.chur.action.public-calculator", "dev.po4yka.chur.action.public-camera", "dev.po4yka.chur.action.public-pet",
             "dev.po4yka.chur.action.import", "dev.po4yka.chur.action.search",
             "dev.po4yka.chur.action.lock-and-hide", "dev.po4yka.chur.action.new-private-note",
         ])

@@ -231,7 +231,8 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
     /** UIKit bars must never share a UIBarButtonItem or its custom UIView. */
     private class ChromeControls(owner: IosVaultChrome) : NSObject() {
         private val presenter = WeakReference(owner)
-        val lock = button("Lock now", "lock")
+        val lock = button("Lock now", "lock").apply { tag = 7301L }
+        val primaryButton = button("", null).apply { tag = 7302L }
         val primary: UIBarButtonItem
         private val lockAction: UIAction
         private val backAction: UIAction
@@ -246,9 +247,12 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
 
         init {
             val controls = WeakReference(this)
-            primary = UIBarButtonItem(primaryAction = UIAction.actionWithTitle("", image = null, identifier = null) { _ ->
+            val primaryAction = UIAction.actionWithTitle("", image = null, identifier = null) { _ ->
                 controls.get()?.current()?.performPrimary()
-            })
+            }
+            primaryButton.addAction(primaryAction, forControlEvents = UIControlEventTouchUpInside)
+            primary = UIBarButtonItem(primaryAction = primaryAction).apply { customView = primaryButton }
+            IosAdaptiveBars.configureCustomItem?.invoke(primary)
             lockAction = UIAction.actionWithTitle("Lock now", image = null, identifier = null) { _ ->
                 controls.get()?.current()?.lockNow()
             }
@@ -306,6 +310,50 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
     private var navigationBlocked = true
     private var lockRequested = false
     private var primaryCommand: ((VaultActions) -> Unit)? = null
+    private var primaryIsImport = false
+    internal var guideBottomInset = 0.0
+        private set
+    internal var onGuideLayout: (() -> Unit)? = null
+    internal fun setGuideInset(height: Double) {
+        val next = height.takeIf { it.isFinite() && it >= 0 } ?: 0.0
+        if (guideBottomInset != next) { guideBottomInset = next; onGuideLayout?.invoke() }
+    }
+    private var guideHighlighted: UIView? = null
+    private var guideOwner: dev.po4yka.chur.app.onboarding.GuideCoordinator? = null
+
+    /** Native controls own their highlight; only target identifiers leave this adapter. */
+    internal fun updateGuide(guide: dev.po4yka.chur.app.onboarding.GuideCoordinator?) {
+        if (guideOwner !== guide) { guideOwner?.releaseTargets(this); guideOwner = guide }
+        guideHighlighted?.layer?.borderWidth = 0.0
+        guideHighlighted = null
+        val step = guide?.session?.value?.step
+        val targets = mapOf(
+            "lock" to currentControls?.lock,
+            "import" to currentControls?.primaryButton?.takeIf { primaryIsImport && currentControls?.primary?.enabled == true },
+            "search" to search?.controller?.searchBar?.searchTextField?.takeIf { searchAllowed },
+        )
+        fun hierarchyVisible(view: UIView): Boolean {
+            var current: UIView? = view
+            while (current != null) {
+                if (current.hidden || current.alpha <= 0.0) return false
+                current = current.superview
+            }
+            return true
+        }
+        for ((id, target) in targets) {
+            val window = target?.window
+            val visible = guide != null && !lockRequested && !transitionInFlight && !privateModalActive && !covered &&
+                target != null && window != null && hierarchyVisible(target) &&
+                platform.CoreGraphics.CGRectContainsRect(window.bounds, target.convertRect(target.bounds, toView = window)) &&
+                !platform.CoreGraphics.CGRectIsEmpty(target.bounds)
+            guide?.target(this, id, visible)
+            if (visible && step?.target == id) {
+                target!!.layer.borderColor = accentTint.CGColor
+                target.layer.borderWidth = 2.0
+                guideHighlighted = target
+            }
+        }
+    }
     private var backCommand: ((VaultActions) -> Unit)? = null
     private var menuEpoch = 0L
     private val menuCommands = mutableListOf<Command>()
@@ -689,6 +737,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
         back.enabled = !navigationBlocked
         primary.enabled = !navigationBlocked && (state.operation == null ||
             (state.destination == VaultDestination.ALBUMS && state.openAlbum == null && state.selectedCount == 0))
+        controls.primaryButton.enabled = primary.enabled
         secondary.enabled = !navigationBlocked
         selectedNavigation.topViewController?.toolbarItems?.filterIsInstance<UIBarButtonItem>()?.forEach { it.enabled = !navigationBlocked }
         tabBar.userInteractionEnabled = !navigationBlocked
@@ -756,8 +805,11 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
             state.selectedCount == 0 && state.destination == VaultDestination.ALBUMS && state.openAlbum == null -> "New album"
             else -> null
         }
+        primaryIsImport = primaryTitle == "Import"
         if (primaryTitle != null) {
             primary.title = primaryTitle
+            controls.primaryButton.setTitle(primaryTitle, forState = UIControlStateNormal)
+            controls.primaryButton.accessibilityLabel = primaryTitle
             primary.primaryAction?.title = primaryTitle
             primaryCommand = when (primaryTitle) {
                 "New album" -> { a -> a.onCreateAlbum() }
@@ -774,6 +826,7 @@ internal class IosVaultChrome : NSObject(), UITabBarControllerDelegateProtocol, 
 
     /** Called before lock commands and when the Compose vault subtree leaves. */
     fun clear() {
+        updateGuide(null)
         // Conceal first: transition snapshots and presentation callbacks may still
         // exist in UIKit until the next run-loop, but can no longer be displayed.
         presentationController.view.hidden = true

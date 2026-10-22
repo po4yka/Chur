@@ -18,7 +18,7 @@ object SpiritEyes {
         return result
     }
     fun aperture(sample: SpiritClipSample, reduced: Boolean): Float {
-        if (reduced) return 1f
+        if (reduced) return if (sample.name == "sleep_loop") 0f else 1f
         val duration = when (sample.name) {
             "idle_soft" -> 4f; "notice" -> .6f; "tap_react", "release_settle" -> .8f
             "hold_enter" -> .2f; "hold_loop" -> 1.2f; "sleep_enter" -> 1f
@@ -53,7 +53,7 @@ object SpiritEyes {
 /** Native clocks pause with the host; no coroutine keeps an invisible mascot alive. */
 data class SpiritClipSample(val name: String, val seconds: Float)
 fun sampleSpiritClip(requested: String, elapsed: Float, reduced: Boolean): SpiritClipSample {
-    if (reduced) return SpiritClipSample("idle_soft", 0f)
+    if (reduced) return SpiritClipSample(if (requested == "sleep_enter" || requested == "sleep_loop") "sleep_loop" else "idle_soft", 0f)
     val t = elapsed.coerceAtLeast(0f)
     return when (requested) {
         "hold_enter" -> if (t < .2f) SpiritClipSample(requested, t) else SpiritClipSample("hold_loop", (t - .2f) % 1.2f)

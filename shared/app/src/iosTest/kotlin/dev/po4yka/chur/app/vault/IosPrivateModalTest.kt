@@ -233,7 +233,7 @@ class IosPrivateModalTest {
         chrome.update(VaultUiState(destination = VaultDestination.ALBUMS), actions(), Color.Blue, false)
         val albums = chrome.navigationControllers[VaultDestination.ALBUMS.ordinal].topViewController!!
         fun items(controller: UIViewController) = controller.navigationItem.rightBarButtonItems!!.filterIsInstance<UIBarButtonItem>()
-        fun lock(controller: UIViewController) = items(controller).single { it.customView != null }.customView!!
+        fun lock(controller: UIViewController) = items(controller).single { it.customView?.tag == 7301L }.customView!!
         val albumPrimary = items(albums).single { it.title == "New album" }
         val albumLock = lock(albums)
         val projection = photo()
@@ -280,7 +280,7 @@ class IosPrivateModalTest {
         chrome.update(recent, callbacks, Color.Blue, false)
         val item = chrome.navigationBar.topItem!!
         val primary = item.rightBarButtonItems!!.filterIsInstance<UIBarButtonItem>().single { it.title == "Import" }
-        val oldLock = item.rightBarButtonItems!!.filterIsInstance<UIBarButtonItem>().single { it.customView != null }.customView as UIButton
+        val oldLock = item.rightBarButtonItems!!.filterIsInstance<UIBarButtonItem>().single { it.customView?.tag == 7301L }.customView as UIButton
         val oldBack = item.leftBarButtonItem!!.customView as UIButton
         fun touchActions(control: UIControl): List<UIAction> {
             val actions = mutableListOf<UIAction>()

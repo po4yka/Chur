@@ -133,6 +133,15 @@ import platform.posix.unlink
  */
 @Composable
 internal fun IosRoutes(controller: ChurController, route: AppRoute, vaultState: VaultState) {
+    val chrome = LocalIosVaultChrome.current
+    dev.po4yka.chur.app.onboarding.GuideHost(controller, route,
+        onDockHeight = { chrome?.setGuideInset(if (route == AppRoute.Vault) it.toDouble() else 0.0) }) {
+        IosRoutesGuided(controller, route, vaultState)
+    }
+}
+
+@Composable
+private fun IosRoutesGuided(controller: ChurController, route: AppRoute, vaultState: VaultState) {
     val phrase by controller.recoveryPhrase.collectAsState()
     val panic: (() -> Unit)? = if (route == AppRoute.Vault || vaultState is VaultState.Unlocked || phrase != null) {
         { controller.panic() }
@@ -260,6 +269,7 @@ private fun PublicShellContent(controller: ChurController, route: AppRoute) {
             onEncryptExternalFiles = controller::openExternalArchive,
             discreet = discreet,
             selectedShell = shell,
+            onTutorial = { controller.startPublicGuide() },
             onSelectShell = controller::setPublicShell,
             error = error,
         )
@@ -267,6 +277,13 @@ private fun PublicShellContent(controller: ChurController, route: AppRoute) {
     }
     key(shell) {
         when (shell) {
+            PublicShellKind.PET -> {
+                val inputEpoch by controller.publicInputEpoch.collectAsState()
+                dev.po4yka.chur.app.publicshell.PetScreen(
+                    onOpenSettings = { controller.goTo(AppRoute.PublicSettings) },
+                    onSubmitCode = controller::submitPublicCode, inputEpoch = inputEpoch,
+                    onNavigationBusy = controller::setLauncherNavigationBusy)
+            }
             PublicShellKind.NOTES -> PublicNotesShell(controller) { controller.goTo(AppRoute.PublicSettings) }
             PublicShellKind.CALCULATOR -> CalculatorScreen(onOpenSettings = { controller.goTo(AppRoute.PublicSettings) }, onSubmitCode = controller::submitPublicCode,
                 showFirstWriteDisclosure = disclosureDue, onAcknowledgeDisclosure = controller::acknowledgeDisclosure)
@@ -451,6 +468,18 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
     var searchFocusRequest by remember(generation) { mutableStateOf<Long?>(null) }
     val nativeChrome = checkNotNull(LocalIosVaultChrome.current)
     val scenes = checkNotNull(LocalIosVaultScenes.current)
+    val guideSession by controller.guide.session.collectAsState()
+    val guideObscured by controller.guideObscured.collectAsState()
+    LaunchedEffect(nativeChrome, guideSession, guideObscured) {
+        try {
+            if (guideSession?.publicOnly == false && !guideObscured) {
+                while (true) {
+                    nativeChrome.updateGuide(controller.guide)
+                    kotlinx.coroutines.delay(200)
+                }
+            }
+        } finally { nativeChrome.updateGuide(null) }
+    }
     val colors = LocalChurColors.current
     DisposableEffect(controller, nativeChrome, scenes, generation) {
         if (controller.route.value == AppRoute.Vault &&
@@ -565,9 +594,10 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         exportingAlbum != null || albumPickerPending || documentPickerPending || choosingImportSource ||
         creatingAlbum || choosingAlbum || choosingTag || managingTags || confirmingDelete ||
         confirmingEmptyTrash || choosingExport || originals != null || incomingShare != null
-    val navigationBusy = shellNavigationBusy || privateNotesBusy || viewing != null || selection.isNotEmpty() || modalNavigationBusy
-    DisposableEffect(controller, navigationBusy) {
-        controller.setLauncherNavigationBusy(navigationBusy)
+    val guideNavigationBusy = shellNavigationBusy || privateNotesBusy || selection.isNotEmpty() || modalNavigationBusy
+    val navigationBusy = guideNavigationBusy || viewing != null
+    DisposableEffect(controller, navigationBusy, guideNavigationBusy) {
+        controller.setVaultNavigationBusy(navigationBusy, guideNavigationBusy)
         onDispose { controller.setLauncherNavigationBusy(false) }
     }
     LaunchedEffect(launcherRequest?.token, generation, navigationBusy, launcherSceneReady) {
@@ -606,7 +636,7 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
                 initialCreateRequest = request.token
                 showingPrivateNotes = true
             }
-            LauncherAction.PUBLIC_NOTES, LauncherAction.PUBLIC_CALCULATOR, LauncherAction.PUBLIC_CAMERA -> Unit
+            LauncherAction.PUBLIC_NOTES, LauncherAction.PUBLIC_CALCULATOR, LauncherAction.PUBLIC_CAMERA, LauncherAction.PUBLIC_PET -> Unit
             LauncherAction.LOCK_AND_HIDE -> Unit // The controller handles this synchronously.
         }
     }
@@ -1183,7 +1213,8 @@ private fun VaultRoute(controller: ChurController, vaultState: VaultState) {
         ) block()
     }
     val shellActions = VaultActions(
-                publicSettingsContent = { dev.po4yka.chur.app.publicshell.DiscreetSettings(controller) },        onThumbnailsConcealedChange = { thumbnailsConcealed = it },
+        publicSettingsContent = { dev.po4yka.chur.app.publicshell.DiscreetSettings(controller) },
+        onThumbnailsConcealedChange = { thumbnailsConcealed = it },
         onDestination = { target -> ordinaryShellAction {
             terms = ""
             searchFocusRequest = null

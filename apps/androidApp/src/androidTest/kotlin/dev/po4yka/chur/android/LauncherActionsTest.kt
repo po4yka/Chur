@@ -95,14 +95,14 @@ class LauncherActionsTest {
             PublicLauncherPresentation.apply(context, true, "calculator")
             assertEquals(".android.CalculatorLauncher", PublicLauncherPresentation.component(context).shortClassName)
             val shortcuts = launcherShortcutInfos(context)
-            assertEquals(listOf("public-notes", "public-calculator", "public-camera"), shortcuts.map { it.id })
+            assertEquals(listOf("public-notes", "public-calculator", "public-camera", "public-pet"), shortcuts.map { it.id })
             shortcuts.forEach {
                 assertEquals(PublicLauncherPresentation.component(context), it.activity)
                 assertTrue(LauncherAction.fromExternalAction(it.intent?.action)?.publicShell != null)
                 assertFalse(it.shortLabel.toString().contains("private", ignoreCase = true))
             }
         } finally {
-            val shell = when (previous) { ".android.CalculatorLauncher" -> "calculator"; ".android.CameraLauncher" -> "camera"; else -> "notes" }
+            val shell = when (previous) { ".android.CalculatorLauncher" -> "calculator"; ".android.CameraLauncher" -> "camera"; ".android.PetLauncher" -> "pet"; else -> "notes" }
             PublicLauncherPresentation.apply(context, previous != ".android.DefaultLauncher", shell)
         }
     }

@@ -17,6 +17,7 @@
 		436EEBE1565AF5D80B62B712 /* IncomingShareSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8273036673BB879A9FAC937 /* IncomingShareSelection.swift */; };
 		43934CFE5142CB46E4904B7F /* chur_interactive.manifest.json in Resources */ = {isa = PBXBuildFile; fileRef = 2C74ED0E6BA7C6FB8ECDD1CD /* chur_interactive.manifest.json */; };
 		447A82A14D059F7F406C3264 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 875D1A98DA0F6D353EA2C2F6 /* ShareViewController.swift */; };
+		4A9EA705394A1ACFF3A7D7C9 /* UtilityPet.icon in Resources */ = {isa = PBXBuildFile; fileRef = 1879E92973E7D404D7E0C046 /* UtilityPet.icon */; };
 		4FB9013AB3AFF801C3D4AC88 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = 296C52EB4727BD6B2C9F02B6 /* InfoPlist.strings */; };
 		5E2A781CF29AA242C39DCFFB /* ScratchCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3B19C20AB1C110C0E63735C /* ScratchCopy.swift */; };
 		66315BC5A8904169C52C47C6 /* PublicCamera.swift in Sources */ = {isa = PBXBuildFile; fileRef = A78EC5913FC317057CE38C63 /* PublicCamera.swift */; };
@@ -25,6 +26,7 @@
 		7C94102E1C76186046074AD9 /* LivePhotoBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5235F344B939BDEBA1EA9D9 /* LivePhotoBundle.swift */; };
 		7CCA6C31D530E14AD654013B /* ChurMirror.icon in Resources */ = {isa = PBXBuildFile; fileRef = EFDC0B868EDA090EE69D45E3 /* ChurMirror.icon */; };
 		7D9C51CF50DBD191FEA70385 /* IncomingShareInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D4757613DACDFC38CB949AB /* IncomingShareInbox.swift */; };
+		857BEF241452BE4E22CAF1F0 /* PrivateOnboardingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00F6FC2481FFBD6CAEBA5F08 /* PrivateOnboardingTests.swift */; };
 		9134555525F2B5F6A9C0F816 /* IncomingShareItems.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FEF35F12A854F397F674ABE /* IncomingShareItems.swift */; };
 		9EF133A9F98E205C798773E1 /* DocumentImport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0523F2FBC67DAC872B495D25 /* DocumentImport.swift */; };
 		AE6DE36920EFB1B38D0A7C1D /* filament-LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = CDAF073EA984D3802FEC7384 /* filament-LICENSE */; };
@@ -39,6 +41,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		97B9814637D1D282D5543402 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 56E1AB31EB5545454BADF3E5 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 2FB0527B103A0CA26BE121D7;
+			remoteInfo = Chur;
+		};
 		BC70E18A77AC3A88226934E6 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 56E1AB31EB5545454BADF3E5 /* Project object */;
@@ -63,8 +72,10 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		00F6FC2481FFBD6CAEBA5F08 /* PrivateOnboardingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateOnboardingTests.swift; sourceTree = "<group>"; };
 		0523F2FBC67DAC872B495D25 /* DocumentImport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentImport.swift; sourceTree = "<group>"; };
 		14389BA87803609072A63994 /* LauncherQuickAction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LauncherQuickAction.swift; sourceTree = "<group>"; };
+		1879E92973E7D404D7E0C046 /* UtilityPet.icon */ = {isa = PBXFileReference; lastKnownFileType = wrapper.icon; path = UtilityPet.icon; sourceTree = "<group>"; };
 		2897ADC9CB3A0F55520C3DD3 /* LivePhotoCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePhotoCapture.swift; sourceTree = "<group>"; };
 		2C74ED0E6BA7C6FB8ECDD1CD /* chur_interactive.manifest.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = chur_interactive.manifest.json; sourceTree = "<group>"; };
 		2FEF35F12A854F397F674ABE /* IncomingShareItems.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncomingShareItems.swift; sourceTree = "<group>"; };
@@ -79,6 +90,7 @@
 		875D1A98DA0F6D353EA2C2F6 /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
 		8C652D17A053110BD2DA9F40 /* Chur.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Chur.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		8D605A910B70BFA7B7347E6E /* SpiritScene.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = SpiritScene.cpp; sourceTree = "<group>"; };
+		914378E25A178D10F1C4DD60 /* ChurUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ChurUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		93D8AD54F431A1D0025327D0 /* ru */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ru; path = ru.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		943953785577937258479D09 /* filament-THIRD-PARTY-NOTICES */ = {isa = PBXFileReference; path = "filament-THIRD-PARTY-NOTICES"; sourceTree = "<group>"; };
 		9FFD1F5028336D1A75EA2CEE /* ChurShare.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = ChurShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -122,10 +134,12 @@
 			children = (
 				BA457393957CC3760250CA00 /* Assets.xcassets */,
 				EFDC0B868EDA090EE69D45E3 /* ChurMirror.icon */,
+				1879E92973E7D404D7E0C046 /* UtilityPet.icon */,
 				DBFE6C23E409D4E4AD7F9C8C /* Resources */,
 				589BA454C8350C8720674B2C /* ShareExtension */,
 				02A8F559F87009166EBB3A44 /* Sources */,
 				AFF36476404E44049DBEC30E /* SpiritRenderer */,
+				3709DCCB119BE5BE4C8A2DA4 /* UITests */,
 				19985ADCB5C3FD6A634305D9 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -135,8 +149,17 @@
 			children = (
 				8C652D17A053110BD2DA9F40 /* Chur.app */,
 				9FFD1F5028336D1A75EA2CEE /* ChurShare.appex */,
+				914378E25A178D10F1C4DD60 /* ChurUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		3709DCCB119BE5BE4C8A2DA4 /* UITests */ = {
+			isa = PBXGroup;
+			children = (
+				00F6FC2481FFBD6CAEBA5F08 /* PrivateOnboardingTests.swift */,
+			);
+			path = UITests;
 			sourceTree = "<group>";
 		};
 		589BA454C8350C8720674B2C /* ShareExtension */ = {
@@ -183,6 +206,24 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		094828045A80571C816D07DD /* ChurUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 9402D4151A2FE97CBDCB0BF0 /* Build configuration list for PBXNativeTarget "ChurUITests" */;
+			buildPhases = (
+				FAF61A96FFDAA5B1EF3948F4 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				1844928C6DD2EA86E032FC09 /* PBXTargetDependency */,
+			);
+			name = ChurUITests;
+			packageProductDependencies = (
+			);
+			productName = ChurUITests;
+			productReference = 914378E25A178D10F1C4DD60 /* ChurUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 		1B8B7D65C8F07C4A4FF1E912 /* ChurShare */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = DC6F1CF36C0FD1FAE79B32D6 /* Build configuration list for PBXNativeTarget "ChurShare" */;
@@ -230,6 +271,9 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					094828045A80571C816D07DD = {
+						TestTargetID = 2FB0527B103A0CA26BE121D7;
+					};
 				};
 			};
 			buildConfigurationList = CB382742C99BAACBAACD9750 /* Build configuration list for PBXProject "Chur" */;
@@ -249,6 +293,7 @@
 			targets = (
 				2FB0527B103A0CA26BE121D7 /* Chur */,
 				1B8B7D65C8F07C4A4FF1E912 /* ChurShare */,
+				094828045A80571C816D07DD /* ChurUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -262,6 +307,7 @@
 				7CCA6C31D530E14AD654013B /* ChurMirror.icon in Resources */,
 				4FB9013AB3AFF801C3D4AC88 /* InfoPlist.strings in Resources */,
 				B464DAA4A77B94507D510011 /* Localizable.strings in Resources */,
+				4A9EA705394A1ACFF3A7D7C9 /* UtilityPet.icon in Resources */,
 				EE139ABBA42210585DC6CF69 /* chur_interactive.glb in Resources */,
 				43934CFE5142CB46E4904B7F /* chur_interactive.manifest.json in Resources */,
 				77C5071DC9BEA572B58E44E4 /* chur_interactive_fallback.png in Resources */,
@@ -328,9 +374,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		FAF61A96FFDAA5B1EF3948F4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				857BEF241452BE4E22CAF1F0 /* PrivateOnboardingTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		1844928C6DD2EA86E032FC09 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 2FB0527B103A0CA26BE121D7 /* Chur */;
+			targetProxy = 97B9814637D1D282D5543402 /* PBXContainerItemProxy */;
+		};
 		6524E1B8E358813C976B10B5 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 1B8B7D65C8F07C4A4FF1E912 /* ChurShare */;
@@ -364,7 +423,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = arm64;
-				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "UtilityNotes UtilityCalculator UtilityCamera";
+				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "UtilityNotes UtilityCalculator UtilityCamera UtilityPet";
 				ASSETCATALOG_COMPILER_APPICON_NAME = ChurMirror;
 				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
 				CLANG_CXX_LIBRARY = "libc++";
@@ -475,6 +534,26 @@
 			};
 			name = Debug;
 		};
+		6B7E72D9746A8C782D800599 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGNING_ALLOWED = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.po4yka.chur.uitests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Chur;
+			};
+			name = Release;
+		};
 		6FC01BC4452007F955F843E0 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -501,7 +580,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = arm64;
-				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "UtilityNotes UtilityCalculator UtilityCamera";
+				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "UtilityNotes UtilityCalculator UtilityCamera UtilityPet";
 				ASSETCATALOG_COMPILER_APPICON_NAME = ChurMirror;
 				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
 				CLANG_CXX_LIBRARY = "libc++";
@@ -583,6 +662,26 @@
 			};
 			name = Release;
 		};
+		EF7F0DFC80D19904A4BCDB1D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGNING_ALLOWED = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.po4yka.chur.uitests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Chur;
+			};
+			name = Debug;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -591,6 +690,15 @@
 			buildConfigurations = (
 				2702BCC2C82857C2548075DA /* Debug */,
 				87FB2DB5DE19132B601E0DA9 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		9402D4151A2FE97CBDCB0BF0 /* Build configuration list for PBXNativeTarget "ChurUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EF7F0DFC80D19904A4BCDB1D /* Debug */,
+				6B7E72D9746A8C782D800599 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

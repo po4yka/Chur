@@ -86,6 +86,7 @@ class ChurController(
     private val deviceSlotPolicy: DeviceSlotPolicySetting = DeviceSlotPolicySetting.unset(),
     private val appLockSetting: AppLockSetting = AppLockSetting.unset(),
     private val publicShellSetting: PublicShellSetting = PublicShellSetting.unset(),
+    val guide: dev.po4yka.chur.app.onboarding.GuideCoordinator = dev.po4yka.chur.app.onboarding.GuideCoordinator(),
     val publicUtilities: dev.po4yka.chur.app.publicshell.PublicUtilityStore = dev.po4yka.chur.app.publicshell.PublicUtilityStore(),
     /** The auto-lock choice of `DESIGN.md` §14.4, which sets the idle limit. */
     private val autoLockSetting: AutoLockSetting = AutoLockSetting.unset(),
@@ -153,6 +154,7 @@ class ChurController(
     private var pendingLauncherAction: LauncherAction? = null
     private var launcherToken = 0L
     private var launcherNavigationBusy = false
+    private var guideNavigationBusy = false
     private var launcherLocking = false
     /** New credential attempts must not overtake an earlier native lock. */
     private var pendingLock: Job? = null
@@ -235,6 +237,37 @@ class ChurController(
         if (_route.value != AppRoute.PublicShell || _publicShell.value != PublicShell.NOTES || _publicNoteRequest.value == 0L) return null
         _publicNoteRequest.value = 0L
         return Note("note-${clock()}-${kotlin.random.Random.nextLong()}", "", "", clock())
+    }
+
+    private var hostBackground = false
+    private val _guideObscured = MutableStateFlow(false)
+    val guideObscured = _guideObscured.asStateFlow()
+    fun foreground() { hostBackground = false; _guideObscured.value = guideNavigationBusy }
+    private val _publicInputEpoch = MutableStateFlow(0L)
+    val publicInputEpoch = _publicInputEpoch.asStateFlow()
+
+    fun chooseInitialShell(shell: PublicShell) {
+        if (!guide.bootstrapAllowed || guide.session.value?.step != dev.po4yka.chur.app.onboarding.GuideStep.CHOOSE ||
+            _route.value != AppRoute.PublicShell || publicUtilities.discreet.value) return
+        try {
+            publicShellSetting.write(shell)
+            _publicShell.value = shell
+            _preferredPublicShell.value = shell
+            guide.offerPetLesson = shell == PublicShell.PET
+            guide.event(dev.po4yka.chur.app.onboarding.GuideStep.CHOOSE)
+            _publicShellError.value = null
+        } catch (_: Exception) { _publicShellError.value = "The public screen could not be changed. Try again." }
+    }
+    fun startPrivateGuide() {
+        if (_route.value == AppRoute.Vault && repository.state.value is VaultState.Unlocked) {
+            guide.offerPetLesson = _preferredPublicShell.value == PublicShell.PET
+            guide.startPrivate()
+        }
+    }
+    fun startPublicGuide() {
+        if (_route.value != AppRoute.PublicSettings) return
+        goTo(AppRoute.PublicShell)
+        guide.startPublic(_publicShell.value)
     }
 
     /** A public preference. It never opens or changes a vault. */
@@ -534,8 +567,13 @@ class ChurController(
     }
 
     /** Public editors and vault dialogs keep their current work when a shortcut arrives. */
-    fun setLauncherNavigationBusy(busy: Boolean) {
+    fun setLauncherNavigationBusy(busy: Boolean) = setVaultNavigationBusy(busy, busy)
+
+    /** A viewer blocks shortcuts, but keeps its return-to-Library lesson visible. */
+    fun setVaultNavigationBusy(busy: Boolean, obscureGuide: Boolean) {
         launcherNavigationBusy = busy
+        guideNavigationBusy = obscureGuide
+        _guideObscured.value = hostBackground || obscureGuide
     }
 
     fun acknowledgeLauncherAction(token: Long, generation: Long): Boolean {
@@ -673,6 +711,7 @@ class ChurController(
             closeStaleSession()
             return@requestPhrase
         }
+        guide.event(dev.po4yka.chur.app.onboarding.GuideStep.CREATE)
         if (phrase != null) _recoveryPhrase.value = phrase else enterVault()
     }
 
@@ -716,6 +755,7 @@ class ChurController(
                     return@guarded
                 }
                 if (confirmed) {
+                    guide.event(dev.po4yka.chur.app.onboarding.GuideStep.RECOVERY)
                     if (creating) enterVault(notice = PHRASE_SAVED) else say(PHRASE_SAVED)
                 } else {
                     say("This recovery phrase was not saved.")
@@ -1084,6 +1124,8 @@ class ChurController(
     }
 
     private fun concealPrivateSession() {
+        guide.conceal()
+        _publicInputEpoch.value += 1
         // Rust cancels the operation as the session locks; the poller ends here.
         reencryption?.cancel()
         reencryption = null
@@ -1308,10 +1350,14 @@ class ChurController(
     }
 
     private fun prepareBackgroundLock(): Boolean {
+        hostBackground = true
+        _guideObscured.value = true
+        _publicInputEpoch.value += 1
         contentIndexer.cancel()
         enablePrivacyCover()
         promptHeldLock = prompts > 0
         if (hostActivities > 0) return false
+        guide.conceal()
         if (_appLockEnabled.value || policy.lockOnBackground) {
             lock(LockReason.BACKGROUND)
             return true
@@ -1405,11 +1451,15 @@ class ChurController(
     fun load(query: ObjectQuery) {
         currentQuery = query
         val revision = ++queryRevision
+        val guideToken = guide.session.value?.token
         _page.value = ObjectPage(emptyList(), 0, 0, null)
         if (query.scope == QueryScope.SEARCH && query.terms.isNullOrBlank()) return
         guarded(clearMessage = false) {
             val result = withContext(Dispatchers.Default) { repository.page(query) }
-            if (revision == queryRevision) _page.value = result
+            if (revision == queryRevision) {
+                _page.value = result
+                if (!query.terms.isNullOrBlank()) guide.event(dev.po4yka.chur.app.onboarding.GuideStep.SEARCH, guideToken)
+            }
         }
     }
 
@@ -1885,11 +1935,16 @@ class ChurController(
     }
 
     /** One object's detail record, §6.5. */
-    suspend fun detailOf(objectId: ByteArray): ObjectDetail? = try {
-        withContext(Dispatchers.Default) { repository.detail(objectId) }
-    } catch (failure: ChurFailure) {
-        say(userCopy(failure.status))
-        null
+    suspend fun detailOf(objectId: ByteArray): ObjectDetail? {
+        val guideToken = guide.session.value?.token
+        return try {
+            withContext(Dispatchers.Default) { repository.detail(objectId) }.also {
+                guide.event(dev.po4yka.chur.app.onboarding.GuideStep.OPEN, guideToken)
+            }
+        } catch (failure: ChurFailure) {
+            say(userCopy(failure.status))
+            null
+        }
     }
 
     /**
@@ -2930,25 +2985,31 @@ class ChurController(
         generation: Long,
         requestedObjectId: ByteArray? = null,
         open: suspend () -> PickedMedia?,
-    ): MediaImporter.Outcome = try {
-        withContext(Dispatchers.Default) {
-            importer.import(
-                repository = repository,
-                source = open(),
-                expectedGeneration = generation,
-                requestedObjectId = requestedObjectId,
-                onProgress = { updateOperation(token, it, keepCancellableOnSuccess = true) },
-                cancelRequested = { cancellationRequested(token) },
-            )
+    ): MediaImporter.Outcome {
+        val guideToken = guide.session.value?.token
+        return try {
+            withContext(Dispatchers.Default) {
+                importer.import(
+                    repository = repository,
+                    source = open(),
+                    expectedGeneration = generation,
+                    requestedObjectId = requestedObjectId,
+                    onProgress = { updateOperation(token, it, keepCancellableOnSuccess = true) },
+                    cancelRequested = { cancellationRequested(token) },
+                )
+            }.also { outcome ->
+                if (outcome is MediaImporter.Outcome.Imported && (repository.state.value as? VaultState.Unlocked)?.generation == generation)
+                    guide.event(dev.po4yka.chur.app.onboarding.GuideStep.IMPORT, guideToken)
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: ChurFailure) {
+            MediaImporter.Outcome.Refused(failure.status)
+        } catch (_: dev.po4yka.chur.imports.LivePhotoBundleException) {
+            MediaImporter.Outcome.Refused(ChurStatus.OBJECT_CORRUPT)
+        } catch (_: Exception) {
+            MediaImporter.Outcome.Refused(ChurStatus.INTERNAL_FAILURE)
         }
-    } catch (cancelled: CancellationException) {
-        throw cancelled
-    } catch (failure: ChurFailure) {
-        MediaImporter.Outcome.Refused(failure.status)
-    } catch (_: dev.po4yka.chur.imports.LivePhotoBundleException) {
-        MediaImporter.Outcome.Refused(ChurStatus.OBJECT_CORRUPT)
-    } catch (_: Exception) {
-        MediaImporter.Outcome.Refused(ChurStatus.INTERNAL_FAILURE)
     }
 
     private fun cancellationRequested(token: Long): Boolean =
@@ -3156,6 +3217,7 @@ class ChurController(
      */
     private suspend fun endOpenSession(): Long {
         val previousEpoch = lockEpoch
+        if (repository.state.value is VaultState.Unlocked) guide.conceal()
         if (!awaitLockCleanup(previousEpoch) || repository.state.value !is VaultState.Unlocked) return previousEpoch
         lockEpoch += 1
         val epoch = lockEpoch
@@ -3169,6 +3231,8 @@ class ChurController(
         clearArchiveCredentials()
         clearLauncherAction()
         launcherNavigationBusy = false
+        guideNavigationBusy = false
+        _guideObscured.value = hostBackground
         contentIndexer.reset()
         _activeOperation.value = null
         currentQuery = ObjectQuery()
@@ -3241,6 +3305,7 @@ class ChurController(
             if (checkedDigest != null) {
                 setupNotice = try {
                     publicUtilities.configureDigest(checkedDigest)
+                    guide.verifiedEntry()
                     refreshPublicPresentation()
                     "Entry checked. Discreet mode is enabled."
                 } catch (_: Exception) { "The entry was checked, but settings could not be saved. Try setup again." }
@@ -3262,6 +3327,8 @@ class ChurController(
         val epoch = lockEpoch
         val initialQueryRevision = queryRevision
         privacy.setEnabled(true)
+        guide.event(dev.po4yka.chur.app.onboarding.GuideStep.CREATE)
+        guide.event(dev.po4yka.chur.app.onboarding.GuideStep.RECOVERY)
         setRoute(AppRoute.Vault)
         dispatchLauncherAction()
         post(notice)
@@ -3354,12 +3421,16 @@ class ChurController(
      * attempt.
      */
     private fun setRoute(next: AppRoute) {
+        if (next != _route.value && (next == AppRoute.PublicShell || next == AppRoute.PublicSettings) &&
+            guide.session.value?.publicOnly == false && guide.session.value?.step !in listOf(
+                dev.po4yka.chur.app.onboarding.GuideStep.CHOOSE, dev.po4yka.chur.app.onboarding.GuideStep.PRIVACY)) guide.conceal()
         if (next !in setOf(AppRoute.Vault, AppRoute.Unlock, AppRoute.AppUnlock, AppRoute.Recover, AppRoute.AppRecover)) clearLauncherAction()
         if (_route.value == AppRoute.EncryptFiles && next != AppRoute.EncryptFiles) clearExternalArchiveSecret()
         routeVisit += 1
         _notice.value = null
         _formError.value = null
         _route.value = next
+        if (next == AppRoute.PublicShell && _publicShell.value == PublicShell.PET) guide.showPendingPetLesson()
     }
 
     /**

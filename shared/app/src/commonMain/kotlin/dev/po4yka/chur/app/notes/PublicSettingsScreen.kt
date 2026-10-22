@@ -7,6 +7,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.PublicShell
 import dev.po4yka.chur.app.publicshell.*
@@ -23,6 +26,7 @@ fun PublicSettingsScreen(
     error: String? = null,
     onEncryptExternalFiles: (() -> Unit)? = null,
     discreet: Boolean = false,
+    onTutorial: () -> Unit = {},
 ) {
     val store = LocalPublicUtilities.current
     val appearance by store.appearance.collectAsState()
@@ -42,6 +46,7 @@ fun PublicSettingsScreen(
                     Text(label)
                 }
             }
+            TextButton(onClick = onTutorial) { Text(utilityText("How to use this app", "Как пользоваться приложением")) }
             HorizontalDivider()
             Text(utilityText("Data storage", "Хранение данных"), style = MaterialTheme.typography.titleMedium)
             Text(utilityText(Disclosure.SETTINGS, "Заметки, история вычислений, фото и видео не зашифрованы приложением. Их может просматривать любой, у кого есть доступ к разблокированному устройству. Эти данные входят в системную резервную копию."))
@@ -52,9 +57,10 @@ fun PublicSettingsScreen(
             ListItem(headlineContent = { Text(utilityText("About", "О приложении")) },
                 modifier = Modifier.combinedClickable(onClick = { about = !about }))
             if (about) {
-                Text(utilityText(selectedShell.label, when (selectedShell) { PublicShell.NOTES -> "Заметки"; PublicShell.CALCULATOR -> "Калькулятор"; PublicShell.CAMERA -> "Камера" }), style = MaterialTheme.typography.titleMedium)
+                Text(utilityText(selectedShell.label, when (selectedShell) { PublicShell.NOTES -> "Заметки"; PublicShell.CALCULATOR -> "Калькулятор"; PublicShell.CAMERA -> "Камера"; PublicShell.PET -> "Чур" }), style = MaterialTheme.typography.titleMedium)
                 Text(utilityText("Version ", "Версия ") + PublicPresentation.version, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
                     .combinedClickable(onClick = {}, onLongClickLabel = utilityText("Open access", "Открыть доступ"), onLongClick = onOpenVault)
+                    .semantics { customActions = listOf(CustomAccessibilityAction(utilityText("Open access", "Открыть доступ")) { onOpenVault(); true }) }
                     .padding(vertical = 12.dp))
             }
             (failure ?: error)?.let { Text(it, color = MaterialTheme.colorScheme.error) }

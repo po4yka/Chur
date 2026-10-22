@@ -13,6 +13,7 @@ import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertNotNull
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -66,7 +67,7 @@ class PublicShellHostTest {
             controller.shutdown()
             controller = controller(root, setting, notes)
             controller.start()
-            assertEquals(PublicShell.CAMERA, controller.publicShell.value)
+            assertEquals(PublicShell.PET, controller.publicShell.value)
             assertEquals(listOf(note), notes.all())
             controller.openVaultEntry()
             assertEquals(AppRoute.Unlock, controller.route.value)
@@ -126,6 +127,7 @@ class PublicShellHostTest {
             controller.start()
             controller.create("Public-shell-password", offerRecovery = false)
             withTimeout(10_000) { controller.route.first { it == AppRoute.Vault } }
+            controller.setPublicShell(PublicShell.PET)
             controller.beginDiscreetSetup("01234567")
             withTimeout(10_000) { controller.vaultState.first { it is VaultState.Locked } }
             assertFalse(store.discreet.value)
@@ -148,6 +150,84 @@ class PublicShellHostTest {
             controller.unlock("Public-shell-password")
             withTimeout(10_000) { controller.route.first { it == AppRoute.Vault } }
             assertFalse(store.discreet.value)
+        } finally { controller.shutdown() }
+    }
+
+    @Test
+    fun first_launch_choice_is_one_use_and_never_grants_vault_access() = scenario { root ->
+        var choice: String? = null
+        val guide = dev.po4yka.chur.app.onboarding.GuideCoordinator(freshInstall = true)
+        val controller = ChurController(storageRoot = root.path, privacy = NoPrivacyCover, exports = NoExports,
+            publicShellSetting = PublicShellSetting({ choice }, { choice = it }), guide = guide,
+            clock = { 1_700_000_000_000L })
+        try {
+            controller.start()
+            controller.chooseInitialShell(PublicShell.PET)
+            assertEquals("pet", choice)
+            assertEquals(AppRoute.PublicShell, controller.route.value)
+            assertIs<VaultState.NoVault>(controller.vaultState.value)
+            controller.chooseInitialShell(PublicShell.CAMERA)
+            controller.setPublicShell(PublicShell.CAMERA)
+            assertEquals("pet", choice)
+            controller.startPrivateGuide()
+            assertEquals(dev.po4yka.chur.app.onboarding.GuideStep.PRIVACY, guide.session.value?.step)
+            guide.event(dev.po4yka.chur.app.onboarding.GuideStep.PRIVACY)
+            controller.openVaultEntry()
+            controller.create("Guide-recovery-fixture", offerRecovery = true)
+            withTimeout(10_000) { controller.recoveryPhrase.first { it != null } }
+            assertEquals(dev.po4yka.chur.app.onboarding.GuideStep.RECOVERY, guide.session.value?.step)
+            guide.skip()
+            assertNotNull(controller.recoveryPhrase.value)
+            assertIs<VaultState.Creating>(controller.vaultState.value)
+            controller.acknowledgeRecoveryPhrase()
+            withTimeout(10_000) { controller.route.first { it == AppRoute.Vault } }
+            assertEquals(dev.po4yka.chur.app.onboarding.GuideStep.IMPORT, guide.session.value?.step)
+        } finally { controller.shutdown() }
+    }
+
+    @Test
+    fun private_guide_is_concealed_on_background_but_picker_return_can_continue() = scenario { root ->
+        val controller = controller(root, PublicShellSetting.unset())
+        try {
+            controller.start()
+            controller.create("Guide-test-password", offerRecovery = false)
+            withTimeout(10_000) { controller.route.first { it == AppRoute.Vault } }
+            controller.startPrivateGuide()
+            val token = controller.guide.session.value!!.token
+            controller.setVaultNavigationBusy(busy = true, obscureGuide = false)
+            assertFalse(controller.guideObscured.value)
+            controller.setVaultNavigationBusy(busy = true, obscureGuide = true)
+            controller.foreground()
+            assertTrue(controller.guideObscured.value)
+            controller.setVaultNavigationBusy(busy = true, obscureGuide = false)
+            controller.beginHostActivity()
+            controller.onBackground()
+            assertTrue(controller.guideObscured.value)
+            assertEquals(token, controller.guide.session.value?.token)
+            controller.endHostActivity()
+            controller.foreground()
+            assertFalse(controller.guideObscured.value)
+            controller.panic()
+            assertNull(controller.guide.session.value)
+            controller.guide.event(dev.po4yka.chur.app.onboarding.GuideStep.IMPORT, token)
+            assertNull(controller.guide.session.value)
+        } finally { controller.shutdown() }
+    }
+
+    @Test
+    fun library_search_result_completes_the_search_lesson_even_when_empty() = scenario { root ->
+        val controller = controller(root, PublicShellSetting.unset())
+        try {
+            controller.start()
+            controller.create("Guide-test-password", offerRecovery = false)
+            withTimeout(10_000) { controller.route.first { it == AppRoute.Vault } }
+            controller.startPrivateGuide()
+            controller.guide.event(dev.po4yka.chur.app.onboarding.GuideStep.IMPORT)
+            controller.guide.event(dev.po4yka.chur.app.onboarding.GuideStep.OPEN)
+            controller.load(dev.po4yka.chur.ffi.ObjectQuery(dev.po4yka.chur.ffi.QueryScope.TIMELINE))
+            assertEquals(dev.po4yka.chur.app.onboarding.GuideStep.SEARCH, controller.guide.session.value?.step)
+            controller.load(dev.po4yka.chur.ffi.ObjectQuery(dev.po4yka.chur.ffi.QueryScope.TIMELINE, terms = "no matches"))
+            withTimeout(10_000) { controller.guide.session.first { it?.step == dev.po4yka.chur.app.onboarding.GuideStep.LOCK } }
         } finally { controller.shutdown() }
     }
 

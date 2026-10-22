@@ -1,13 +1,15 @@
 # App icon actions
 
-Discreet Mode publishes only New note, Calculator, and Photo. These actions open public tools without unlocking a vault, and respect the whole-app gate. The fixed private actions below apply only outside Discreet Mode. iOS registers actions dynamically so no static private label survives a mode change. Android disables obsolete pinned actions; a launcher may retain their old labels. No shortcut contains a transition code.
+Discreet Mode publishes only New note, Calculator, Camera, and Chur. These actions open public tools without unlocking a vault, and respect the whole-app gate. The fixed private actions below apply only outside Discreet Mode. iOS registers actions dynamically so no static private label survives a mode change. Android disables obsolete pinned actions; a launcher may retain their old labels. No shortcut contains a transition code.
 
 
 > **Status:** Accepted implementation contract; physical-device and release gates remain separate
 
-Touch and hold Chur's Home Screen or launcher icon to open the system menu. Chur offers four fixed commands in priority order: **Import**, **Search**, **Lock and hide**, and **New private note**. A launcher may display fewer commands. The same capabilities are available inside the app.
+Touch and hold Chur's Home Screen or launcher icon to open the system menu. Outside Discreet Mode, Chur offers four fixed commands in priority order: **Import**, **Search**, **Lock and hide**, and **New private note**. A launcher may display fewer commands. The same capabilities are available inside the app.
 
 ## Commands
+
+In Discreet Mode, **Chur** opens the public pet scene. It has no private guide, saved game progress, or authentication authority. The in-game moon gesture still uses the separate transition-code and normal authentication flow. A system launcher can display fewer than all four public actions.
 
 - **Import** opens the existing import-source chooser for All items after normal vault authentication. The user still selects a source and files. No content is imported automatically.
 - **Search** opens the private media/file Search destination, clears its query and filters, and focuses the search field. It does not search public Notes or private-note bodies, and does not start OCR.
@@ -30,7 +32,7 @@ The menu is the same whether the vault is absent, locked, open, or opened by eit
 
 ## Platform behavior
 
-iOS declares four static Home Screen Quick Actions, available before first launch. The UIKit scene handles both initial connection and an existing scene. Private navigation waits until the scene is active. Panic masking covers the native window until neutral shared UI is rendered; a native sheet is dismissed without accepting its delayed private result.
+iOS registers the four current Home Screen Quick Actions dynamically after startup and refreshes them when Discreet Mode changes. It does not declare static private actions. The UIKit scene handles both initial connection and an existing scene. Private navigation waits until the scene is active. Panic masking covers the native window until neutral shared UI is rendered; a native sheet is dismissed without accepting its delayed private result.
 
 Android publishes four native dynamic App Shortcuts after foreground startup and refreshes their localized metadata after locale changes. Dynamic publication runs off the UI thread and does not depend on session state. It preserves the single activity using `SINGLE_TOP | CLEAR_TOP`; static shortcuts' forced task clearing is not used. Restored installations republish on first launch. A launcher may let the user pin a command; pinned invocation uses exactly the same authorization rules. The activity is exported, so any app can send it a command action. Each shortcut intent therefore carries one random per-install launcher token, stored in `noBackupFilesDir`. The app runs a command only when the intent carries that token; an intent without it is an ordinary launch. The token names no vault, identity, or session. Only the launcher that holds the shortcut can read it, so another app cannot force Lock and hide or open a private route. A restored installation makes a new token and republishes its shortcuts. No assistant integration, private system indexing, or programmatic pinning prompt is added.
 

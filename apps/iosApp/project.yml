@@ -15,6 +15,7 @@ targets:
         buildPhase: resources
       - Assets.xcassets
       - ChurMirror.icon
+      - UtilityPet.icon
       - SpiritRenderer/ChurSpiritRenderer.swift
       - SpiritRenderer/ChurSpiritView.mm
       - SpiritRenderer/SpiritScene.cpp
@@ -62,7 +63,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: dev.po4yka.chur
         CODE_SIGN_ENTITLEMENTS: IncomingShare.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: ChurMirror
-        ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES: "UtilityNotes UtilityCalculator UtilityCamera"
+        ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES: "UtilityNotes UtilityCalculator UtilityCamera UtilityPet"
         ARCHS: arm64
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "5.0"
@@ -139,3 +140,28 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "5.0"
         CODE_SIGNING_ALLOWED: NO
+
+  ChurUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - UITests
+    dependencies:
+      - target: Chur
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.po4yka.chur.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Chur
+        SWIFT_VERSION: "5.0"
+        CODE_SIGNING_ALLOWED: NO
+schemes:
+  Chur:
+    build:
+      targets:
+        Chur: all
+        ChurUITests: [test]
+    test:
+      targets:
+        - ChurUITests

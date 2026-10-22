@@ -28,4 +28,5 @@
     <string name="quick_settings_lock_foreground">Keep Chur open and try again to add the tile.</string>
     <string name="quick_settings_lock_unavailable">Quick Settings tiles are not available on this device.</string>
     <string name="quick_settings_lock_failed">The tile could not be added. Open Quick Settings, tap Edit, then add Lock Chur.</string>
+    <string name="public_pet">Chur</string>
 </resources>

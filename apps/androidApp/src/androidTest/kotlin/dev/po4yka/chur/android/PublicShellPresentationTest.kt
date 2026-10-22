@@ -51,6 +51,92 @@ class PublicShellPresentationTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
 
     @Test
+    fun pet_native_drag_long_press_and_renderer_lifecycle() {
+        val shown = mutableStateOf(true)
+        present(scale = 1f, nativeSurface = true, content = { if (shown.value) dev.po4yka.chur.app.publicshell.PetScreen({}, { false }) }) { f ->
+            f.assertPetVisible()
+            val before = f.bounds("Chur companion")
+            f.gesture("Chur companion", 100f, -100f, 250)
+            assertTrue(f.await { f.bounds("Chur companion").left > before.left + 50f })
+            f.gesture("☾ Sleep", 0f, 0f, 800)
+            assertTrue(f.await { f.has("Access code") })
+            f.confirm("Cancel")
+            assertTrue(f.has("Chur companion"))
+            val frames = java.util.concurrent.atomic.AtomicInteger()
+            f.observeTextureFrames(frames)
+            assertTrue(f.await { frames.get() > 2 })
+            val start = frames.get()
+            SystemClock.sleep(1100)
+            val foregroundFrames = frames.get() - start
+            assertTrue("30 fps cap: $foregroundFrames frames in 1.1 seconds", foregroundFrames in 1..34)
+            val memory = mutableListOf(android.os.Debug.getPss())
+            repeat(6) {
+                f.main { shown.value = false }
+                assertTrue(f.await { f.textureCount() == 0 })
+                f.main { shown.value = true }
+                assertTrue(f.await { f.textureCount() == 1 })
+                val beforeFrames = frames.get()
+                f.observeTextureFrames(frames)
+                assertTrue(f.await { frames.get() > beforeFrames + 2 })
+                f.assertPetVisible()
+                memory += android.os.Debug.getPss()
+            }
+            f.main { f.activity.moveTaskToBack(true) }
+            SystemClock.sleep(400) // Drain frames submitted before the lifecycle transition.
+            val backgroundStart = frames.get()
+            SystemClock.sleep(1100)
+            assertEquals("No native frames in the background", backgroundStart, frames.get())
+            File(requireNotNull(f.activity.getExternalFilesDir(null)), "pet-runtime.txt").writeText(
+                "foreground_frames_1100ms=$foregroundFrames\nbackground_frames_1100ms=${frames.get() - backgroundStart}\npss_kib_after_open=$memory\n")
+            f.main { shown.value = false }
+            assertTrue(f.await { f.textureCount() == 0 })
+        }
+    }
+
+    @Test
+    fun pet_sleep_treat_and_toy_remain_accessible_without_progression() {
+        present(scale = 1f, nativeSurface = true, content = { dev.po4yka.chur.app.publicshell.PetScreen({}, { false }) }) { f ->
+            assertTrue(f.await { f.has("Chur companion") })
+            f.assertPetVisible()
+            f.click("Treat")
+            f.click("Toy")
+            assertTrue(f.await { f.has("Put toy away") })
+            f.click("Put toy away")
+            f.click("☾ Sleep")
+            assertTrue(f.await { f.has("Chur is sleeping") })
+            f.click("☾ Wake")
+            assertTrue(f.await { f.has("Chur companion") })
+            f.capture("pet-awake.png")
+        }
+    }
+
+    @Test
+    fun pet_long_press_does_not_sleep_and_background_revokes_code_input() {
+        val epoch = mutableStateOf(0L)
+        present(scale = 1f, nativeSurface = true, content = { dev.po4yka.chur.app.publicshell.PetScreen({}, { false }, epoch.value) }) { f ->
+            f.hold("☾ Sleep")
+            assertTrue(f.await { f.has("Access code") })
+            f.confirm("Cancel")
+            assertTrue(f.await { f.has("Chur companion") })
+            assertFalse(f.has("Chur is sleeping"))
+            f.hold("☾ Sleep")
+            assertTrue(f.await { f.has("Access code") })
+            f.main { epoch.value++ }
+            assertTrue(f.await { !f.has("Access code") })
+        }
+    }
+
+    @Test
+    fun pet_large_text_keeps_settings_and_actions_available() {
+        present(nativeSurface = true, content = { dev.po4yka.chur.app.publicshell.PetScreen({}, { false }) }) { f ->
+            f.click("Treat")
+            f.assertLabelFits("Treat")
+            f.click("Settings")
+            f.capture("pet-large-text.png")
+        }
+    }
+
+    @Test
     fun notes_keep_search_and_settings_without_brand_controls() {
         val query = mutableStateOf("")
         present(content = { NotesScreen(notes = emptyList(), query = query.value, onQueryChange = { query.value = it }, onOpen = {}, onCreate = {}, onOpenSettings = {}, showFirstWriteDisclosure = false) }) { f ->
@@ -206,7 +292,7 @@ class PublicShellPresentationTest {
         } finally { java.util.Locale.setDefault(original); android.os.LocaleList.setDefault(originalList) }
     }
 
-    private fun present(width: Int = 320, height: Int = 640, scale: Float = 2f, dark: Boolean = false, language: String = "en", content: @Composable () -> Unit, test: (Fixture) -> Unit) {
+    private fun present(width: Int = 320, height: Int = 640, scale: Float = 2f, dark: Boolean = false, language: String = "en", nativeSurface: Boolean = false, content: @Composable () -> Unit, test: (Fixture) -> Unit) {
         val activity = instrumentation.startActivitySync(Intent(instrumentation.targetContext, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         try {
@@ -219,7 +305,8 @@ class PublicShellPresentationTest {
                 }
                 val context = ContextThemeWrapper(activity, activity.theme).apply { applyOverrideConfiguration(config) }
                 f.view = ComposeView(context).apply {
-                    setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+                    // TextureView requires the same hardware composition as the production host.
+                    if (!nativeSurface) setLayerType(View.LAYER_TYPE_SOFTWARE, null)
                     setContent {
                         val rememberStore = androidx.compose.runtime.remember { dev.po4yka.chur.app.publicshell.PublicUtilityStore().apply { setAppearance(if (dark) "dark" else "light") } }
                         CompositionLocalProvider(LocalDensity provides Density(density, scale), LocalConfiguration provides config) {
@@ -238,6 +325,69 @@ class PublicShellPresentationTest {
     private inner class Fixture(val activity: MainActivity) {
         lateinit var view: ComposeView
         fun main(action: () -> Unit) = instrumentation.runOnMainSync(action)
+        fun bounds(label: String): androidx.compose.ui.geometry.Rect {
+            var result: androidx.compose.ui.geometry.Rect? = null
+            main { result = find(label)?.boundsInWindow }
+            return requireNotNull(result)
+        }
+        fun gesture(label: String, dx: Float, dy: Float, duration: Long) {
+            val origin = bounds(label).center
+            val started = SystemClock.uptimeMillis()
+            fun send(action: Int, x: Float, y: Float) {
+                val event = android.view.MotionEvent.obtain(started, SystemClock.uptimeMillis(), action, x, y, 0)
+                try { instrumentation.sendPointerSync(event) } finally { event.recycle() }
+            }
+            send(android.view.MotionEvent.ACTION_DOWN, origin.x, origin.y)
+            repeat(10) { i ->
+                SystemClock.sleep(duration / 10)
+                send(android.view.MotionEvent.ACTION_MOVE, origin.x + dx * (i + 1) / 10, origin.y + dy * (i + 1) / 10)
+            }
+            send(android.view.MotionEvent.ACTION_UP, origin.x + dx, origin.y + dy)
+            frames()
+        }
+        private fun textures(): List<android.view.TextureView> {
+            val result = mutableListOf<android.view.TextureView>()
+            fun visit(node: View) {
+                if (node is android.view.TextureView) result += node
+                if (node is ViewGroup) for (i in 0 until node.childCount) visit(node.getChildAt(i))
+            }
+            visit(view)
+            return result
+        }
+        fun textureCount(): Int { var count = 0; main { count = textures().size }; return count }
+        fun observeTextureFrames(count: java.util.concurrent.atomic.AtomicInteger) = main {
+            val texture = textures().single()
+            val delegate = requireNotNull(texture.surfaceTextureListener)
+            texture.surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener by delegate {
+                override fun onSurfaceTextureUpdated(surface: android.graphics.SurfaceTexture) {
+                    delegate.onSurfaceTextureUpdated(surface)
+                    count.incrementAndGet()
+                }
+            }
+        }
+        fun assertPetVisible() {
+            assertTrue("Pet must be visible in the composed screen, including its native surface", await {
+                var bounds: androidx.compose.ui.geometry.Rect? = null
+                main { bounds = find("Chur companion")?.boundsInWindow ?: find("Chur is sleeping")?.boundsInWindow }
+                val region = bounds ?: return@await false
+                val screen = instrumentation.uiAutomation.takeScreenshot() ?: return@await false
+                try {
+                    var dark = 0
+                    // Ignore the guide border: only count the character inside the target.
+                    val inset = region.width * .2f
+                    for (y in (region.top + inset).toInt() until (region.bottom - inset).toInt() step 4) {
+                        for (x in (region.left + inset).toInt() until (region.right - inset).toInt() step 4) {
+                            if (x !in 0 until screen.width || y !in 0 until screen.height) continue
+                            val pixel = screen.getPixel(x, y)
+                            if (android.graphics.Color.red(pixel) < 120 && android.graphics.Color.green(pixel) < 120 &&
+                                android.graphics.Color.blue(pixel) < 120) dark++
+                        }
+                    }
+                    if (dark <= 30) File(requireNotNull(activity.getExternalFilesDir(null)), "pet-not-visible.png").outputStream().use { screen.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                    dark > 30
+                } finally { screen.recycle() }
+            })
+        }
         fun await(condition: () -> Boolean): Boolean {
             val deadline = SystemClock.uptimeMillis() + 5_000
             while (SystemClock.uptimeMillis() < deadline) {
@@ -350,6 +500,8 @@ class PublicShellPresentationTest {
             instrumentation.waitForIdleSync()
         }
         fun capture(name: String, dialogTitle: String? = null) {
+            val animatedPet = name.startsWith("pet-")
+            if (animatedPet) assertPetVisible()
             frames()
             val bounds = Rect()
             main {
@@ -385,7 +537,7 @@ class PublicShellPresentationTest {
                     } else unchangedSince = 0L
                     previous?.recycle()
                     previous = current
-                    if (unchangedSince != 0L && now - unchangedSince >= 200L) {
+                    if (animatedPet || unchangedSince != 0L && now - unchangedSince >= 200L) {
                         settled = true
                         break
                     }

@@ -3,6 +3,7 @@ enum LauncherQuickAction: String, CaseIterable {
     case publicNotes = "dev.po4yka.chur.action.public-notes"
     case publicCalculator = "dev.po4yka.chur.action.public-calculator"
     case publicCamera = "dev.po4yka.chur.action.public-camera"
+    case publicPet = "dev.po4yka.chur.action.public-pet"
     case importItems = "dev.po4yka.chur.action.import"
     case search = "dev.po4yka.chur.action.search"
     case lockAndHide = "dev.po4yka.chur.action.lock-and-hide"

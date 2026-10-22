@@ -42,6 +42,14 @@ import java.io.IOException
  * work can open the runtime without opening a vault session.
  */
 internal class ChurHost private constructor(context: Context) {
+    private val guide = dev.po4yka.chur.app.onboarding.GuideCoordinator(
+        dev.po4yka.chur.app.onboarding.platformGuideStore(context.noBackupFilesDir.resolve("guide").path),
+        freshInstall = runCatching {
+            val files = context.filesDir.list() ?: error("Cannot inspect existing files")
+            val settings = context.noBackupFilesDir.list() ?: error("Cannot inspect existing settings")
+            files.isEmpty() && settings.isEmpty() && !File(context.applicationInfo.dataDir, "shared_prefs").exists()
+        }.getOrDefault(false),
+    )
     /**
      * The attached window, or `null` between one activity and the next.
      *
@@ -139,6 +147,7 @@ internal class ChurHost private constructor(context: Context) {
         appLockSetting = appLockSetting,
         publicUtilities = dev.po4yka.chur.app.publicshell.publicUtilityStore(
             File(context.publicShellFile("notes.json")).parent!!, context.noBackupFilesDir.resolve("public-utility-settings").path),
+        guide = guide,
         publicShellSetting = PublicShellSetting(
             reader = {
                 File(context.publicShellFile("shell.txt")).takeIf { it.isFile && it.length() <= 32 }?.readText()

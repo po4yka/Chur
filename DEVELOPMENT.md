@@ -138,6 +138,40 @@ normal unlock, destination confirmation, import/cancel, and no replay after comp
 For iOS, also verify encrypted queue cleanup and cold/foreground delivery. For Android,
 use another UID's content provider and temporary URI grants.
 
+### Private onboarding UI acceptance
+
+`PrivateOnboardingTest` (Android) and `PrivateOnboardingTests` (iOS) use the
+production entry point and native core. Run each on a disposable device with a
+fresh Chur installation and English UI. The tests create a synthetic vault,
+confirm its recovery words, import a local image, search, review settings, and
+verify the discreet-mode trial through normal password authentication. They do
+not restore or export an archive, delete the source image, or use a test bypass.
+The iOS keyboard Go action submits authentication. The system icon confirmation
+can lock the app; the test uses the normal code and password path again.
+Test logs and XCTest results can contain synthetic input; keep them local.
+
+Seed `apps/iosApp/Resources/chur_interactive_fallback.png` as
+`/sdcard/Download/onboarding.png` on Android, or add it to the iOS Simulator Photos
+library with `xcrun simctl addmedia`. Install the app and Android test APK. Clear
+only the disposable app's data before each first-install run. On iOS, uninstall
+only that disposable Chur app before the next run; wait for Xcode to exit first.
+
+```sh
+adb -s "$CHUR_TEST_SERIAL" shell am instrument -w \
+  -e class dev.po4yka.chur.android.PrivateOnboardingTest \
+  dev.po4yka.chur.test/androidx.test.runner.AndroidJUnitRunner
+xcodebuild -project apps/iosApp/Chur.xcodeproj -scheme Chur \
+  -configuration Debug -destination "platform=iOS Simulator,id=$CHUR_TEST_SIMULATOR" \
+  CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_IDENTITY=- \
+  -only-testing:ChurUITests/PrivateOnboardingTests test
+```
+
+Use `build-gate --` for the build commands on this workstation. Check the Android
+instrumentation summary as well as the shell exit status: `am instrument` can
+exit zero when tests fail. Clear the disposable app data again before the launcher
+regression suite, which expects the default non-discreet state. UI tests do not replace physical-device, full screen
+reader, or performance acceptance.
+
 ### OCR assets and native dependencies
 
 English and Russian traineddata, hashes, and license notices are checked in under

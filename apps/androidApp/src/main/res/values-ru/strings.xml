@@ -14,4 +14,5 @@
     <string name="quick_settings_lock_foreground">Оставьте Chur открытым и попробуйте добавить кнопку ещё раз.</string>
     <string name="quick_settings_lock_unavailable">На этом устройстве кнопки быстрых настроек недоступны.</string>
     <string name="quick_settings_lock_failed">Не удалось добавить кнопку. Откройте быстрые настройки, нажмите «Изменить» и добавьте кнопку «Заблокировать Chur».</string>
+    <string name="public_pet">Чур</string>
 </resources>

@@ -54,9 +54,9 @@ pre-applied square or circular mask and no separate round-icon artwork.
 asset. It uses the authored color layers on charcoal, without native Apple
 tile effects, outer shadow, or rounded corners.
 
-On Android 12+, `values-v31/themes.xml` explicitly uses `ic_splash` for the
-system splash, charcoal behind the icon, and the theme's canvas behind the
-window. It is an adaptive drawable with the same geometry and a 1024px `nodpi`
+On Android 12+, `values-v31/themes.xml` uses the transparent `ic_public_splash`
+and the theme canvas for a neutral launch. The former `ic_splash` artwork is
+retained as a resource but is not selected by the theme. It is an adaptive drawable with the same geometry and a 1024px `nodpi`
 foreground, avoiding enlargement of the smaller launcher density bitmaps.
 Android's own adaptive-icon scaling supplies the splash padding.
 The existing day/night canvases match `ChurTheme`; day/night system-bar icon
@@ -95,3 +95,7 @@ including 90 native renders across six masks, five palettes, and three sizes.
 The earlier iOS Simulator build attempt exited 75 after waiting 600 seconds
 for a `build-gate` slot; that compiler did not run. These Android checks do not
 establish other OEM launcher behavior, release signing, or store acceptance.
+
+The Chur pet launcher reuses the existing mirror-and-spirit artwork. iOS
+packages the same native document as the `UtilityPet` alternate icon. Android
+uses the existing adaptive launcher resource. Neither changes the neutral splash.

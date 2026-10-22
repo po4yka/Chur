@@ -10,6 +10,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import dev.po4yka.chur.app.ChurController
 import dev.po4yka.chur.app.PublicShell
+import dev.po4yka.chur.app.onboarding.guideTarget
+import dev.po4yka.chur.app.onboarding.publicShellLabel
 
 /** Mounted only inside the unlocked Settings route; drafts are never saveable. */
 @Composable
@@ -22,16 +24,17 @@ fun DiscreetSettings(controller: ChurController) {
     var failure by remember { mutableStateOf<String?>(null) }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = { expanded = !expanded }) { Text(utilityText("Public applications", "Публичные приложения")) }
+            TextButton(onClick = controller::startPrivateGuide) { Text(utilityText("Learn with Chur", "Обучение с Чуром")) }
+            TextButton(onClick = { expanded = !expanded }, modifier = Modifier.guideTarget("discreet")) { Text(utilityText("Public applications", "Публичные приложения")) }
             if (expanded) {
                 PublicShell.entries.forEach { option ->
                     Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                         RadioButton(selected = shell == option, onClick = { controller.setPublicShell(option) })
-                        Text(option.label)
+                        Text(publicShellLabel(option))
                     }
                 }
-                Text(utilityText("The transition code opens authentication. It does not replace your password. Enter it and press = in Calculator, submit it in Notes search, or hold the Camera gallery button. If you forget it, hold Version in Settings → About. Then authenticate normally.",
-                    "Код открывает авторизацию и не заменяет пароль. В калькуляторе введите код и нажмите =; в заметках отправьте код в поиске; в камере удерживайте кнопку галереи. Если код забыт, удерживайте версию в Настройки → О приложении, затем пройдите обычную авторизацию."))
+                Text(utilityText("The transition code opens authentication. It does not replace your password. Enter it and press = in Calculator, submit it in Notes search, hold the Camera gallery button, or hold the moon in Chur. If you forget it, hold Version in Settings → About. Then authenticate normally.",
+                    "Код открывает авторизацию и не заменяет пароль. В калькуляторе введите код и нажмите =; в заметках отправьте код в поиске; в камере удерживайте кнопку галереи; в игре — луну. Если код забыт, удерживайте версию в Настройки → О приложении, затем пройдите обычную авторизацию."))
                 if (enabled) TextButton(onClick = {
                     try { controller.disableDiscreetMode(); code = ""; repeated = ""; failure = null } catch (_: Exception) { failure = "Settings could not be saved." }
                 }) { Text(utilityText("Disable discreet mode", "Отключить незаметный режим")) }

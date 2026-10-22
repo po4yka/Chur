@@ -86,11 +86,12 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         let rows: [(LauncherQuickAction, String, String)] = enabled ? [
             (.publicNotes, NSLocalizedString("New note", comment: ""), "square.and.pencil"),
             (.publicCalculator, NSLocalizedString("Calculator", comment: ""), "plus.forwardslash.minus"),
-            (.publicCamera, NSLocalizedString("Camera", comment: ""), "camera")
+            (.publicCamera, NSLocalizedString("Camera", comment: ""), "camera"),
+            (.publicPet, NSLocalizedString("Chur", comment: ""), "sparkles")
         ] : [(.importItems, "Import", "square.and.arrow.down"), (.search, "Search", "magnifyingglass"),
              (.lockAndHide, "Lock and hide", "lock.fill"), (.newPrivateNote, "New private note", "square.and.pencil")]
         app.shortcutItems = rows.map { UIApplicationShortcutItem(type: $0.0.rawValue, localizedTitle: NSLocalizedString($0.1, comment: ""), localizedSubtitle: nil, icon: UIApplicationShortcutIcon(systemImageName: $0.2), userInfo: nil) }
-        let icon: String? = enabled ? (shell == "calculator" ? "UtilityCalculator" : shell == "camera" ? "UtilityCamera" : "UtilityNotes") : nil
+        let icon: String? = enabled ? (shell == "calculator" ? "UtilityCalculator" : shell == "camera" ? "UtilityCamera" : shell == "pet" ? "UtilityPet" : "UtilityNotes") : nil
         if app.supportsAlternateIcons && app.alternateIconName != icon {
             app.setAlternateIconName(icon) { error in
                 if error != nil { /* Keep the supported system icon. Retry on the next explicit settings change. */ }
@@ -380,6 +381,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidBecomeActive(_ scene: UIScene) {
+        host.controller.foreground()
         host.resumePublicCamera()
         if !quickActionMaskPending { host.privacy.detach() }
         // UIApplication can remain inactive during the scene callback. Check

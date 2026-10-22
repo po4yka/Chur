@@ -286,9 +286,9 @@ bool SpiritScene::render(double deltaSeconds) {
     }
     transforms.setTransform(transforms.getInstance(s.asset->getRoot()), mat4f(quatf::fromAxisAngle(float3{0, 0, 1}, -s.leanX * .20943951f)));
     s.animator->updateBoneMatrices();
-    const float targetOpening = s.reduced ? 1.f : eyeOpening(sample.name, sample.seconds,
+    const float targetOpening = eyeOpening(sample.name, sample.seconds,
         s.animator->getAnimationDuration(index));
-    s.lastOpening = s.reduced ? 1.f : s.fromOpening + (targetOpening - s.fromOpening) * smoothStep(s.fade);
+    s.lastOpening = s.reduced ? targetOpening : s.fromOpening + (targetOpening - s.fromOpening) * smoothStep(s.fade);
     const auto weights = apertureWeights(s.lastOpening);
     auto& renderables = s.engine->getRenderableManager();
     // Sole eye owner, deliberately AFTER clip mixing and bone updates.

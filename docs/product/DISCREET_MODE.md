@@ -22,7 +22,7 @@ Discreet Mode makes Chur unobtrusive during ordinary device use. It is not the c
 
 ## Public shell
 
-The public shell is a daily-use application. Authenticated Settings offers Notes, Calculator, and Camera. Public Settings contains appearance, data storage, and About only. Notes is the default. The choice is stored in public device preferences, is the same for every vault identity, and survives a restart. Switching screens does not delete Notes, public photos, or vault data. An unreadable or unknown choice falls back to Notes.
+The public shell is a daily-use application. Authenticated Settings offers Notes, Calculator, Camera, and Chur. Public Settings contains appearance, public-app help, data storage, and About. Notes is the default. The choice is stored in public device preferences, is the same for every vault identity, and survives a restart. Switching screens does not delete Notes, public photos, or vault data. An unreadable or unknown choice falls back to Notes.
 
 Public-shell requirements:
 
@@ -50,6 +50,20 @@ The album remains under Android `filesDir/public/camera/` or iOS `Documents/publ
 Camera hardware, lenses, frame profiles, audio, orientation, interruption, and exported-file playback require physical-device acceptance on both platforms. Simulator checks cannot establish those results.
 
 Every public screen has a visible Settings control. Settings is a separate route: no Notes editor or camera preview remains composed behind it. No shell reveals a private count, identity, route, or thumbnail.
+
+### Chur pet and onboarding
+
+Chur is a local pet scene with greeting, dragging, treats, a movable toy, and
+sleep. It has no progression or needs. State ends with the screen session.
+The first-launch guide offers all four applications, then explains creation,
+recovery, library controls, and settings. It can be skipped. Existing users keep
+their selected application and can start tutorials manually.
+
+The first-launch shell choice may write only that public preference, once,
+before the introductory step completes. All later changes require authenticated
+Settings. Public help contains only public lessons. Private tutorials never
+start automatically after discreet mode is enabled. Tutorial status is excluded
+from backup and does not record a private route, identity, or secret.
 
 ### Public-shell disclosure and backup
 
@@ -82,11 +96,12 @@ A secret gesture, route, or credential may enter the vault unlock flow, but it m
 
 This contract replaces the earlier requirement for a permanently visible private entry. New and existing installations retain the visible setup entry until the user explicitly enables Discreet Mode from authenticated Settings. Setup records a pending digest, locks the session, and requires an actual public-app trigger followed by successful vault authentication before enabling the mode. A failed or cancelled trial does not enable it.
 
-One user-selected eight-digit code applies to all three apps:
+One user-selected eight-digit code applies to all four apps:
 
 - Calculator: enter the exact digits, then press equals.
 - Notes: enter the exact digits in search, then submit the search.
 - Camera: hold the gallery thumbnail, enter the code, then submit.
+- Chur: hold the moon, enter the code, then submit. A short tap changes sleep.
 
 Recognition occurs only on submission. A recognized code is not written to calculation history, saved UI state, analytics, or logs. Code configuration is versioned and stores a digest, outside public backup. It is a navigation preference, not a cryptographic credential.
 
@@ -175,7 +190,7 @@ Private data is excluded from:
 - voice-assistant indexing;
 - public deep-link parameters.
 
-[App icon actions](APP_ICON_ACTIONS.md) use New note, Calculator, and Photo in Discreet Mode. Outside that mode, the four generic private capabilities remain: Import, Search, Lock and hide, and New private note. They disclose no private data or session state. Private navigation uses the normal session gate; Lock and hide performs panic lock and displays the public shell or the enabled whole-app gate. No shortcut carries content, private identity, or authentication authority.
+[App icon actions](APP_ICON_ACTIONS.md) use New note, Calculator, Camera, and Chur in Discreet Mode. Outside that mode, the four generic private capabilities remain: Import, Search, Lock and hide, and New private note. They disclose no private data or session state. Private navigation uses the normal session gate; Lock and hide performs panic lock and displays the public shell or the enabled whole-app gate. No shortcut carries content, private identity, or authentication authority.
 
 A future private widget requires a dedicated threat model and locked-state rendering contract.
 

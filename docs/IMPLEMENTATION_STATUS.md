@@ -13,7 +13,8 @@ The previous service transport has been removed. There is no account or backend 
 
 | Area | Current behavior and contract |
 | --- | --- |
-| Public shells | Notes, Calculator, and Camera, chosen in Public Settings. Public Notes and confirmed camera photos are not encrypted by Chur and enter platform backup. [Discreet Mode](product/DISCREET_MODE.md) |
+| Public shells | Notes, Calculator, Camera, and Chur, chosen during first-launch onboarding or authenticated Settings. Public Notes and confirmed camera photos are not encrypted by Chur and enter platform backup. [Discreet Mode](product/DISCREET_MODE.md) |
+| Guided onboarding | First-launch choice, private setup and control guidance, manual replay, and public pet lessons. [ADR-0071](adr/0071-pet-shell-and-guided-onboarding.md), [local validation](assurance/PET_ONBOARDING_VALIDATION_2026-10-22.md). |
 | Vault access | password or vault PIN, device slots, optional recovery, whole-app gate, and an independent decoy identity. [Provisioning](security/PROVISIONING.md), [key slots](security/KEY_SLOTS.md), [recovery](security/RECOVERY.md) |
 | Media library | photos, video, audio, favorites, tags, filtering, pagination, recoverable Trash, authenticated playback, and encrypted derivatives. [Media pipeline](interop/MEDIA_PIPELINE.md) |
 | Documents and files | all file types stored as opaque encrypted originals, bounded text/PDF previews, metadata search, export, backup, and the ordinary library actions. [Contract](product/DOCUMENTS_AND_FILES.md) |

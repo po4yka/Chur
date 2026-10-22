@@ -78,6 +78,7 @@ fun ChurViewController(controller: ChurController, gate: GateResult, privacy: Io
     val root = ChurRootViewController(compose, chrome)
     modals.attach(root)
     val rootReference = WeakReference(root)
+    chrome.onGuideLayout = { rootReference.get()?.view?.setNeedsLayout() }
     val controllerReference = WeakReference(controller)
     val chromeReference = WeakReference(chrome)
     val scenesReference = WeakReference(scenes)
@@ -147,8 +148,9 @@ internal class ChurRootViewController(
         // Authentication and public content must not bridge an active fold.
         val region = adaptiveContentRegion(width, height, occlusions, divisions)
         content.view.setFrame(CGRectMake(region.x, region.y, region.width, region.height))
-        vaultChrome.presentationController.view.setFrame(view.bounds)
-        vaultChrome.updateGeometry(width, height, occlusions, divisions)
+        val vaultHeight = (height - vaultChrome.guideBottomInset.coerceAtMost(height * .4)).coerceAtLeast(0.0)
+        vaultChrome.presentationController.view.setFrame(CGRectMake(0.0, 0.0, width, vaultHeight))
+        vaultChrome.updateGeometry(width, vaultHeight, occlusions, divisions)
         if (statusBarInSplit != vaultChrome.dualPane) {
             statusBarInSplit = vaultChrome.dualPane
             setNeedsStatusBarAppearanceUpdate()
@@ -190,6 +192,14 @@ fun churNativeGate(releaseApplication: Boolean): GateResult {
 /** Bind the one controller and foreground peer coordinator used by the scenes. */
 fun churController(privacy: IosPrivacyCover, exports: ExportSink): ChurController {
     val documents = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, true).first() as String
+    val freshInstall = runCatching {
+        val existing = NSFileManager.defaultManager.contentsOfDirectoryAtPath(documents, null) ?: error("Cannot inspect existing files")
+        existing.isEmpty() && listOf("publicShell", "autoLock", "lockWholeApp", "deviceSlotStrict").all {
+            NSUserDefaults.standardUserDefaults.objectForKey(it) == null
+        }
+    }.getOrDefault(false)
+    val guide = dev.po4yka.chur.app.onboarding.GuideCoordinator(
+        dev.po4yka.chur.app.onboarding.platformGuideStore("$documents/guide-settings"), freshInstall)
     val obsolete = "$documents/chur-sync"
     if (NSFileManager.defaultManager.fileExistsAtPath(obsolete))
         check(NSFileManager.defaultManager.removeItemAtPath(obsolete, error = null)) { "obsolete network state could not be removed" }
@@ -209,6 +219,7 @@ fun churController(privacy: IosPrivacyCover, exports: ExportSink): ChurControlle
             writer = { NSUserDefaults.standardUserDefaults.setBool(it, forKey = "lockWholeApp") },
         ),
         publicUtilities = dev.po4yka.chur.app.publicshell.publicUtilityStore("$documents/public/utilities", "$documents/utility-settings"),
+        guide = guide,
         publicShellSetting = PublicShellSetting(
             reader = { NSUserDefaults.standardUserDefaults.stringForKey("publicShell") },
             writer = { NSUserDefaults.standardUserDefaults.setObject(it, forKey = "publicShell") },

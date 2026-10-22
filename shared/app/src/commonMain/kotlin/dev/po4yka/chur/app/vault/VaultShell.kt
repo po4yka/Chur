@@ -69,6 +69,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import dev.po4yka.chur.app.onboarding.guideTarget
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -556,7 +557,7 @@ fun VaultShell(
                     (state.libraryScopeTitle == null || state.recentlyAdded)) ||
                     state.openAlbum != null)
             ) {
-                FloatingActionButton(onClick = actions.onImport) {
+                FloatingActionButton(onClick = actions.onImport, modifier = Modifier.guideTarget("import")) {
                     Icon(PlusGlyph, contentDescription = "Import")
                 }
             } else if (
@@ -733,7 +734,7 @@ internal fun LockControl(
     tint: Color = LocalContentColor.current,
 ) {
     Box(
-        modifier = Modifier
+        modifier = Modifier.guideTarget("lock")
             .combinedClickable(
                 onClick = onLock,
                 onLongClick = onPanic,
@@ -994,7 +995,7 @@ private fun SearchBody(state: VaultUiState, actions: VaultActions,
                     label = { Text("Search") },
                     placeholder = { Text("Names, tags, or indexed text", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     keyboardOptions = privateKeyboardOptions(),
-                    modifier = Modifier.fillMaxWidth().padding(ChurSpacing.gutter).focusRequester(focusRequester),
+                    modifier = Modifier.fillMaxWidth().padding(ChurSpacing.gutter).focusRequester(focusRequester).guideTarget("search", state.selectedCount == 0 && state.operation == null),
                     colors = churOutlinedTextFieldColors(),
                 )
                 ContentIndexControls(state.contentIndex, actions)
@@ -1074,7 +1075,7 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions, onNavigatio
         }
         item { actions.publicSettingsContent() }
         item {
-            Text("Access", style = MaterialTheme.typography.titleMedium)
+            Text("Access", style = MaterialTheme.typography.titleMedium, modifier = Modifier.guideTarget("unlock-method"))
         }
         items(state.slots, key = { it.id }) { slot ->
             Card(modifier = Modifier.fillMaxWidth()) {
@@ -1165,7 +1166,7 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions, onNavigatio
                 headlineContent = { Text("Auto-lock") },
                 supportingContent = { Text(state.autoLock.label) },
                 colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                modifier = Modifier.clickable(role = Role.Button) { choosingAutoLock = true },
+                modifier = Modifier.guideTarget("auto-lock").clickable(role = Role.Button) { choosingAutoLock = true },
             )
         }
         if (state.quickSettingsLockAvailable) item {
@@ -1199,7 +1200,7 @@ private fun SettingsBody(state: VaultUiState, actions: VaultActions, onNavigatio
             Text("Backup", style = MaterialTheme.typography.titleMedium)
         }
         item {
-            SettingsAction("Write a backup file", actions.onCreateBackup, enabled = state.operation == null)
+            SettingsAction("Write a backup file", actions.onCreateBackup, enabled = state.operation == null, modifier = Modifier.guideTarget("backup", state.operation == null))
         }
         actions.onEncryptExternalFiles?.let { encrypt ->
             item {
@@ -1519,8 +1520,8 @@ private fun ChangePasswordDialog(
 }
 
 @Composable
-private fun SettingsAction(label: String, onClick: () -> Unit, enabled: Boolean = true) {
-    Card(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
+private fun SettingsAction(label: String, onClick: () -> Unit, enabled: Boolean = true, modifier: Modifier = Modifier) {
+    Card(onClick = onClick, enabled = enabled, modifier = modifier.fillMaxWidth()) {
         Text(label, modifier = Modifier.padding(ChurSpacing.three))
     }
 }

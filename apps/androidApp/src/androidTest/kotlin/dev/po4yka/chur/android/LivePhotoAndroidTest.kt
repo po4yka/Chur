@@ -83,7 +83,9 @@ class LivePhotoAndroidTest {
             }
             assertArrayEquals(source.readBytes(), exported.readBytes())
             ParcelFileDescriptor.open(exported, ParcelFileDescriptor.MODE_READ_ONLY).use {
+                android.system.Os.lseek(it.fileDescriptor, 7, android.system.OsConstants.SEEK_SET)
                 assertEquals(table.totalLength, requireNotNull(readLivePhotoBundle(it.fd, null)).totalLength)
+                assertEquals(7L, android.system.Os.lseek(it.fileDescriptor, 0, android.system.OsConstants.SEEK_CUR))
             }
             assertPairedVideoAndAudioDecode(vault, objectId)
         }
@@ -139,6 +141,18 @@ class LivePhotoAndroidTest {
             })
             assertEquals(MediaImporter.Outcome.Refused(ChurStatus.VAULT_LOCKED), locked)
         }
+    }
+
+    @Test
+    fun bundleProbeDoesNotConsumeOrWaitForProviderPipe() {
+        val pipe = ParcelFileDescriptor.createPipe()
+        try {
+            assertNull(readLivePhotoBundle(pipe[0].fd, null))
+            android.system.Os.write(pipe[1].fileDescriptor, byteArrayOf(42), 0, 1)
+            val actual = ByteArray(1)
+            assertEquals(1, android.system.Os.read(pipe[0].fileDescriptor, actual, 0, 1))
+            assertEquals(42, actual[0].toInt())
+        } finally { pipe.forEach { it.close() } }
     }
 
     private suspend fun assertPairedVideoAndAudioDecode(vault: VaultRepository, objectId: ByteArray) {

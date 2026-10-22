@@ -17,6 +17,8 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -49,28 +51,32 @@ internal actual fun SpiritSurface(state: SpiritRenderState, modifier: Modifier) 
         }
     }
     var failed by remember { mutableStateOf(false) }
+    var ready by remember { mutableStateOf(false) }
     val data = bytes
-    if (data == null || failed) {
-        // Loading/failure stays a usable, accessible public decoration.
-        AndroidView(modifier = modifier, factory = { ctx -> android.widget.ImageView(ctx).apply {
-            scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
-            runCatching { ctx.assets.open("chur_interactive_fallback.png").use {
-                setImageDrawable(android.graphics.drawable.Drawable.createFromStream(it, null))
-            } }
-            importantForAccessibility = android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            isClickable = false
-        } })
-    } else {
-        AndroidView(modifier = modifier,
-            factory = { SpiritTexture(it, data) { failed = true } },
-            update = { it.submit(state) },
-            onRelease = { it.release() },
-        )
+    Box(modifier) {
+        if (data != null && !failed) {
+            AndroidView(modifier = Modifier.fillMaxSize(),
+                factory = { SpiritTexture(it, data, { ready = true }) { failed = true } },
+                update = { it.submit(state) },
+                onRelease = { it.release() },
+            )
+        }
+        if (data == null || failed || !ready) {
+            // Loading/failure stays a usable, accessible public decoration.
+            AndroidView(modifier = Modifier.fillMaxSize(), factory = { ctx -> android.widget.ImageView(ctx).apply {
+                scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+                runCatching { ctx.assets.open("chur_interactive_fallback.png").use {
+                    setImageDrawable(android.graphics.drawable.Drawable.createFromStream(it, null))
+                } }
+                importantForAccessibility = android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                isClickable = false
+            } })
+        }
     }
 }
 
 /** One native surface/engine; it owns no app state, files beyond bundled art, or network access. */
-private class SpiritTexture(context: Context, private val data: ByteArray, private val failed: () -> Unit) :
+private class SpiritTexture(context: Context, private val data: ByteArray, private val ready: () -> Unit, private val failed: () -> Unit) :
     TextureView(context), Choreographer.FrameCallback {
     private var engine: Engine? = null
     private var helper: UiHelper? = null
@@ -232,6 +238,24 @@ private class SpiritTexture(context: Context, private val data: ByteArray, priva
             }
         }
         ui.attachTo(this)
+        // Keep the poster until the TextureView has a frame, not merely until
+        // Filament has loaded the GLB. GPU initialization can take several frames.
+        val delegate = surfaceTextureListener
+        surfaceTextureListener = object : SurfaceTextureListener {
+            private var delivered = false
+            override fun onSurfaceTextureAvailable(texture: android.graphics.SurfaceTexture, width: Int, height: Int) {
+                delegate?.onSurfaceTextureAvailable(texture, width, height)
+            }
+            override fun onSurfaceTextureSizeChanged(texture: android.graphics.SurfaceTexture, width: Int, height: Int) {
+                delegate?.onSurfaceTextureSizeChanged(texture, width, height)
+            }
+            override fun onSurfaceTextureDestroyed(texture: android.graphics.SurfaceTexture): Boolean =
+                delegate?.onSurfaceTextureDestroyed(texture) ?: true
+            override fun onSurfaceTextureUpdated(texture: android.graphics.SurfaceTexture) {
+                delegate?.onSurfaceTextureUpdated(texture)
+                if (!delivered && !released) { delivered = true; ready() }
+            }
+        }
     }
 
     private fun hierarchyVisible(): Boolean {
@@ -262,6 +286,7 @@ private class SpiritTexture(context: Context, private val data: ByteArray, priva
         val e = engine ?: return
         if (!resumed || released || !hierarchyVisible() || windowVisibility != VISIBLE) { lastFrame = 0L; motionInputAge = Float.POSITIVE_INFINITY; schedule(); return }
         val dt = if (lastFrame == 0L) 0f else ((time - lastFrame) / 1e9f).coerceAtLeast(0f)
+        if (lastFrame != 0L && time - lastFrame < 33_333_333L) { schedule(); return }
         lastFrame = time
         clipTime += dt; transitionTime += dt; motionInputAge += dt
         val a = asset ?: return
@@ -295,7 +320,7 @@ private class SpiritTexture(context: Context, private val data: ByteArray, priva
         tm.setTransform(rootInstance, leanTransform)
         // Eye overrides happen AFTER clip evaluation. No TRS crossfade can corrupt aperture weights.
         val targetAperture = SpiritEyes.aperture(sample, state.reducedMotion)
-        displayedAperture = if (state.reducedMotion) 1f else
+        displayedAperture = if (state.reducedMotion) targetAperture else
             transitionAperture * (1f - alpha) + targetAperture * alpha
         val weights = SpiritEyes.weights(displayedAperture)
         for (instance in eyeInstances) e.renderableManager.setMorphWeights(instance, weights, 0)

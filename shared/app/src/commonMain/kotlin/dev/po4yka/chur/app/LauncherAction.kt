@@ -5,6 +5,7 @@ enum class LauncherAction(val shortcutId: String) {
     PUBLIC_NOTES("public-notes"),
     PUBLIC_CALCULATOR("public-calculator"),
     PUBLIC_CAMERA("public-camera"),
+    PUBLIC_PET("public-pet"),
     IMPORT("import"),
     SEARCH("search"),
     LOCK_AND_HIDE("lock-and-hide"),
@@ -15,6 +16,7 @@ enum class LauncherAction(val shortcutId: String) {
         PUBLIC_NOTES -> PublicShell.NOTES
         PUBLIC_CALCULATOR -> PublicShell.CALCULATOR
         PUBLIC_CAMERA -> PublicShell.CAMERA
+        PUBLIC_PET -> PublicShell.PET
         else -> null
     }
     val externalAction: String get() = "dev.po4yka.chur.action.$shortcutId"

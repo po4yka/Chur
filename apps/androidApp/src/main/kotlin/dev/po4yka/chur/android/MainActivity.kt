@@ -71,10 +71,10 @@ class MainActivity : FragmentActivity() {
         dev.po4yka.chur.app.publicshell.PublicPresentation.apply = { enabled, shell ->
             PublicLauncherPresentation.apply(publicContext, enabled, shell)
             val label = publicContext.getString(if (!enabled) R.string.app_name else when (shell) {
-                "calculator" -> R.string.public_calculator; "camera" -> R.string.public_camera; else -> R.string.public_notes
+                "calculator" -> R.string.public_calculator; "camera" -> R.string.public_camera; "pet" -> R.string.public_pet; else -> R.string.public_notes
             })
             val icon = if (!enabled) R.mipmap.ic_launcher else when (shell) {
-                "calculator" -> R.drawable.ic_public_calculator; "camera" -> R.drawable.ic_public_camera; else -> R.drawable.ic_public_notes
+                "calculator" -> R.drawable.ic_public_calculator; "camera" -> R.drawable.ic_public_camera; "pet" -> R.mipmap.ic_launcher; else -> R.drawable.ic_public_notes
             }
             weakActivity.get()?.let { activity ->
                 activity.title = label
@@ -206,6 +206,7 @@ class MainActivity : FragmentActivity() {
      */
     override fun onResume() {
         super.onResume()
+        host.controller.foreground()
         host.endShareActivity()
         LauncherShortcuts.refresh(this)
     }

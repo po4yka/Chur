@@ -5,6 +5,7 @@ enum class PublicShell(val storedValue: String, val label: String) {
     NOTES("notes", "Notes"),
     CALCULATOR("calculator", "Calculator"),
     CAMERA("camera", "Camera"),
+    PET("pet", "Chur"),
 }
 
 class PublicShellSetting(private val reader: () -> String?, private val writer: (String) -> Unit) {

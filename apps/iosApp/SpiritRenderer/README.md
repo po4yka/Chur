@@ -1,6 +1,6 @@
 # Chur Metal renderer
 
-The standard `Chur.xcodeproj` and `project.yml` include this renderer. No alternate project or feature compilation flag is required from the caller. The public Notes UI still starts with the companion off; choose **Show Chur**.
+The standard `Chur.xcodeproj` and `project.yml` include this renderer. No alternate project or feature compilation flag is required from the caller. Choose the Chur public application to use the pet. The first-launch guide and manual tutorials also use this renderer. Notes does not host the companion.
 
 `ChurSpiritRendererInstaller` installs the narrow Kotlin host factory before Compose starts. The exported symbols `IosSpiritRenderer` and `IosSpiritRendererHost` are part of the existing framework export gate. Native rendering receives only public art/presentation values. UIKit owns a transparent CAMetalLayer; Compose owns the gesture and accessibility target.
 

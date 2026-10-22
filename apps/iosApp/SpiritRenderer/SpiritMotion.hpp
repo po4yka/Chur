@@ -37,7 +37,7 @@ inline std::array<float, 11> apertureWeights(float opening) {
 }
 struct ClipSample { std::string name; float seconds; };
 inline ClipSample sampleClip(const std::string& requested, float elapsed, bool reduced) {
-    if (reduced) return {"idle_soft", 0.f};
+    if (reduced) return {requested == "sleep_enter" || requested == "sleep_loop" ? "sleep_loop" : "idle_soft", 0.f};
     const float t = std::max(0.f, elapsed);
     if (requested == "hold_enter") return t < .2f ? ClipSample{requested,t} : ClipSample{"hold_loop",std::fmod(t-.2f,1.2f)};
     if (requested == "tap_react" || requested == "release_settle") return t < .8f ? ClipSample{requested,t} : ClipSample{"idle_soft",std::fmod(t-.8f,4.f)};

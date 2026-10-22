@@ -80,11 +80,12 @@ internal object LauncherToken {
 }
 
 internal fun launcherShortcutInfos(context: Context): List<ShortcutInfo> =
-    (if (PublicLauncherPresentation.enabled(context)) listOf(LauncherAction.PUBLIC_NOTES, LauncherAction.PUBLIC_CALCULATOR, LauncherAction.PUBLIC_CAMERA)
+    (if (PublicLauncherPresentation.enabled(context)) listOf(LauncherAction.PUBLIC_NOTES, LauncherAction.PUBLIC_CALCULATOR, LauncherAction.PUBLIC_CAMERA, LauncherAction.PUBLIC_PET)
         else LauncherAction.entries.filter { it.publicShell == null }).mapIndexed { rank, action ->
         val (label, icon) = when (action) {
             LauncherAction.PUBLIC_NOTES -> R.string.public_new_note to R.drawable.ic_public_notes
             LauncherAction.PUBLIC_CALCULATOR -> R.string.public_calculator to R.drawable.ic_public_calculator
+            LauncherAction.PUBLIC_PET -> R.string.public_pet to R.mipmap.ic_launcher
             LauncherAction.PUBLIC_CAMERA -> R.string.public_camera to R.drawable.ic_public_camera
             LauncherAction.IMPORT -> R.string.launcher_import to R.drawable.ic_launcher_import
             LauncherAction.SEARCH -> R.string.launcher_search to R.drawable.ic_launcher_search

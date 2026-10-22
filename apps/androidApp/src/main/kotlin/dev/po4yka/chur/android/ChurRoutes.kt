@@ -163,6 +163,11 @@ import kotlinx.coroutines.withContext
  */
 @Composable
 fun ChurRoutes(controller: ChurController, route: AppRoute, vaultState: VaultState) {
+    dev.po4yka.chur.app.onboarding.GuideHost(controller, route) { ChurRoutesGuided(controller, route, vaultState) }
+}
+
+@Composable
+private fun ChurRoutesGuided(controller: ChurController, route: AppRoute, vaultState: VaultState) {
     val phrase by controller.recoveryPhrase.collectAsState()
     val panic: (() -> Unit)? = if (route == AppRoute.Vault || vaultState is VaultState.Unlocked || phrase != null) {
         { controller.panic() }
@@ -305,6 +310,7 @@ private fun PublicShellContent(controller: ChurController, route: AppRoute) {
             onEncryptExternalFiles = controller::openExternalArchive,
             discreet = discreet,
             selectedShell = shell,
+            onTutorial = { controller.startPublicGuide() },
             onSelectShell = controller::setPublicShell,
             error = error,
         )
@@ -312,6 +318,13 @@ private fun PublicShellContent(controller: ChurController, route: AppRoute) {
     }
     key(shell) {
         when (shell) {
+            PublicShellKind.PET -> {
+                val inputEpoch by controller.publicInputEpoch.collectAsState()
+                dev.po4yka.chur.app.publicshell.PetScreen(
+                    onOpenSettings = { controller.goTo(AppRoute.PublicSettings) },
+                    onSubmitCode = controller::submitPublicCode, inputEpoch = inputEpoch,
+                    onNavigationBusy = controller::setLauncherNavigationBusy)
+            }
             PublicShellKind.NOTES -> PublicNotesShell(controller) { controller.goTo(AppRoute.PublicSettings) }
             PublicShellKind.CALCULATOR -> CalculatorScreen(onOpenSettings = { controller.goTo(AppRoute.PublicSettings) }, onSubmitCode = controller::submitPublicCode,
                 showFirstWriteDisclosure = disclosureDue, onAcknowledgeDisclosure = controller::acknowledgeDisclosure)
@@ -730,15 +743,16 @@ private fun VaultRoute(controller: ChurController) {
     var originals by remember { mutableStateOf<List<Uri>>(emptyList()) }
     val launcherRequest by controller.launcherRequest.collectAsState()
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
-    val launcherNavigationBusy = incomingShare != null || shellNavigationBusy || privateNotesBusy || viewing != null || selection.isNotEmpty() ||
+    val guideNavigationBusy = incomingShare != null || shellNavigationBusy || privateNotesBusy || selection.isNotEmpty() ||
         creatingAlbum || choosingAlbum || movingSelection || choosingTag || managingTags ||
         confirmingDelete || confirmingEmptyTrash || choosingExport || choosingImport ||
         choosingArchive != null || choosingArchiveImport || choosingPrivateNoteExport != null ||
         pendingPrivateNoteExport != null || exportingAlbum != null || pendingAlbumExport != null ||
         pendingDocumentImport != null || originals.isNotEmpty() || devicePairing != null ||
         quickSettingsLockBusy || operation != null
-    DisposableEffect(controller, launcherNavigationBusy) {
-        controller.setLauncherNavigationBusy(launcherNavigationBusy)
+    val launcherNavigationBusy = guideNavigationBusy || viewing != null
+    DisposableEffect(controller, launcherNavigationBusy, guideNavigationBusy) {
+        controller.setVaultNavigationBusy(launcherNavigationBusy, guideNavigationBusy)
         onDispose { controller.setLauncherNavigationBusy(false) }
     }
     LaunchedEffect(launcherRequest?.token, lifecycleState) {
@@ -777,7 +791,7 @@ private fun VaultRoute(controller: ChurController) {
                 privateNoteCreateRequest = request.token
                 showingPrivateNotes = true
             }
-            LauncherAction.PUBLIC_NOTES, LauncherAction.PUBLIC_CALCULATOR, LauncherAction.PUBLIC_CAMERA -> Unit
+            LauncherAction.PUBLIC_NOTES, LauncherAction.PUBLIC_CALCULATOR, LauncherAction.PUBLIC_CAMERA, LauncherAction.PUBLIC_PET -> Unit
             LauncherAction.LOCK_AND_HIDE -> Unit // Handled synchronously by the controller.
         }
     }
@@ -1356,7 +1370,8 @@ private fun VaultRoute(controller: ChurController) {
                 systemSecurity = systemSecurityLine(patchLevels, publishedCheck),
             ),
             actions = VaultActions(
-                publicSettingsContent = { dev.po4yka.chur.app.publicshell.DiscreetSettings(controller) },                onThumbnailsConcealedChange = { thumbnailsConcealed = it },
+                publicSettingsContent = { dev.po4yka.chur.app.publicshell.DiscreetSettings(controller) },
+                onThumbnailsConcealedChange = { thumbnailsConcealed = it },
                 onDestination = {
                     terms = ""
                     openAlbum = null

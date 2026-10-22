@@ -32,6 +32,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import dev.po4yka.chur.app.onboarding.guideTarget
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -218,7 +219,7 @@ fun CreateVaultScreen(
                 Button(
                     onClick = { onCreate(password, offerRecovery) },
                     enabled = !busy && matching,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().guideTarget("create", !busy && matching),
                 ) {
                     Text(if (busy) "Creating" else "Create vault")
                 }
@@ -286,7 +287,7 @@ fun RecoveryPhraseScreen(
                     Text(
                         "Your recovery phrase",
                         style = MaterialTheme.typography.headlineSmall,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).guideTarget("recovery"),
                     )
                     LockControl(onLock = onLock, onPanic = onPanic)
                 }
