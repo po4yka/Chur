@@ -6,6 +6,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.TrackGroup
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlaybackException
 import dev.po4yka.chur.core.model.ChurStatus
 import dev.po4yka.chur.ffi.ChurFailure
 import kotlin.test.Test
@@ -39,6 +40,18 @@ class PlaybackDiagnosticsHostTest {
     }
 
     @Test
+    fun a_decoder_failure_on_an_exceeds_capability_track_is_an_unsupported_format() {
+        val hevc = Format.Builder().setSampleMimeType("video/hevc").setCodecs("hvc1.2.4.L120.B0").build()
+        val exceeded = renderer(hevc, C.FORMAT_EXCEEDS_CAPABILITIES, PlaybackException.ERROR_CODE_DECODING_FAILED)
+        val diagnostic = androidPlaybackDiagnostic(exceeded)!!
+        assertEquals(PlaybackProblem.UNSUPPORTED_VIDEO, diagnostic.problem)
+        assertEquals(PlaybackVideoFormat.HEVC_MAIN10, diagnostic.video?.format)
+        // A failure on a handled format can be a reclaimed or busy decoder.
+        assertEquals(PlaybackProblem.UNAVAILABLE, androidPlaybackDiagnostic(
+            renderer(hevc, C.FORMAT_HANDLED, PlaybackException.ERROR_CODE_DECODING_FAILED))?.problem)
+    }
+
+    @Test
     fun authenticated_reader_integrity_and_availability_take_priority_over_media_errors() {
         val tracks = tracks(C.FORMAT_UNSUPPORTED_SUBTYPE, C.FORMAT_UNSUPPORTED_TYPE)
         val integrity = PlaybackException("secret", IllegalStateException("secret", ChurFailure(ChurStatus.OBJECT_CORRUPT, "secret")),
@@ -50,6 +63,9 @@ class PlaybackDiagnosticsHostTest {
     }
 
     private fun error(code: Int) = PlaybackException("/private/secret.mp4", null, code)
+
+    private fun renderer(format: Format, support: Int, code: Int) = ExoPlaybackException.createForRenderer(
+        IllegalStateException("secret"), "secret", 0, format, support, false, code)
 
     private fun tracks(video: Int, audio: Int) = Tracks(listOf(
         group(Format.Builder().setSampleMimeType("video/hevc").setCodecs("hvc1.2.4.L120.B0").build(), video),
