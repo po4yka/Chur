@@ -67,7 +67,7 @@ const PASSWORD_DERIVATIONS: usize = 2;
 /// specification fixes.
 ///
 /// Dropping it without [`VaultCreation::activate`] leaves the temporary
-/// descriptor and the vault directory, which [`abandon`] removes, and which
+/// descriptor and the vault directory, which [`VaultCreation::abandon`] removes, and which
 /// [`VaultRoot::sweep_temporary`] and [`sweep_orphaned_directories`] remove at
 /// the next start. Nothing openable exists in the meantime, because §11
 /// enumerates only installed `.vd` entries.
@@ -502,7 +502,7 @@ fn named_directories(root_dir: &VaultRoot) -> Option<Vec<std::path::PathBuf>> {
 
 /// One password unlock attempt over the whole registry, `KEY_SLOTS.md` §8.
 ///
-/// The attempt runs exactly [`PASSWORD_DERIVATIONS`] Argon2id derivations
+/// The attempt runs exactly `PASSWORD_DERIVATIONS` Argon2id derivations
 /// whatever the device holds. Argon2 output is salt-bound and every slot has
 /// its own random salt, so one derivation can never be tried against a second
 /// slot; a constant candidate count, not a reused derivation, is what removes
@@ -623,7 +623,7 @@ pub fn unlock_with_apple_keychain(
 ///
 /// There is no slot body to open here: the Keystore already performed the
 /// unwrap, so what arrives is the root itself. The descriptor authentication
-/// inside [`finish_unlock`] is the check that it is the right root, which is
+/// inside `finish_unlock` is the check that it is the right root, which is
 /// the same check every other family passes through, so a wrong or substituted
 /// value fails as `AUTHENTICATION_FAILED` and not as corruption.
 ///
@@ -1323,7 +1323,7 @@ impl Session {
     ///
     /// # Errors
     ///
-    /// Returns [`ChurStatus::InvalidState`] when no enrollment is open, which
+    /// Returns [`ChurStatus::Conflict`] when no enrollment is open, which
     /// is what a second commit or a commit without a begin is.
     pub fn finish_android_keystore_slot(
         &mut self,

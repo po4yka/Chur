@@ -124,7 +124,7 @@ impl<F: FnMut(&[u8], bool) -> Result<()>> ExportWriter<F> {
     ///
     /// # Errors
     ///
-    /// Returns [`ChurStatus::InvalidInput`] for a table count outside its
+    /// Returns [`ChurStatus::InvalidInput`](chur_core::ChurStatus::InvalidInput) for a table count outside its
     /// bound.
     pub fn new(sink: F, header: &ExportHeader) -> Result<Self> {
         ensure!(
@@ -147,7 +147,7 @@ impl<F: FnMut(&[u8], bool) -> Result<()>> ExportWriter<F> {
     ///
     /// # Errors
     ///
-    /// Returns [`ChurStatus::InvalidInput`] for a name [`name_valid`] refuses
+    /// Returns [`ChurStatus::InvalidInput`](chur_core::ChurStatus::InvalidInput) for a name [`name_valid`] refuses
     /// or a column count outside its bound.
     pub fn table(&mut self, table: &TableHeader) -> Result<()> {
         let count = u16::try_from(table.columns.len()).unwrap_or(u16::MAX);
@@ -187,7 +187,7 @@ impl<F: FnMut(&[u8], bool) -> Result<()>> ExportWriter<F> {
     ///
     /// # Errors
     ///
-    /// Returns [`ChurStatus::InvalidInput`] for bytes that are not strict UTF-8
+    /// Returns [`ChurStatus::InvalidInput`](chur_core::ChurStatus::InvalidInput) for bytes that are not strict UTF-8
     /// or that exceed the value bound.
     pub fn text(&mut self, value: &[u8]) -> Result<()> {
         ensure!(
@@ -203,7 +203,7 @@ impl<F: FnMut(&[u8], bool) -> Result<()>> ExportWriter<F> {
     ///
     /// # Errors
     ///
-    /// Returns [`ChurStatus::InvalidInput`] above the value bound.
+    /// Returns [`ChurStatus::InvalidInput`](chur_core::ChurStatus::InvalidInput) above the value bound.
     pub fn blob(&mut self, value: &[u8]) -> Result<()> {
         self.push(&[VALUE_BLOB])?;
         self.variable(value)
@@ -290,8 +290,8 @@ impl<S: ChunkSource> ExportReader<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`ChurStatus::UnsupportedVersion`] for an unknown
-    /// `export_version`, and [`ChurStatus::VaultCorrupt`] for a short stream or
+    /// Returns [`ChurStatus::UnsupportedVersion`](chur_core::ChurStatus::UnsupportedVersion) for an unknown
+    /// `export_version`, and [`ChurStatus::VaultCorrupt`](chur_core::ChurStatus::VaultCorrupt) for a short stream or
     /// a table count outside its bound.
     pub fn new(source: S) -> Result<(Self, ExportHeader)> {
         let mut reader = Self {
@@ -323,7 +323,7 @@ impl<S: ChunkSource> ExportReader<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`ChurStatus::VaultCorrupt`] for a short stream, a name
+    /// Returns [`ChurStatus::VaultCorrupt`](chur_core::ChurStatus::VaultCorrupt) for a short stream, a name
     /// [`name_valid`] refuses, or a column count outside its bound.
     pub fn table(&mut self) -> Result<TableHeader> {
         let name = self.name()?;
@@ -349,7 +349,7 @@ impl<S: ChunkSource> ExportReader<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`ChurStatus::VaultCorrupt`] for a short stream, an unallocated
+    /// Returns [`ChurStatus::VaultCorrupt`](chur_core::ChurStatus::VaultCorrupt) for a short stream, an unallocated
     /// `value_type`, a value above its bound, or text that is not UTF-8.
     pub fn value(&mut self) -> Result<Value> {
         let [value_type] = self.fixed::<1>()?;
@@ -380,7 +380,7 @@ impl<S: ChunkSource> ExportReader<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`ChurStatus::VaultCorrupt`] when bytes or chunks follow.
+    /// Returns [`ChurStatus::VaultCorrupt`](chur_core::ChurStatus::VaultCorrupt) when bytes or chunks follow.
     pub fn finish(mut self) -> Result<()> {
         ensure!(
             self.position == self.buffer.len(),

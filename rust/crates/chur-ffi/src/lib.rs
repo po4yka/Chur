@@ -6,7 +6,7 @@
 //! authority for the C side, and this crate is the authority for the Rust side.
 //!
 //! Every export contains panics. §11 of that contract is unconditional, and
-//! [`panic::guard`] is how it is met: a caught panic never crosses the boundary
+//! `panic::guard` is how it is met: a caught panic never crosses the boundary
 //! and its payload is dropped inside. A handshake export has no status channel,
 //! so it returns a value the host refuses instead, per ADR-0037.
 //!

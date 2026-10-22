@@ -32,8 +32,8 @@ impl Waveform {
     ///
     /// # Errors
     ///
-    /// Returns [`ChurStatus::InvalidInput`] for an empty envelope,
-    /// [`ChurStatus::ResourceLimitExceeded`] above the §12 bucket bound or the
+    /// Returns [`ChurStatus::InvalidInput`](chur_core::ChurStatus::InvalidInput) for an empty envelope,
+    /// [`ChurStatus::ResourceLimitExceeded`](chur_core::ChurStatus::ResourceLimitExceeded) above the §12 bucket bound or the
     /// four-hour duration bound.
     pub fn new(duration_ms: u32, peaks: Vec<u8>) -> Result<Self> {
         ensure!(
@@ -91,9 +91,9 @@ impl Waveform {
     ///
     /// # Errors
     ///
-    /// Returns [`ChurStatus::NonCanonicalEncoding`] for a wrong fixed field or
+    /// Returns [`ChurStatus::NonCanonicalEncoding`](chur_core::ChurStatus::NonCanonicalEncoding) for a wrong fixed field or
     /// a length that contradicts the count,
-    /// [`ChurStatus::UnsupportedVersion`] for another `record_version`, and the
+    /// [`ChurStatus::UnsupportedVersion`](chur_core::ChurStatus::UnsupportedVersion) for another `record_version`, and the
     /// bounds errors of [`Waveform::new`].
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         ensure!(

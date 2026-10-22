@@ -944,13 +944,13 @@ impl OperationLog {
     /// The durable layer takes an accepted operation in before its catalog
     /// transaction, so a gate that refuses the record and a transaction that
     /// fails both have to give the log back the state the operation found.
-    /// The inverse is exact because [`Self::commit_inner`] only appends: the
+    /// The inverse is exact because `Self::commit_inner` only appends: the
     /// accepted record and the operation identifier are removed by key, and
     /// the head returns to the predecessor the operation itself chains to, or
     /// disappears when the operation was the device's first. The contract is
     /// that the last commit for this exact operation is the one being undone,
     /// which the debug assertion states; anything else is a caller bug.
-    /// A [`Self::note_revoked_link`] learning is a received-record cache and
+    /// A `Self::note_revoked_link` learning is a received-record cache and
     /// not accepted state, so it survives the undo.
     pub fn undo_accept(&mut self, operation: &Operation) {
         let device_id = *operation.device_id();

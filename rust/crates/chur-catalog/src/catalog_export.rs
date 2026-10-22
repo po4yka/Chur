@@ -120,7 +120,7 @@ fn tables(connection: &Connection) -> Result<Vec<Table>> {
 /// # Errors
 ///
 /// Returns [`ChurStatus::Cancelled`](chur_core::ChurStatus::Cancelled) when
-/// `cancelled` asks it to stop, [`ChurStatus::CatalogCorrupt`] for a value the
+/// `cancelled` asks it to stop, [`ChurStatus::CatalogCorrupt`](chur_core::ChurStatus::CatalogCorrupt) for a value the
 /// export cannot represent, and the errors of the sink.
 pub fn export(
     db: &CatalogDb,

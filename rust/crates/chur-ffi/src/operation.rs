@@ -77,7 +77,7 @@ pub struct Progress {
     /// The terminal status as its ABI value, meaningful only once `terminal`
     /// is set.
     ///
-    /// It is the `int32_t` rather than a [`ChurStatus`] because success is `0`
+    /// It is the `int32_t` rather than a [`ChurStatus`](chur_core::ChurStatus) because success is `0`
     /// and `0` is not a member of that enum: `docs/ERROR_MODEL.md` makes
     /// success the absence of an error code, and folding it into the enum turns
     /// every completed operation into `INTERNAL_FAILURE`.

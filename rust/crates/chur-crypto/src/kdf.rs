@@ -27,7 +27,7 @@ const EXTRACT_SALT: [u8; 32] = [0u8; 32];
 
 /// The element list a label's context carries.
 ///
-/// Every label maps to exactly one shape, and [`derive`] refuses a context of
+/// Every label maps to exactly one shape, and [`derive()`] refuses a context of
 /// another shape, so a call cannot pass a collection context to a root label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContextShape {
@@ -357,7 +357,7 @@ pub fn derive(input_key: &[u8], label: Label, context: &Context) -> Result<Key> 
 ///
 /// # Errors
 ///
-/// As [`derive`].
+/// As [`derive()`].
 pub fn derive_from(parent: &Key, label: Label, context: &Context) -> Result<Key> {
     derive(parent.expose(), label, context)
 }

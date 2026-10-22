@@ -3,7 +3,7 @@
 //! The surface is frozen: adding an export raises the minor ABI version, and
 //! changing or removing one raises the major version.
 //!
-//! Every function here wraps its whole body in [`crate::panic::guard_status`],
+//! Every function here wraps its whole body in `crate::panic::guard_status`,
 //! which §11 requires unconditionally, and converts a caught panic into
 //! `INTERNAL_FAILURE`. Every pointer argument is validated for null before it
 //! is read, every length is bounded before it is allocated against, and no
@@ -178,7 +178,7 @@ pub(crate) unsafe fn borrow_bytes<'a>(pointer: *const u8, length: u32) -> Result
 ///
 /// # Safety
 ///
-/// As [`borrow`], and the range must be writable and not aliased.
+/// As [`borrow_bytes`], and the range must be writable and not aliased.
 #[expect(unsafe_code, reason = "the caller's pointer contract is stated above")]
 pub(crate) unsafe fn borrow_bytes_mut<'a>(
     pointer: *mut u8,
