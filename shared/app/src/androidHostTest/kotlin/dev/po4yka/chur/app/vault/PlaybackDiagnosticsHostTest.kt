@@ -52,6 +52,23 @@ class PlaybackDiagnosticsHostTest {
     }
 
     @Test
+    fun an_unexpected_failure_while_an_exceeds_capability_track_plays_is_an_unsupported_format() {
+        // API 35 can release the failed codec during surface setup. The error then has no renderer format.
+        val released = ExoPlaybackException.createForUnexpected(
+            IllegalStateException("secret"), PlaybackException.ERROR_CODE_FAILED_RUNTIME_CHECK)
+        val exceeded = Tracks(listOf(
+            Tracks.Group(TrackGroup(Format.Builder().setSampleMimeType("video/hevc").setCodecs("hvc1.2.4.L120.B0").build()),
+                false, intArrayOf(C.FORMAT_EXCEEDS_CAPABILITIES), booleanArrayOf(true)),
+            group(Format.Builder().setSampleMimeType("audio/mp4a-latm").build(), C.FORMAT_HANDLED),
+        ))
+        val diagnostic = androidPlaybackDiagnostic(released, exceeded)!!
+        assertEquals(PlaybackProblem.UNSUPPORTED_VIDEO, diagnostic.problem)
+        assertEquals(PlaybackVideoFormat.HEVC_MAIN10, diagnostic.video?.format)
+        assertEquals(PlaybackProblem.UNAVAILABLE,
+            androidPlaybackDiagnostic(released, tracks(C.FORMAT_HANDLED, C.FORMAT_HANDLED))?.problem)
+    }
+
+    @Test
     fun authenticated_reader_integrity_and_availability_take_priority_over_media_errors() {
         val tracks = tracks(C.FORMAT_UNSUPPORTED_SUBTYPE, C.FORMAT_UNSUPPORTED_TYPE)
         val integrity = PlaybackException("secret", IllegalStateException("secret", ChurFailure(ChurStatus.OBJECT_CORRUPT, "secret")),

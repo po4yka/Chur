@@ -42,6 +42,9 @@ internal fun androidPlaybackDiagnostic(error: PlaybackException?, tracks: Tracks
             return unsupportedDiagnostic(renderer?.rendererFormat) ?: unsupportedTrackDiagnostic(tracks)
                 ?: PlaybackDiagnostic(PlaybackProblem.UNSUPPORTED)
         }
+        // A track played beyond the advertised capabilities can fail without a renderer
+        // format, for example when API 35 releases the failed codec during surface setup.
+        exceededTrackDiagnostic(tracks)?.let { return it }
         // A decoder can fail because resources were reclaimed or are temporarily busy.
         // It does not prove invalid input, an unsupported profile, or failed authentication.
         return PlaybackDiagnostic(PlaybackProblem.UNAVAILABLE)
@@ -55,6 +58,22 @@ private fun unsupportedTrackDiagnostic(tracks: Tracks): PlaybackDiagnostic? {
         if (tracks.containsType(type) && !tracks.isTypeSupported(type, /* allowExceedsCapabilities = */ true)) {
             val format = tracks.groups.firstOrNull { it.type == type && it.length > 0 }?.getTrackFormat(0)
             return unsupportedDiagnostic(format) ?: PlaybackDiagnostic(
+                if (type == C.TRACK_TYPE_VIDEO) PlaybackProblem.UNSUPPORTED_VIDEO else PlaybackProblem.UNSUPPORTED_AUDIO,
+            )
+        }
+    }
+    return null
+}
+
+@androidx.annotation.OptIn(UnstableApi::class)
+private fun exceededTrackDiagnostic(tracks: Tracks): PlaybackDiagnostic? {
+    for (type in listOf(C.TRACK_TYPE_VIDEO, C.TRACK_TYPE_AUDIO)) {
+        for (group in tracks.groups) {
+            if (group.type != type) continue
+            val exceeded = (0 until group.length).firstOrNull {
+                group.isTrackSelected(it) && group.getTrackSupport(it) == C.FORMAT_EXCEEDS_CAPABILITIES
+            } ?: continue
+            return unsupportedDiagnostic(group.getTrackFormat(exceeded)) ?: PlaybackDiagnostic(
                 if (type == C.TRACK_TYPE_VIDEO) PlaybackProblem.UNSUPPORTED_VIDEO else PlaybackProblem.UNSUPPORTED_AUDIO,
             )
         }
