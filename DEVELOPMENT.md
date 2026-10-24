@@ -60,7 +60,20 @@ Use `./gradlew --version`, `rustup show` from `rust/`, and `xcodebuild -version`
 
 The `:shared:app` and `:shared:feature-import` iOS tests use Apple Vision, ImageIO, and the system type registry. They need a fully booted simulator. A standalone simulator process can return no text or fail to resolve a registered media type without an API error. CI creates, boots, and removes its own compatible iPhone simulator. For a local run, boot a simulator that you own and set `CHUR_IOS_TEST_DEVICE` to its UDID. The build does not change the state of existing devices. Without this variable, Gradle uses its normal Xcode-selected device, which must already be booted.
 
-The workflow named in [`docs/assurance/RELEASE_GATES.md`](docs/assurance/RELEASE_GATES.md#enforcement) is the CI source of truth. The following are local equivalents for its main checks; release signing and job-specific setup remain in the workflow:
+The workflow named in [`docs/assurance/RELEASE_GATES.md`](docs/assurance/RELEASE_GATES.md#enforcement) is the CI source of truth, and it runs every check below on each pull request. Locally, after the last edit, run only the checks for the paths you changed:
+
+| Changed paths | Local check |
+|---|---|
+| `rust/crates/<crate>` | `cargo test --locked -p <crate>` and `cargo clippy --locked -p <crate> --all-targets -- -D warnings`; use `--workspace` when a `pub` item that other crates use changed |
+| `chur-ffi` exports, `include/chur.h`, or `chur-jni` | also the C ABI harness below and `scripts/build-native-targets.sh android` or `apple` |
+| `test-vectors/` or the format code | `vectors verify` |
+| `shared/<module>` | `./gradlew :shared:<module>:testAndroidHostTest`; add `iosSimulatorArm64Test` for `iosMain` code, and `jvmTest` exists only in `:shared:core-model` |
+| `apps/androidApp` | `./gradlew :apps:androidApp:assembleDebug :apps:androidApp:lintDebug`; `check-backup-rules.py` for `res/xml` or the manifest |
+| `apps/iosApp` | the `xcodebuild` command of the `kotlin-native` job |
+| Gradle or Cargo dependencies | the lockfile step of the affected CI job and `cargo deny check` |
+| `.agents/`, `skills-lock.json`, `hooks-lock.json` | `check-vendored-skills.py` |
+
+The full list, which CI runs on every pull request; release signing and job-specific setup remain in the workflow:
 
 ```text
 ./gradlew jvmTest

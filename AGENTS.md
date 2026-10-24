@@ -70,7 +70,8 @@ DietrichGebert: see .agents/NOTICE.md. Update: npx skills add DietrichGebert/pon
 
 # Chur checks
 
-- Iterate with the narrowest check that covers the edit: `cargo test --locked -p <crate> <filter>`, or one Gradle module task with `--tests`. Run each workspace-wide gate (`cargo clippy --workspace`, `cargo test --workspace`, `./gradlew jvmTest testAndroidHostTest`, the Android assemble and lint) once, after the last edit, and only for the code the change touches. `DEVELOPMENT.md` "Build commands" lists them; `.github/workflows/rust.yml` is the source of truth.
+- Batch the related edits, then validate. Iterate with the narrowest check that covers the edit: `cargo test --locked -p <crate> <filter>`, or one Gradle module task with `--tests`. Choose the final checks from the path table in `DEVELOPMENT.md` "Build commands"; a workspace-wide gate runs once, after the last edit, only when the change reaches across modules. CI runs the full set on every pull request, so do not repeat it locally.
+- A passing check stays valid until its inputs change: an edit under the paths it covers, a checkout, or a dependency or toolchain change. Do not re-run it to reconfirm; re-run a suspected flaky test only with the reason stated. No `clean`, `cargo clean`, or `--rerun-tasks` unless a stale output is the observed fault.
 - Ponytail's one small test for new non-trivial logic is part of the change, not the extra harness Benjamin-Plus forbids.
 
 # Chur tests
