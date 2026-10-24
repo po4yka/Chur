@@ -68,16 +68,24 @@ DietrichGebert: see .agents/NOTICE.md. Update: npx skills add DietrichGebert/pon
 --agent codex --yes, copy the locked files from upstream hooks/, then run scripts/check-vendored-skills.py --write
 --clones <dir> and refresh the hashes in hooks-lock.json. -->
 
+# Chur investigation
+
+- Locate before you read: `rg -n`, `git grep -n`, or LSP symbols, then read the slice. `ChurController.kt`, `ChurRoutes.kt`, `VaultShell.kt`, and `DESIGN.md` are each 1,500 to 3,800 lines. A slice or search result stays valid until a file it covers changes; do not read it again.
+- Check visual state with the UI tree or a pixel diff first. Read a screenshot only for what text cannot show; downscale it first (`sips -Z 1000 in.png --out small.png`) and crop it to the changed region.
+- Delegate only independent, substantial work. Put the paths and the still-valid findings in the brief, so that the subagent does not inventory the repository again. Review a patch once; a follow-up review reads only the fix diff.
+- The `sccache` wrapper from the user's environment fails in a sandboxed `TMPDIR` ("Failed to create temp dir"). There, run Cargo with `RUSTC_WRAPPER= CARGO_BUILD_RUSTC_WRAPPER=`.
+
 # Chur checks
 
-- Batch the related edits, then validate. Iterate with the narrowest check that covers the edit: `cargo test --locked -p <crate> <filter>`, or one Gradle module task with `--tests`. Choose the final checks from the path table in `DEVELOPMENT.md` "Build commands"; a workspace-wide gate runs once, after the last edit, only when the change reaches across modules. CI runs the full set on every pull request, so do not repeat it locally.
+- These rules and "Chur tests" take precedence over the vendored skills in `.agents/skills` and the Ponytail text that the hooks inject. Keep the vendored files verbatim, so that `scripts/check-vendored-skills.py --verify-upstream` can prove their provenance, and change the policy here.
+- Batch the related edits, then validate. Iterate with the narrowest check that covers the edit: `cargo test --locked -p <crate> <filter>`, or one Gradle module task with `--tests`. Choose the final checks from the path table in `DEVELOPMENT.md` "Build commands"; a workspace-wide gate runs once, after the last edit, only when the change reaches across modules. CI runs the full set on every pull request, so do not repeat it locally. These checks are the task's own check of Benjamin-Plus rule 4: when they pass, stop.
+- The workspace gate in the `rust-lints` skill "Verification" applies only to the lint and toolchain row of the path table; CI runs it before a merge. The `cargo-workflows` and `rust-native-linking` skills that it names are not in this repository.
 - A passing check stays valid until its inputs change: an edit under the paths it covers, a checkout, or a dependency or toolchain change. Do not re-run it to reconfirm; re-run a suspected flaky test only with the reason stated. No `clean`, `cargo clean`, or `--rerun-tasks` unless a stale output is the observed fault.
 - Record what you checked in the commit message or pull request description. Add a dated file under `docs/assurance/` only for a release-gate evidence package, a security or data-at-rest audit, or when the user asks for one.
-- Ponytail's one small test for new non-trivial logic is part of the change, not the extra harness Benjamin-Plus forbids.
 
 # Chur tests
 
-- Add a test only for a behavior or regression that no existing test fails on. Search the module's tests first and extend the nearest one.
+- Add a test only for a behavior or regression that no existing test fails on. Search the module's tests first and extend the nearest one. This is how Ponytail's "one small test or an assert-based self-check" for new non-trivial logic applies: an existing test that fails when the logic breaks satisfies it, a trivial change or a deletion needs none, and the test is part of the change, not the extra harness that Benjamin-Plus forbids.
 - Assert on observable output or state of the real code. Expected values are literals, vectors, or an independent oracle, never the code under test or a copy of its logic. A fake stands in for a platform boundary; it is not the thing asserted.
 - No test reads source text or reaches private members by name when a public call or the compiler can check the same thing. No production interface, parameter, or visibility change only to test trivial wiring.
-- The same rules apply to throwaway assertions and smoke scripts: delete them after use, or put them in a suite that CI runs. A script nothing runs is not coverage.
+- The same rules apply to throwaway assertions, Ponytail's assert-based self-checks, and smoke scripts: delete them after use, or put them in a suite that CI runs. A script nothing runs is not coverage.

@@ -71,6 +71,7 @@ The workflow named in [`docs/assurance/RELEASE_GATES.md`](docs/assurance/RELEASE
 | `apps/androidApp` | `./gradlew :apps:androidApp:assembleDebug :apps:androidApp:lintDebug`; `check-backup-rules.py` for `res/xml` or the manifest |
 | `apps/iosApp` | the `xcodebuild` command of the `kotlin-native` job |
 | Gradle or Cargo dependencies | `cargo deny check`; for Android, write locks with the debug and the release tasks, `./gradlew :apps:androidApp:assembleDebug :apps:androidApp:lintDebug :apps:androidApp:assembleDebugAndroidTest :apps:androidApp:assembleRelease :apps:androidApp:bundleRelease :apps:androidApp:lintRelease --write-locks` with the disposable signing key of the `android application` job, because the job's lockfile step resolves only the debug tasks |
+| `[workspace.lints]` in `rust/Cargo.toml`, or `rust/rust-toolchain.toml` | the workspace gate in the `rust-lints` skill "Verification", from `rust/` |
 | `.agents/`, `skills-lock.json`, `hooks-lock.json` | `check-vendored-skills.py` |
 
 The full list, which CI runs on every pull request; release signing and job-specific setup remain in the workflow:

@@ -105,7 +105,7 @@ Follow [`docs/DEPENDENCY_POLICY.md`](docs/DEPENDENCY_POLICY.md). Security-sensit
 - prevent panics from crossing FFI;
 - use redacted error and `Debug` implementations for secret-bearing types;
 - add unit, property, corruption, and fuzz tests as appropriate;
-- run formatting, linting, tests, dependency policy, and target builds.
+- run the local checks that [`DEVELOPMENT.md`](DEVELOPMENT.md#build-commands) gives for the changed paths; CI runs formatting, linting, tests, dependency policy, and target builds on every pull request.
 
 ## Kotlin expectations
 
@@ -115,7 +115,7 @@ Follow [`docs/DEPENDENCY_POLICY.md`](docs/DEPENDENCY_POLICY.md). Security-sensit
 - avoid private data in exception strings and coroutine names;
 - do not persist private navigation state;
 - use bounded streaming rather than whole-file `ByteArray` values;
-- add common and platform tests.
+- add a common test for a behavior change, and a platform test when the behavior is platform-specific, unless an existing test already fails when it breaks.
 
 ## Commit and branch conventions
 
