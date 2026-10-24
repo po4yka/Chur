@@ -18,7 +18,7 @@
 //! to the writer, which is why this module hands back the offset rather than
 //! writing anything itself.
 
-use chur_core::{Id, Result, bail, ensure, limits::catalog as limits, limits::container};
+use chur_core::{Id, Result, ensure, limits::catalog as limits, limits::container};
 use chur_format::constants::StreamKind;
 use rusqlite::params;
 
@@ -529,14 +529,6 @@ pub enum Resume {
 /// A journal record whose temporary container is absent is dead, §14.4.
 pub fn is_dead_without_container(record: &ImportTransaction, container_present: bool) -> bool {
     !container_present || record.stage == Stage::Dead
-}
-
-/// Rejects a stage value the catalog does not allocate.
-pub fn stage_of(value: u8) -> Result<Stage> {
-    let Some(stage) = Stage::from_value(value) else {
-        bail!(CatalogCorrupt, "the journal stage is unallocated");
-    };
-    Ok(stage)
 }
 
 #[cfg(test)]

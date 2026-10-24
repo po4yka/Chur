@@ -1845,7 +1845,6 @@ class ChurController(
             throw ChurFailure(ChurStatus.INVALID_INPUT, "invalid hexadecimal device request")
         }
     }
-    fun unbindSync() { sync?.bind(null) }
 
     /**
      * Stages a recovery slot and shows the phrase once, after the device

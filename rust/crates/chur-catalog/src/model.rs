@@ -307,16 +307,6 @@ impl MetadataRevision {
         }
         Ok(())
     }
-
-    /// The three columns §16.4 tokenizes, in the order the index declares them.
-    #[must_use]
-    pub fn search_columns<'a>(&'a self, tag_names: &'a str) -> [&'a str; 3] {
-        [
-            self.original_filename.as_deref().unwrap_or(""),
-            self.caption.as_deref().unwrap_or(""),
-            tag_names,
-        ]
-    }
 }
 
 /// Whether a string is a lowercase IANA media type of the shape §6.1 accepts.
@@ -393,7 +383,7 @@ pub struct Album {
 impl Album {
     /// Rejects an album name outside the catalog bound.
     pub fn check(&self) -> Result<()> {
-        check_label(&self.name, limits::ALBUM_NAME_MAX, "the album name")
+        check_label(&self.name, limits::ALBUM_NAME_MAX)
     }
 }
 
@@ -411,7 +401,7 @@ pub struct Tag {
 impl Tag {
     /// Rejects a tag name outside the catalog bound.
     pub fn check(&self) -> Result<()> {
-        check_label(&self.name, limits::TAG_NAME_MAX, "the tag name")
+        check_label(&self.name, limits::TAG_NAME_MAX)
     }
 }
 
@@ -419,12 +409,11 @@ impl Tag {
 ///
 /// A control byte is refused because the label reaches a platform text view and
 /// an FTS5 tokenizer, and neither has a reason to receive one.
-fn check_label(value: &str, maximum: usize, subject: &'static str) -> Result<()> {
+fn check_label(value: &str, maximum: usize) -> Result<()> {
     if value.is_empty() {
         bail!(InvalidInput, "the label is empty");
     }
     if value.len() > maximum {
-        let _ = subject;
         bail!(ResourceLimitExceeded, "the label exceeds its catalog bound");
     }
     if value.chars().any(char::is_control) {

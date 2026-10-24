@@ -69,7 +69,7 @@ measured dock height; their controls publish target availability separately from
 Compose scenes. Target registrations have independent owners so an outgoing
 scene cannot remove the active scene's target.
 
-The old Notes overlay is unused. Public-shell presentation tests cover its
+The old Notes overlay is removed. Public-shell presentation tests cover its
 continued absence, the pet controls, real gestures, visible pixels, and the
 renderer lifecycle. Matching animation math does not establish native pixel
 parity or physical-device acceptance.

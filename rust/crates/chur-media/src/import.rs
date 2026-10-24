@@ -22,8 +22,8 @@ use chur_core::{
 use chur_crypto::{Key, Nonce, random};
 use chur_format::constants::{IntegritySummary, MediaClass, ObjectState, SUITE_V1, StreamKind};
 use chur_format::container::{
-    CanonicalManifest, ContainerVersion, ContainerWriter, Layout, MediaProperties, ReadAt,
-    StreamIdentity, StreamReader,
+    CanonicalManifest, ContainerVersion, ContainerWriter, MediaProperties, ReadAt, StreamIdentity,
+    StreamReader,
 };
 use zeroize::Zeroizing;
 
@@ -165,7 +165,6 @@ pub struct Import {
     writer: ContainerWriter<TemporaryContainer>,
     identity: StreamIdentity,
     container_path_id: Id,
-    temp_path_id: Id,
     chunk_size: u32,
     source: SourceCapability,
     media: CanonicalMedia,
@@ -324,7 +323,6 @@ pub fn begin(
         writer,
         identity,
         container_path_id,
-        temp_path_id,
         chunk_size,
         source,
         media,
@@ -551,8 +549,6 @@ impl Import {
         );
         let final_commit = reader.read_final_commit()?;
         drop(reader);
-        // One identifier names the temporary and the committed container.
-        let _ = self.temp_path_id;
         Ok(SealedImport {
             transaction_id: self.transaction_id,
             object_id: self.object_id,
@@ -805,8 +801,7 @@ fn parse_path_id(name: &str) -> Option<Id> {
 /// v1 does not hold a source across a process death, so reconciliation kills
 /// every live transaction rather than resuming one; [`resume_offset`] is what a
 /// caller that still holds its source uses instead.
-pub fn reconcile(session: &mut Session, now_ms: u64) -> Result<usize> {
-    let _ = now_ms;
+pub fn reconcile(session: &mut Session) -> Result<usize> {
     let store_id = session.object_store_id();
     let root_dir = session.root_dir().clone();
     let mut killed = 0;
@@ -1051,9 +1046,4 @@ pub fn stream_into(
         },
         &|| progress.cancelled(),
     )
-}
-
-/// The layout of a committed container, for the reader and the integrity scan.
-pub fn layout_of(bytes: &[u8]) -> Result<Layout> {
-    Layout::parse(bytes)
 }

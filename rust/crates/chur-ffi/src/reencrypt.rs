@@ -651,7 +651,7 @@ mod tests {
     fn reopen(fixture: &mut Fixture) {
         fixture.session.get_mut().unwrap().lock().unwrap();
         let mut session = vault::unlock_with_password(&fixture.root, PASSWORD, NOW + 5).unwrap();
-        import::reconcile(&mut session, NOW + 5).unwrap();
+        import::reconcile(&mut session).unwrap();
         import::sweep_orphan_temporaries(&session).unwrap();
         crate::product::sweep_expired_trash(&mut session, NOW + 5).unwrap();
         fixture.session = Mutex::new(session);

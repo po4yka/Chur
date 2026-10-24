@@ -794,15 +794,6 @@ impl FinalCommitHeader {
     }
 }
 
-/// The ordered chunk commitment of §10, over exact wire bytes.
-///
-/// The `FinalCommitRecordV1` is never fed to this hasher. For a zero-chunk
-/// object the value is BLAKE3-256 of the domain tag alone.
-#[must_use]
-pub fn ordered_commitment_of(chunk_records: &[&[u8]]) -> Commitment {
-    commit::commit(tag::OBJECT_ORDERED_COMMITMENT, chunk_records)
-}
-
 // ---------------------------------------------------------------------------
 // Final commit
 // ---------------------------------------------------------------------------

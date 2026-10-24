@@ -423,6 +423,6 @@ fn locking_during_a_resource_never_activates_a_partial_live_photo() {
     drop(running);
     session.lock().unwrap();
     let mut reopened = vault::unlock_with_password(&root, PASSWORD, NOW + 1).unwrap();
-    assert_eq!(import::reconcile(&mut reopened, NOW + 1).unwrap(), 1);
+    assert_eq!(import::reconcile(&mut reopened).unwrap(), 1);
     assert_no_partial(&root, &reopened);
 }

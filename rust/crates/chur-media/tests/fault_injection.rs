@@ -209,7 +209,7 @@ fn an_interrupted_import_is_recoverable_and_exposes_no_partial_object() {
 
             let mut reopened = vault::unlock_with_password(&root, PASSWORD, NOW).expect("unlock");
             assert_eq!(
-                import::reconcile(&mut reopened, NOW).expect("reconcile"),
+                import::reconcile(&mut reopened).expect("reconcile"),
                 0,
                 "a committed import leaves nothing to reconcile"
             );
@@ -244,7 +244,7 @@ fn an_interrupted_import_is_recoverable_and_exposes_no_partial_object() {
         );
 
         assert_eq!(
-            import::reconcile(&mut reopened, NOW).expect("reconcile"),
+            import::reconcile(&mut reopened).expect("reconcile"),
             1,
             "the next unlock reclaims the import at {point:?}"
         );
@@ -258,7 +258,7 @@ fn an_interrupted_import_is_recoverable_and_exposes_no_partial_object() {
                 .is_empty()
         );
         assert_eq!(
-            import::reconcile(&mut reopened, NOW).expect("reconcile"),
+            import::reconcile(&mut reopened).expect("reconcile"),
             0,
             "reconciliation must be idempotent at {point:?}"
         );

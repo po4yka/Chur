@@ -416,7 +416,7 @@ pub unsafe extern "C" fn chur_vault_unlock(
         // reaches a vault whose journal still holds a dead transaction. The
         // other dead form of §14.4, a temporary container with no journal
         // record, is swept right after it.
-        if let Err(error) = import::reconcile(&mut session, now) {
+        if let Err(error) = import::reconcile(&mut session) {
             // The session is not a handle yet, so no `chur_vault_lock` can
             // reach it, and `Session` has no `Drop`. A plain drop closes the
             // catalog through `rusqlite` alone, which discards the outcome of

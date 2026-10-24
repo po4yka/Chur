@@ -87,7 +87,8 @@ pub(crate) fn project_collection_with_envelope(
             ],
             |row| row.get::<_, Vec<u8>>(0),
         )
-        .optional_row()?;
+        .optional()
+        .map_err(|error| map_sqlite(error, "a catalog row could not be read"))?;
     if let Some(existing) = existing {
         ensure!(
             existing == envelope,
@@ -208,25 +209,11 @@ pub fn default_collection(db: &CatalogDb) -> Result<Option<Id>> {
             ],
             |row| row.get(0),
         )
-        .optional_row()?;
+        .optional()
+        .map_err(|error| map_sqlite(error, "a catalog row could not be read"))?;
     bytes
         .map(|value| crate::row::id(&value, "the collection id is malformed"))
         .transpose()
-}
-
-/// Turns "no rows" into `None` rather than an error.
-trait OptionalRow<T> {
-    fn optional_row(self) -> Result<Option<T>>;
-}
-
-impl<T> OptionalRow<T> for rusqlite::Result<T> {
-    fn optional_row(self) -> Result<Option<T>> {
-        match self {
-            Ok(value) => Ok(Some(value)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(error) => Err(map_sqlite(error, "a catalog row could not be read")),
-        }
-    }
 }
 
 /// Reads one collection.
@@ -2293,22 +2280,6 @@ where
 fn byte(value: i64, context: &'static str) -> Result<u8> {
     u8::try_from(value)
         .map_err(|_| chur_core::Error::new(chur_core::ChurStatus::CatalogCorrupt, context))
-}
-
-/// Rejects an object identifier the catalog does not hold.
-pub fn require_object(db: &CatalogDb, object_id: &Id) -> Result<()> {
-    let present: i64 = db
-        .connection()
-        .query_row(
-            "SELECT count(*) FROM objects WHERE object_id = ?1",
-            [object_id.as_bytes().as_slice()],
-            |row| row.get(0),
-        )
-        .map_err(|error| map_sqlite(error, "the object could not be read"))?;
-    if present == 0 {
-        bail!(NotFound, "no object carries that id");
-    }
-    Ok(())
 }
 
 #[cfg(test)]

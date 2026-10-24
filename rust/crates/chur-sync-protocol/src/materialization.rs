@@ -493,12 +493,6 @@ impl MaterializedState {
         self.tag_names.get(tag_id)?.displayed().map(String::as_str)
     }
 
-    /// Whether an object has at least one live token for a tag.
-    #[must_use]
-    pub fn has_tag(&self, tag_id: &Id, object_id: &Id) -> bool {
-        self.object_tags.contains(&(*tag_id, *object_id))
-    }
-
     /// Immutable commit information, before local container verification.
     #[must_use]
     pub fn committed_object(&self, object_id: &Id) -> Option<&CommittedObject> {

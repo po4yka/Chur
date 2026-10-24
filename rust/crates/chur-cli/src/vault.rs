@@ -126,7 +126,7 @@ fn startup_work(session: &mut Session) -> Result<()> {
     // of a session, and `OBJECT_CONTAINER_V1.md` §14.4 reconciles the journal
     // and deletes temporary containers that no journal record names. They run
     // here rather than at each call site, so no unlock path can skip them.
-    let killed = import::reconcile(session, now_ms())?;
+    let killed = import::reconcile(session)?;
     let orphans = import::sweep_orphan_temporaries(session)?;
     // `PLAINTEXT_LIFECYCLE.md` §5, and the catalog snapshot of a killed backup.
     export::clear_scratch(session)?;

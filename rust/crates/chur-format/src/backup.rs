@@ -447,19 +447,6 @@ impl StreamInventoryEntry {
             ordered_chunk_commitment,
         })
     }
-
-    /// The total order of §7.1: object, then stream, then revision.
-    ///
-    /// The three keys are unique together, so the order is total and two
-    /// conforming writers backing up the same content emit the same sequence.
-    #[must_use]
-    pub fn sort_key(&self) -> ([u8; 16], [u8; 16], u32) {
-        (
-            *self.object_id.as_bytes(),
-            *self.stream_id.as_bytes(),
-            self.stream_revision,
-        )
-    }
 }
 
 /// One portable key slot, §7.1.

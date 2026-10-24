@@ -284,7 +284,7 @@ fn reconciliation_kills_an_import_a_crash_left_behind() {
         1
     );
 
-    assert_eq!(import::reconcile(&mut session, NOW).expect("reconcile"), 1);
+    assert_eq!(import::reconcile(&mut session).expect("reconcile"), 1);
     assert!(
         !temporary.exists(),
         "a dead container survived reconciliation"
@@ -327,7 +327,7 @@ fn reconciliation_removes_a_container_the_rename_committed_but_nothing_activated
     drop(running);
     assert!(committed.exists());
 
-    assert_eq!(import::reconcile(&mut session, NOW).expect("reconcile"), 1);
+    assert_eq!(import::reconcile(&mut session).expect("reconcile"), 1);
     assert!(
         !committed.exists(),
         "the committed container of an abandoned import survived reconciliation"
@@ -376,7 +376,7 @@ fn reconciliation_completes_a_record_the_activation_outlived_instead_of_destroyi
     };
     journal::open(session.catalog().unwrap(), &record).unwrap();
 
-    assert_eq!(import::reconcile(&mut session, NOW).expect("reconcile"), 0);
+    assert_eq!(import::reconcile(&mut session).expect("reconcile"), 0);
     assert!(
         committed.exists(),
         "reconciliation destroyed the container of an activated object"
@@ -578,7 +578,7 @@ fn a_failed_derived_catalog_write_is_reconciled_without_a_ciphertext_orphan() {
         NOW,
     );
     assert!(result.is_err(), "catalog fault must fire");
-    import::reconcile(&mut session, NOW).unwrap();
+    import::reconcile(&mut session).unwrap();
     let mut containers = 0;
     for shard in std::fs::read_dir(root.objects(&session.object_store_id())).unwrap() {
         containers += std::fs::read_dir(shard.unwrap().path()).unwrap().count();
