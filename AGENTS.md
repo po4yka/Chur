@@ -72,6 +72,7 @@ DietrichGebert: see .agents/NOTICE.md. Update: npx skills add DietrichGebert/pon
 
 - Batch the related edits, then validate. Iterate with the narrowest check that covers the edit: `cargo test --locked -p <crate> <filter>`, or one Gradle module task with `--tests`. Choose the final checks from the path table in `DEVELOPMENT.md` "Build commands"; a workspace-wide gate runs once, after the last edit, only when the change reaches across modules. CI runs the full set on every pull request, so do not repeat it locally.
 - A passing check stays valid until its inputs change: an edit under the paths it covers, a checkout, or a dependency or toolchain change. Do not re-run it to reconfirm; re-run a suspected flaky test only with the reason stated. No `clean`, `cargo clean`, or `--rerun-tasks` unless a stale output is the observed fault.
+- Record what you checked in the commit message or pull request description. Add a dated file under `docs/assurance/` only for a release-gate evidence package, a security or data-at-rest audit, or when the user asks for one.
 - Ponytail's one small test for new non-trivial logic is part of the change, not the extra harness Benjamin-Plus forbids.
 
 # Chur tests
