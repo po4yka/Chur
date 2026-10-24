@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "hooks": {
+    "ponytail": {
+      "source": "DietrichGebert/ponytail",
+      "sourcePath": "hooks",
+      "commit": "5117d0ef09e9fc040093d8d54182d8e28d3201b9",
+      "files": {
+        "ponytail-activate.js": "6e492e997aa3e01560046daaed288b1cf68c596cc2b227744ec8b9fbdb5a230a",
+        "ponytail-config.js": "ae81c3552064c9a9f0b9c0e8ec8a959af56f5599f0c899dd79659ea9a101dfc4",
+        "ponytail-instructions.js": "36521752b3444ef8daa823edaa996170e6af2cd45c82193644acb3a42f3395f4",
+        "ponytail-map.js": "c876b087accb6655d04f7f48bda85d8304941d0ac0fb78c0c164eb9ec7d35e69",
+        "ponytail-mode-tracker.js": "ab2a7d89a71fdbecd5ea4d12ffe980c2213b80fe112d623ca13ceac0258307e7",
+        "ponytail-runtime.js": "52d8e66d542d49217a9eb721942e7bd9f4ee46a56615fb3f53430276cfe3a592",
+        "ponytail-subagent.js": "8da045eb96b5b919655bf4c12abfc7e5163af29b62b97ccaf633b75099390315"
+      }
+    }
+  }
+}

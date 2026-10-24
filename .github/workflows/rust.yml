@@ -301,7 +301,14 @@ jobs:
       # Android host defect is more often a manifest or a resource than a type
       # error. The instrumented tests are assembled here and the notes/lock
       # and HEVC Main10 checks run that application on an owned emulator.
-      - run: ./gradlew --no-daemon :apps:androidApp:assembleDebug :apps:androidApp:lintDebug :apps:androidApp:assembleDebugAndroidTest
+      #
+      # The same run re-resolves with --write-locks: DEFAULT locking honors
+      # the committed lockfiles but does not fail on a drift, so the pin is
+      # enforced by the diff below. The assemble and lint tasks are what
+      # resolve the configurations a bare `dependencies` report never reaches.
+      - run: ./gradlew --no-daemon :apps:androidApp:assembleDebug :apps:androidApp:lintDebug :apps:androidApp:assembleDebugAndroidTest --write-locks
+      - name: the Gradle lockfiles pin the resolution
+        run: git diff --exit-code -- '**/gradle.lockfile'
       # ANDROID.md 13.4: the merged manifest is what the platform reads, so a
       # library or variant manifest must not replace either backup-rules file.
       - name: check the backup wiring of the merged manifest
@@ -322,15 +329,6 @@ jobs:
           name: notes-ui-${{ github.sha }}
           path: build/notes-ui-ci/
           if-no-files-found: error
-      # DEFAULT locking honors the committed lockfile but does not fail on a
-      # drift, so the pin is enforced here: a full re-resolution with
-      # --write-locks must reproduce the committed files byte for byte, and a
-      # diff is a red pull request. The assemble and lint runs above are what
-      # resolve the configurations a bare `dependencies` report never reaches.
-      - name: the Gradle lockfiles pin the resolution
-        run: |
-          ./gradlew --no-daemon :apps:androidApp:assembleDebug :apps:androidApp:lintDebug :apps:androidApp:assembleDebugAndroidTest --write-locks --quiet
-          git diff --exit-code -- '**/gradle.lockfile'
 
       - name: prepare Android release signing
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -440,13 +438,17 @@ jobs:
       # well. This is that run, as a real Kotlin/Native binary.
       # All modules share this one device. Keep native tests and compilation
       # from competing with real AVPlayer/Vision requests on the simulator.
-      - run: ./gradlew --no-daemon --no-parallel --max-workers=1 iosSimulatorArm64Test
-      - run: ./gradlew --no-daemon --no-parallel --max-workers=1 compileKotlinIosArm64
+      #
       # The Compose Multiplatform shell links as an iOS framework, statically
       # against `libchur_ffi.a`. The Xcode project that embeds it is the host
       # application's; linking here proves the framework and the static library
       # agree on every symbol cinterop generated a binding for.
-      - run: ./gradlew --no-daemon --no-parallel --max-workers=1 linkDebugFrameworkIosSimulatorArm64
+      #
+      # --write-locks enforces the same lockfile pin as the Android job, for
+      # the Kotlin/Native configurations that only a macOS job resolves.
+      - run: ./gradlew --no-daemon --no-parallel --max-workers=1 iosSimulatorArm64Test compileKotlinIosArm64 linkDebugFrameworkIosSimulatorArm64 --write-locks
+      - name: the Gradle lockfiles pin the resolution
+        run: git diff --exit-code -- '**/gradle.lockfile'
       # The checksum-pinned Filament iOS SDK is large; restore it instead of
       # downloading it on every run. The key follows the version and SHA-256
       # that prepare-filament.sh pins, and the script rechecks the marker.
@@ -467,12 +469,6 @@ jobs:
           xcodebuild -project apps/iosApp/Chur.xcodeproj -scheme Chur
           -configuration Debug -destination 'generic/platform=iOS Simulator'
           CODE_SIGNING_ALLOWED=NO build
-      # The same lockfile pin the Android job enforces, for the Kotlin/Native
-      # configurations that only a macOS job resolves.
-      - name: the Gradle lockfiles pin the resolution
-        run: |
-          ./gradlew --no-daemon --no-parallel --max-workers=1 iosSimulatorArm64Test compileKotlinIosArm64 linkDebugFrameworkIosSimulatorArm64 --write-locks
-          git diff --exit-code -- '**/gradle.lockfile'
       - name: upload iOS test diagnostics
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

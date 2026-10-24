@@ -1,0 +1,42 @@
+{
+  "description": "Ponytail lifecycle hooks. PLUGIN_DATA makes the scripts use their Codex output and keep their mode flag under CODEX_HOME, as the Codex plugin does.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PLUGIN_DATA=\"${CODEX_HOME:-$HOME/.codex}/ponytail\" node \"$(git rev-parse --show-toplevel)/.agents/hooks/ponytail-activate.js\"",
+            "timeout": 15,
+            "statusMessage": "Loading ponytail mode..."
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PLUGIN_DATA=\"${CODEX_HOME:-$HOME/.codex}/ponytail\" node \"$(git rev-parse --show-toplevel)/.agents/hooks/ponytail-subagent.js\"",
+            "timeout": 15,
+            "statusMessage": "Loading ponytail mode..."
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PLUGIN_DATA=\"${CODEX_HOME:-$HOME/.codex}/ponytail\" node \"$(git rev-parse --show-toplevel)/.agents/hooks/ponytail-mode-tracker.js\"",
+            "timeout": 15,
+            "statusMessage": "Tracking ponytail mode..."
+          }
+        ]
+      }
+    ]
+  }
+}

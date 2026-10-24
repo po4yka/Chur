@@ -119,7 +119,9 @@ second custom optics engine would add unnecessary rendering and lifecycle code.
 
 `skills-lock.json` is their manifest. Each entry records the upstream repository, the path within it, a content hash, and the upstream commit the content was taken from. The commit satisfies "record source revision for vendored code" above; a content hash alone proves integrity but not provenance, so it is not a substitute.
 
-Every entry now carries a `commit`. The forty-six vendored skills trace to forty-five distinct upstream commits, and each recorded commit reproduces the vendored bytes exactly.
+Every entry now carries a `commit`. The forty-six vendored skills trace to forty-four distinct upstream commits, and each recorded commit reproduces the vendored bytes exactly.
+
+`.agents/hooks/` holds the Ponytail lifecycle hook scripts, from the same upstream as the `ponytail*` skills. Unlike the skills they are executable: `.claude/settings.json` and `.codex/hooks.json` run them with Node.js at session start, at subagent start, and on each prompt, on a developer machine only, and they write only Ponytail's mode flag under the agent's own configuration directory and, when a user changes the default level, `~/.config/ponytail/config.json`. `hooks-lock.json` records the upstream commit and the SHA-256 of each file; the same checker fails on a changed or unlocked file and, with `--verify-upstream`, on a file the recorded commit does not reproduce. `.agents/NOTICE.md` carries the MIT license that the skills and the hooks require.
 
 Two hashes are recorded, and they are not interchangeable:
 

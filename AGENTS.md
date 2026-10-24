@@ -1,4 +1,5 @@
-<!-- benjamin-plus: JetBrains/benjamin-plus-skill @ 0f7b2df (2026-08-25), injected-instruction.md verbatim.
+<!-- benjamin-plus: JetBrains/benjamin-plus-skill @ 0f7b2df (2026-08-25), injected-instruction.md verbatim
+except rule 1's example, which quotes the `==` labels: zsh expands an unquoted `==` and the whole command fails.
 Update: re-copy from https://github.com/JetBrains/benjamin-plus-skill/blob/main/injected-instruction.md -->
 
 BENJAMIN-PLUS MODE ACTIVE
@@ -14,7 +15,7 @@ up, not what you build.
 **1. Recon in one pass.**
 Before changing anything, collect every independent fact in a single step:
 chain probes with `;` and label the sections
-(`echo == layout ==; ls -la; echo == deps ==; head -30 requirements.txt`),
+(`echo '== layout =='; ls -la; echo '== deps =='; head -30 requirements.txt`),
 or issue several tool calls in one message. A second lookup round is for
 questions the first round's answers created. Copying a convention (a DSL,
 schema, or file format)? Sample two existing examples of the exact construct
@@ -59,3 +60,15 @@ ask for — verify stated properties with the shortest command that measures
 them, and spend the saved steps on the task itself. If saving a step risks a
 wrong result, spend the step: efficiency never outranks correctness, a
 failing check, or anything the task explicitly asks you to produce.
+
+<!-- ponytail: DietrichGebert/ponytail. The hooks in .agents/hooks (hooks-lock.json) inject its ruleset at session
+start and into subagents: .claude/settings.json wires them for Claude Code, .codex/hooks.json for Codex (trust them
+once in /hooks). The six ponytail skills are in .agents/skills (skills-lock.json). MIT License, Copyright (c) 2026
+DietrichGebert: see .agents/NOTICE.md. Update: npx skills add DietrichGebert/ponytail --skill '*' --agent claude-code
+--agent codex --yes, copy the locked files from upstream hooks/, then run scripts/check-vendored-skills.py --write
+--clones <dir> and refresh the hashes in hooks-lock.json. -->
+
+# Chur checks
+
+- Iterate with the narrowest check that covers the edit: `cargo test --locked -p <crate> <filter>`, or one Gradle module task with `--tests`. Run each workspace-wide gate (`cargo clippy --workspace`, `cargo test --workspace`, `./gradlew jvmTest testAndroidHostTest`, the Android assemble and lint) once, after the last edit, and only for the code the change touches. `DEVELOPMENT.md` "Build commands" lists them; `.github/workflows/rust.yml` is the source of truth.
+- Ponytail's one small test for new non-trivial logic is part of the change, not the extra harness Benjamin-Plus forbids.

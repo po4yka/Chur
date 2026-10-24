@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Verify the vendored agent skills against `skills-lock.json`.
+"""Verify the vendored agent skills against `skills-lock.json`, and the vendored
+agent hook scripts under `.agents/hooks` against `hooks-lock.json`.
 
 `docs/DEPENDENCY_POLICY.md` "Vendored agent skills" requires every entry to
 record the upstream repository, the path within it, a content hash, and the
@@ -39,6 +40,43 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 LOCKFILE = REPOSITORY_ROOT / "skills-lock.json"
 SKILLS_ROOT = REPOSITORY_ROOT / ".agents" / "skills"
+# The hook scripts run on every agent session, so each file is pinned by its
+# own SHA-256 and the upstream commit it was copied from.
+HOOKS_LOCKFILE = REPOSITORY_ROOT / "hooks-lock.json"
+HOOKS_ROOT = REPOSITORY_ROOT / ".agents" / "hooks"
+
+
+def file_hash(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def verify_hooks(clone_root: Path | None) -> int:
+    """Offline: every locked hook file matches its hash and nothing else is vendored.
+    With `clone_root`: every file also matches the recorded upstream commit."""
+    failures = 0
+    locked: set[str] = set()
+    for name, entry in sorted(json.loads(HOOKS_LOCKFILE.read_text(encoding="utf-8"))["hooks"].items()):
+        clone = clone_root / entry["source"].split("/")[1] if clone_root else None
+        for file, recorded in sorted(entry["files"].items()):
+            locked.add(file)
+            path = HOOKS_ROOT / file
+            if not path.is_file() or file_hash(path.read_bytes()) != recorded:
+                print(f"  changed   hook {name}/{file}")
+                failures += 1
+            if clone is not None:
+                blob = subprocess.run(
+                    ["git", "-C", str(clone), "show", f"{entry['commit']}:{entry['sourcePath']}/{file}"],
+                    capture_output=True,
+                    check=False,
+                ).stdout
+                if file_hash(blob) != recorded:
+                    print(f"  drifted   hook {name}/{file}: {entry['commit'][:10]} does not reproduce it")
+                    failures += 1
+    for extra in sorted(path.name for path in HOOKS_ROOT.iterdir() if path.name not in locked):
+        print(f"  unlocked  hook {extra}: vendored but absent from the lockfile")
+        failures += 1
+    print(f"{len(locked)} locked hook files, {failures} problems")
+    return failures
 
 
 def content_hash(directory: Path) -> str:
@@ -200,8 +238,9 @@ def main() -> int:
     if arguments.write:
         return 1 if write(lock, arguments.clones) else 0
     if arguments.verify_upstream:
-        return 1 if verify_upstream(lock, arguments.verify_upstream) else 0
-    return 1 if verify(lock) else 0
+        skills = verify_upstream(lock, arguments.verify_upstream)
+        return 1 if skills + verify_hooks(arguments.verify_upstream) else 0
+    return 1 if verify(lock) + verify_hooks(None) else 0
 
 
 if __name__ == "__main__":

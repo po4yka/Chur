@@ -46,3 +46,6 @@ settings-gradle.lockfile
 # Unselected app icon drafts.
 /art/app-icon/proposals/
 /.local-output/icon-art/
+
+# Agent worktrees that Claude Code creates on demand.
+.claude/worktrees/
