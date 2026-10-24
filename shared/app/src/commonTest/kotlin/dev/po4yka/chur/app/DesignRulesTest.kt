@@ -51,12 +51,10 @@ class DesignRulesTest {
     }
 
     @Test
-    fun the_grid_is_deterministic_for_a_given_width() {
-        // §11.1 says the result is deterministic so a screenshot test can pin
-        // it. Two calls at one width therefore agree, and neighbouring widths
-        // never disagree by more than one column.
+    fun neighbouring_widths_never_differ_by_more_than_one_column() {
+        // §11.1: the grid is a pure function of width, so a screenshot test can
+        // pin it; a resize must not jump by more than one column.
         for (width in 320..1_200 step 7) {
-            assertEquals(gridGeometry(width), gridGeometry(width))
             val step = abs(gridGeometry(width).columns - gridGeometry(width + 1).columns)
             assertTrue(step <= 1, "the column count jumped at $width")
         }

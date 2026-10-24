@@ -3,9 +3,8 @@ package dev.po4yka.chur.app.spirit
 import dev.po4yka.chur.app.spirit.*
 import kotlin.math.abs
 
-fun runSpiritCoreChecks(): Int {
-    var checks = 0
-    fun verify(value: Boolean, name: String) { check(value) { name }; checks++ }
+fun runSpiritCoreChecks() {
+    fun verify(value: Boolean, name: String) = check(value) { name }
     val initial = SpiritInteraction().bounds(500f, 700f, 144f)
     val pressed = initial.down(40f, 40f)
     verify(pressed.move(43f, 43f, 8f).up().render.clip == "tap_react", "sub-slop tap")
@@ -98,5 +97,4 @@ fun runSpiritCoreChecks(): Int {
         verify(shouldShowSpiritInNotes(flags[0],flags[1],flags[2],flags[3],flags[4],flags[5],flags[6]) == (mask == 1),
             "public Notes presence gate $mask")
     }
-    return checks
 }

@@ -76,7 +76,6 @@ parity or physical-device acceptance.
 
 Commands:
 
-- `KOTLIN_COMPILER_LIB=/path/to/kotlin/lib tests/spirit/check-core.sh`
 - `KOTLIN_COMPILER_LIB=/path/to/kotlin/lib python3 tests/spirit/check-native-parity.py`
 - `./gradlew -I tests/spirit/verify-dependencies.gradle :shared:app:verifySpiritDependencies :apps:androidApp:verifySpiritDependencies`
 - Standard project builds/tests from `DEVELOPMENT.md`; Apple setup in `apps/iosApp/SpiritRenderer/README.md`.

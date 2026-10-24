@@ -72,3 +72,10 @@ DietrichGebert: see .agents/NOTICE.md. Update: npx skills add DietrichGebert/pon
 
 - Iterate with the narrowest check that covers the edit: `cargo test --locked -p <crate> <filter>`, or one Gradle module task with `--tests`. Run each workspace-wide gate (`cargo clippy --workspace`, `cargo test --workspace`, `./gradlew jvmTest testAndroidHostTest`, the Android assemble and lint) once, after the last edit, and only for the code the change touches. `DEVELOPMENT.md` "Build commands" lists them; `.github/workflows/rust.yml` is the source of truth.
 - Ponytail's one small test for new non-trivial logic is part of the change, not the extra harness Benjamin-Plus forbids.
+
+# Chur tests
+
+- Add a test only for a behavior or regression that no existing test fails on. Search the module's tests first and extend the nearest one.
+- Assert on observable output or state of the real code. Expected values are literals, vectors, or an independent oracle, never the code under test or a copy of its logic. A fake stands in for a platform boundary; it is not the thing asserted.
+- No test reads source text or reaches private members by name when a public call or the compiler can check the same thing. No production interface, parameter, or visibility change only to test trivial wiring.
+- The same rules apply to throwaway assertions and smoke scripts: delete them after use, or put them in a suite that CI runs. A script nothing runs is not coverage.
