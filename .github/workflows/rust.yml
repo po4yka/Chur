@@ -281,12 +281,18 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # ~/.gradle/caches holds the Gradle build cache, so a fixed key would
+      # restore the first saved copy until the version catalog changes. Each
+      # push to main saves a new copy under its run id and every run restores
+      # the newest; pull requests only restore, which keeps the repository's
+      # cache quota for main.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: gradle-${{ hashFiles('gradle/libs.versions.toml', 'gradle/wrapper/gradle-wrapper.properties') }}
+          key: gradle-${{ hashFiles('gradle/libs.versions.toml', 'gradle/wrapper/gradle-wrapper.properties') }}-${{ github.run_id }}
+          restore-keys: gradle-${{ hashFiles('gradle/libs.versions.toml', 'gradle/wrapper/gradle-wrapper.properties') }}
       # The host tests load `libchur_jni`, which the root build compiles with
       # Cargo (ADR-0040). The runner's rustup reads rust/rust-toolchain.toml, so
       # no toolchain is installed by an action here either.
@@ -303,6 +309,14 @@ jobs:
         run: python3 -m unittest discover -s scripts -p test_chur_device.py -v
       - run: ./gradlew --no-daemon jvmTest testAndroidHostTest
           :shared:feature-notes:churPublicShellIsolation
+      - name: save the build cache from main
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('gradle/libs.versions.toml', 'gradle/wrapper/gradle-wrapper.properties') }}-${{ github.run_id }}
 
   android-application:
     name: android application
@@ -448,13 +462,20 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # ~/.gradle/caches holds the Gradle build cache, so a fixed key would
+      # restore the first saved copy until the version catalog changes. Each
+      # push to main saves a new copy under its run id and every run restores
+      # the newest; pull requests only restore, which keeps the repository's
+      # cache quota for main.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
             ~/.konan
-          key: konan-${{ hashFiles('gradle/libs.versions.toml', 'gradle/wrapper/gradle-wrapper.properties') }}
+            rust/target
+          key: konan-${{ hashFiles('gradle/libs.versions.toml', 'gradle/wrapper/gradle-wrapper.properties') }}-${{ github.run_id }}
+          restore-keys: konan-${{ hashFiles('gradle/libs.versions.toml', 'gradle/wrapper/gradle-wrapper.properties') }}
       # cinterop links `libchur_ffi.a` for each Apple target, which the Gradle
       # build compiles with Cargo, so both targets must be installed first.
       - name: add the targets to the pinned toolchain
@@ -512,6 +533,16 @@ jobs:
           xcodebuild -project apps/iosApp/Chur.xcodeproj -scheme Chur
           -configuration Debug -destination 'generic/platform=iOS Simulator'
           CODE_SIGNING_ALLOWED=NO build
+      - name: save the build cache from main
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.konan
+            rust/target
+          key: konan-${{ hashFiles('gradle/libs.versions.toml', 'gradle/wrapper/gradle-wrapper.properties') }}-${{ github.run_id }}
       - name: upload iOS test diagnostics
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
