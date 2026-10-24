@@ -70,7 +70,7 @@ The workflow named in [`docs/assurance/RELEASE_GATES.md`](docs/assurance/RELEASE
 | `shared/<module>` | `./gradlew :shared:<module>:testAndroidHostTest`; add `iosSimulatorArm64Test` for `iosMain` code, and `jvmTest` exists only in `:shared:core-model` |
 | `apps/androidApp` | `./gradlew :apps:androidApp:assembleDebug :apps:androidApp:lintDebug`; `check-backup-rules.py` for `res/xml` or the manifest |
 | `apps/iosApp` | the `xcodebuild` command of the `kotlin-native` job |
-| Gradle or Cargo dependencies | the lockfile step of the affected CI job and `cargo deny check` |
+| Gradle or Cargo dependencies | `cargo deny check`; for Android, write locks with the debug and the release tasks, `./gradlew :apps:androidApp:assembleDebug :apps:androidApp:lintDebug :apps:androidApp:assembleDebugAndroidTest :apps:androidApp:assembleRelease :apps:androidApp:bundleRelease :apps:androidApp:lintRelease --write-locks` with the disposable signing key of the `android application` job, because the job's lockfile step resolves only the debug tasks |
 | `.agents/`, `skills-lock.json`, `hooks-lock.json` | `check-vendored-skills.py` |
 
 The full list, which CI runs on every pull request; release signing and job-specific setup remain in the workflow:
