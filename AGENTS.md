@@ -83,6 +83,13 @@ DietrichGebert: see .agents/NOTICE.md. Update: npx skills add DietrichGebert/pon
 - A passing check stays valid until its inputs change: an edit under the paths it covers, a checkout, or a dependency or toolchain change. Do not re-run it to reconfirm; re-run a suspected flaky test only with the reason stated. No `clean`, `cargo clean`, or `--rerun-tasks` unless a stale output is the observed fault.
 - Record what you checked in the commit message or pull request description. Add a dated file under `docs/assurance/` only for a release-gate evidence package, a security or data-at-rest audit, or when the user asks for one.
 
+# Chur publication
+
+- Commit logical steps locally. Push only when the task includes publication: once, after the agreed scope is complete and its path-table checks pass. Otherwise keep the commits local until the user asks.
+- Put follow-up fixes and review responses into the next push. A new commit, a finished subagent, or the end of a session is not a reason to push. The main session is the one publisher of its branch; a subagent commits locally or returns a patch, and never pushes.
+- Push earlier only for a concrete need: a collaborator needs the branch, or the check runs only in CI. Fix all actionable CI findings before the next push. Re-run a CI job only for a stated cause, such as an infrastructure failure, never unchanged to reconfirm.
+- A new push to a pull request cancels its running build. Do not use `[skip ci]`, and do not rewrite pushed history to reduce runs. Comment `@dependabot rebase` only on a pull request that conflicts or lacks a fix it needs; each rebase reruns the full build.
+
 # Chur tests
 
 - Add a test only for a behavior or regression that no existing test fails on. Search the module's tests first and extend the nearest one. This is how Ponytail's "one small test or an assert-based self-check" for new non-trivial logic applies: an existing test that fails when the logic breaks satisfies it, a trivial change or a deletion needs none, and the test is part of the change, not the extra harness that Benjamin-Plus forbids.
