@@ -32,7 +32,7 @@ ndk = "30.0.16248370"
 iosDeploymentTarget = "18.0"
 
 # Libraries
-kotlinxSerialization = "1.11.0"
+kotlinxSerialization = "1.12.0"
 kotlinxCoroutines = "1.11.0"
 androidxCoreKtx = "1.19.1"
 androidxActivityCompose = "1.13.0"
