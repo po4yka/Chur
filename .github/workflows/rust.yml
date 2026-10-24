@@ -33,6 +33,35 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
+  # A pull request that changes only top-level Markdown files or files under
+  # docs/ cannot change what the gated jobs below build or test: no build,
+  # test, or script reads those paths. Those jobs then skip, and GitHub reports
+  # a skipped job as successful. The four jobs ADR-0031 requires on every pull
+  # request and the two policy-script jobs always run, and a push to main runs
+  # every job. RELEASE_GATES.md "Enforcement" records this rule.
+  changes:
+    name: changed paths
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    outputs:
+      code: ${{ steps.paths.outputs.code }}
+    steps:
+      # The pull request ref is a merge commit; its first parent is the base.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+      - id: paths
+        run: |
+          set -euo pipefail
+          code=true
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]] &&
+            ! git diff --name-only HEAD^1 HEAD | grep -qvE '^(docs/|[^/]+\.md$)'; then
+            code=false
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
   fmt:
     name: cargo fmt
     runs-on: ubuntu-latest
@@ -72,6 +101,8 @@ jobs:
 
   vectors:
     name: vector set
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -100,6 +131,8 @@ jobs:
 
   abi:
     name: C ABI harness
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -131,6 +164,8 @@ jobs:
 
   fuzz:
     name: fuzz smoke
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -194,6 +229,8 @@ jobs:
 
   native-targets:
     name: native targets (${{ matrix.kind }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -231,6 +268,8 @@ jobs:
 
   gradle:
     name: gradle check
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     # The Gradle build lives at the repository root, not in rust/.
     defaults:
@@ -267,6 +306,8 @@ jobs:
 
   android-application:
     name: android application
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -391,6 +432,8 @@ jobs:
 
   kotlin-native:
     name: kotlin/native tests
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     # The iOS host needs the Xcode 27.1 SDK (README.md: Xcode 27 for host
     # builds); the macOS 26 image tops out at Xcode 26.6.
     runs-on: xcode-27
